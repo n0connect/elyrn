@@ -16,12 +16,12 @@ import (
 var serverLogger = utils.NewLogger("SERVER")
 
 // public wraps an unauthenticated endpoint with the base security chain:
-// headers -> CORS (exact origins) -> same-origin proof for writes -> the input contract's gate
-// (path, method, query, content type, body size, JSON shape, every field). The gate runs before
-// the session check, so a malformed request costs no database lookup.
+// panic recovery -> headers -> CORS (exact origins) -> same-origin proof for writes -> the input
+// contract's gate (path, method, query, content type, body size, JSON shape, every field). The
+// gate runs before the session check, so a malformed request costs no database lookup.
 func public(h http.HandlerFunc) http.HandlerFunc {
-	return middleware.SecurityHeadersMiddleware(middleware.CORSMiddleware(
-		middleware.SameOriginWritesMiddleware(contract.Gate(h))))
+	return middleware.Recover(middleware.SecurityHeadersMiddleware(middleware.CORSMiddleware(
+		middleware.SameOriginWritesMiddleware(contract.Gate(h)))))
 }
 
 // protected additionally requires a valid, non-revoked session
@@ -57,9 +57,9 @@ func NewMux() *http.ServeMux {
 
 	// Request Path Whitelist: a path outside every registered pattern answers 404 here (the
 	// gate answers the same for a path under /conversations/ that no template fits)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", middleware.Recover(func(w http.ResponseWriter, r *http.Request) {
 		apperr.Write(w, "NewMux: unknown path", apperr.RouteNotFound)
-	})
+	}))
 
 	serverLogger.Info("All routes registered successfully")
 	return mux

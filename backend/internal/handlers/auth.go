@@ -321,11 +321,12 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find user by lookup. An unreachable database says so: answering "invalid credentials"
-	// would tell the user their only key is worthless (and says nothing about the account)
+	// Find user by lookup. Only "no such account" goes on to the credential check: an
+	// unreachable database answers 503 like every route (store.ErrUnavailable), because
+	// "invalid credentials" would tell the user their only key is worthless
 	user, err := userRepository.FindByAccountLookup(lookup)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		apperr.Write(w, "FindByAccountLookup", apperr.StoreUnavailable)
+		apperr.WriteError(w, "LoginHandler: FindByAccountLookup", err)
 		return
 	}
 

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -42,13 +43,39 @@ const (
 	connMaxLifetime = 30 * time.Minute
 )
 
-// Session bounds: a request stuck behind a row lock gives up instead of queueing for ever, and a
+// Session bounds: a request stuck behind a row lock gives up instead of queueing for ever, a
 // transaction left open (stalled client, broken connection) releases its locks and its pooled
-// connection. Every transaction here takes milliseconds, so neither ever fires in normal use.
+// connection, and a statement that runs away is cancelled by the server. Every transaction here
+// takes milliseconds, so none of them ever fires in normal use.
 const (
-	lockTimeout                     = "5s"
-	idleInTransactionSessionTimeout = "30s"
+	lockTimeout                     = 5 * time.Second
+	idleInTransactionSessionTimeout = 30 * time.Second
+	statementTimeout                = 10 * time.Second
 )
+
+// Client-side deadlines: what the server cannot bound itself (a full pool, a database that does
+// not answer at all) is bounded here, for every statement and every transaction on every path.
+// A statement's deadline outlasts statement_timeout by clientMargin, so in normal operation the
+// server's own cancellation (SQLSTATE 57014) fires first; a transaction's deadline outlasts
+// idle_in_transaction_session_timeout for the same reason. Both answer "service unavailable"
+// (ErrUnavailable).
+const (
+	clientMargin        = 5 * time.Second
+	statementDeadline   = statementTimeout + clientMargin
+	transactionDeadline = idleInTransactionSessionTimeout + clientMargin
+)
+
+// RetentionStatementTimeout bounds one retention statement: a bulk delete after a long pause may
+// take longer than a request's statement, so retention runs under LongTransaction with this.
+const RetentionStatementTimeout = time.Minute
+
+// migrationStatementTimeout bounds one schema statement at startup
+const migrationStatementTimeout = 5 * time.Minute
+
+// pgMilliseconds spells a duration as a PostgreSQL integer setting in milliseconds.
+func pgMilliseconds(d time.Duration) string {
+	return strconv.FormatInt(d.Milliseconds(), 10)
+}
 
 // ConnectionURL builds the PostgreSQL URL with every component escaped, so credentials can
 // contain any character without altering the connection parameters (no DSN injection).
@@ -56,8 +83,9 @@ func ConnectionURL() string {
 	query := url.Values{}
 	query.Set("sslmode", config.GetDBSSLMode())
 	query.Set("TimeZone", "UTC")
-	query.Set("lock_timeout", lockTimeout)
-	query.Set("idle_in_transaction_session_timeout", idleInTransactionSessionTimeout)
+	query.Set("lock_timeout", pgMilliseconds(lockTimeout))
+	query.Set("idle_in_transaction_session_timeout", pgMilliseconds(idleInTransactionSessionTimeout))
+	query.Set("statement_timeout", pgMilliseconds(statementTimeout))
 	u := url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(config.GetDBUser(), config.GetDBPassword()),
@@ -68,26 +96,63 @@ func ConnectionURL() string {
 	return u.String()
 }
 
-func Init() {
-	dbLogger.Info("Initializing database connection...")
-
-	var err error
-	DB, err = gorm.Open(postgres.Open(ConnectionURL()), &gorm.Config{
-		Logger:         logger.Default.LogMode(gormLogLevel()),
-		TranslateError: true, // Surfaces unique violations as gorm.ErrDuplicatedKey
+// Open builds the GORM handle every repository uses: driver errors classified (dialector), every
+// statement and transaction under its client-side deadline, and the bounded pool. It does not
+// connect yet; Init proves the connection.
+func Open(dsn string) (*gorm.DB, error) {
+	db, err := gorm.Open(dialector{postgres.Open(dsn).(*postgres.Dialector)}, &gorm.Config{
+		Logger:                    logger.Default.LogMode(gormLogLevel()),
+		TranslateError:            true, // Surfaces unique violations as gorm.ErrDuplicatedKey, outages as ErrUnavailable
+		DisableAutomaticPing:      true,
+		DefaultContextTimeout:     statementDeadline,
+		DefaultTransactionTimeout: transactionDeadline,
 	})
 	if err != nil {
-		dbLogger.LogError("Database connection", err)
-		log.Fatal("Failed to connect to database")
+		return nil, err
 	}
-	sqlDB, err := DB.DB()
+	sqlDB, err := db.DB()
 	if err != nil {
-		dbLogger.LogError("Database pool", err)
-		log.Fatal("Failed to configure database pool")
+		return nil, err
 	}
 	sqlDB.SetMaxOpenConns(maxOpenConns)
 	sqlDB.SetMaxIdleConns(maxIdleConns)
 	sqlDB.SetConnMaxLifetime(connMaxLifetime)
+	return db, nil
+}
+
+// LongTransaction runs fn in one transaction whose statements may each take up to limit: the
+// server's statement_timeout is raised for this transaction only (SET LOCAL), and the client
+// deadline with it.
+func LongTransaction(db *gorm.DB, limit time.Duration, fn func(tx *gorm.DB) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), limit+clientMargin)
+	defer cancel()
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SET LOCAL statement_timeout = " + pgMilliseconds(limit)).Error; err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+}
+
+func Init() {
+	dbLogger.Info("Initializing database connection...")
+
+	var err error
+	DB, err = Open(ConnectionURL())
+	if err != nil {
+		dbLogger.LogError("Database pool", err)
+		log.Fatal("Failed to configure database pool")
+	}
+	sqlDB, err := DB.DB()
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), statementDeadline)
+		err = sqlDB.PingContext(ctx)
+		cancel()
+	}
+	if err != nil {
+		dbLogger.LogError("Database connection", err)
+		log.Fatal("Failed to connect to database")
+	}
 	dbLogger.Info("Connected to PostgreSQL")
 
 	if err := encryption.InitMasterKeys(); err != nil {
@@ -95,8 +160,11 @@ func Init() {
 		log.Fatal("Failed to initialize master keys")
 	}
 
-	err = DB.AutoMigrate(&models.User{}, &models.Invite{}, &models.Conversation{}, &models.ConversationMember{}, &models.Message{},
-		&models.KeyCheck{}, &models.Room{}, &models.RoomNote{})
+	// One transaction, with room for an additive migration to index a large table
+	err = LongTransaction(DB, migrationStatementTimeout, func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&models.User{}, &models.Invite{}, &models.Conversation{}, &models.ConversationMember{}, &models.Message{},
+			&models.KeyCheck{}, &models.Room{}, &models.RoomNote{})
+	})
 	if err != nil {
 		dbLogger.LogError("Database migration", err)
 		log.Fatal("Failed to migrate database")

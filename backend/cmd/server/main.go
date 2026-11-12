@@ -74,6 +74,8 @@ func main() {
 		MaxHeaderBytes:    config.GetServerMaxHeaderBytes(),
 		// Long-lived SSE streams end as soon as shutdown begins
 		BaseContext: func(net.Listener) context.Context { return ctx },
+		// net/http's own error lines go through the logger, peer addresses removed
+		ErrorLog: utils.NewLogger("HTTP_SERVER").StdLogger(),
 	}
 
 	serveErr := make(chan error, 1)

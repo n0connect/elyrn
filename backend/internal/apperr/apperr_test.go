@@ -8,10 +8,12 @@ import (
 	"regexp"
 	"testing"
 
+	"elyrn/internal/apperr/opcode"
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
 	"elyrn/internal/models"
 	"elyrn/internal/pow"
+	"elyrn/internal/store"
 	"elyrn/internal/utils"
 )
 
@@ -113,6 +115,7 @@ func TestWireAnswers(t *testing.T) {
 		Forbidden:             {403, "Forbidden"},
 		AccountCollision:      {500, "Internal server error"},
 		InputUnchecked:        {500, "Internal server error"},
+		Panic:                 {500, "Internal server error"},
 		Internal:              {500, "Internal server error"},
 	}
 	if len(want)+len(jsonWire)+len(emptyWire) != len(registry) {
@@ -221,6 +224,7 @@ func TestSentinelsMapped(t *testing.T) {
 		pow.ErrRateLimited:       PoWRateLimited,
 		pow.ErrCapacity:          PoWCapacity,
 		pow.ErrInvalidSolution:   PoWInvalid,
+		store.ErrUnavailable:     StoreUnavailable,
 	}
 	if len(want) != len(sentinels) {
 		t.Errorf("pinned %d sentinels, table has %d", len(want), len(sentinels))
@@ -257,5 +261,26 @@ func assertAnswer(t *testing.T, rec *httptest.ResponseRecorder, status int, body
 	t.Helper()
 	if rec.Code != status || rec.Body.String() != body+"\n" {
 		t.Errorf("got %d %q, want %d %q", rec.Code, rec.Body.String(), status, body+"\n")
+	}
+}
+
+// TestOperatorCodesWellFormed: the operator codes (package opcode) follow the id pattern, carry a
+// sentence, and share no id with each other or with the request registry.
+func TestOperatorCodesWellFormed(t *testing.T) {
+	seen := map[string]struct{}{}
+	for _, e := range registry {
+		seen[e.id] = struct{}{}
+	}
+	for _, c := range opcode.All {
+		if !idPattern.MatchString(c.ID) {
+			t.Errorf("operator code id %q does not match %s", c.ID, idPattern)
+		}
+		if c.Sentence == "" {
+			t.Errorf("%s: empty operator sentence", c.ID)
+		}
+		if _, dup := seen[c.ID]; dup {
+			t.Errorf("id %q is registered twice", c.ID)
+		}
+		seen[c.ID] = struct{}{}
 	}
 }

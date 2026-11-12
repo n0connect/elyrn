@@ -262,15 +262,16 @@ func TestDatabaseMasterKey(t *testing.T) {
 	}
 }
 
-// A transaction stuck on a lock, or left open by a stalled client of the pool, must not hold
-// one of the few pooled connections (and its row locks) indefinitely
+// A transaction stuck on a lock, left open by a stalled client of the pool, or running a
+// statement that never ends must not hold one of the few pooled connections (and its row
+// locks) indefinitely
 func TestConnection_BoundsLockWaitsAndIdleTransactions(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	defer testutil.TeardownTestEnv(t)
 	testutil.SetupTestDatabaseEnv()
 	database.Init()
 
-	for setting, want := range map[string]string{"lock_timeout": "5s", "idle_in_transaction_session_timeout": "30s"} {
+	for setting, want := range map[string]string{"lock_timeout": "5s", "idle_in_transaction_session_timeout": "30s", "statement_timeout": "10s"} {
 		var got string
 		if err := database.DB.Raw("SHOW " + setting).Scan(&got).Error; err != nil {
 			t.Fatalf("SHOW %s: %v", setting, err)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"time"
 
 	"elyrn/internal/database"
 	"elyrn/internal/models"
@@ -34,7 +35,15 @@ type KeyRepository interface {
 
 	KeyCheck(name string) (string, bool, error)
 	PinKeyCheck(name, value string) error
+
+	// When the last retention pass ran (chat retention's clock check), kept beside the key checks
+	RetentionMark() (time.Time, bool, error)
+	SaveRetentionMark(at time.Time) error
 }
+
+// retentionMarkName is the key_checks row that holds the retention mark (an RFC 3339 UTC time:
+// a date and nothing else, no secret and no identifier)
+const retentionMarkName = "retention-clock"
 
 type keyRepository struct{}
 
@@ -135,6 +144,31 @@ func (r *keyRepository) PinKeyCheck(name, value string) error {
 	err := database.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.KeyCheck{Name: name, Value: value}).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.PinKeyCheck", err)
+	}
+	return err
+}
+
+func (r *keyRepository) RetentionMark() (time.Time, bool, error) {
+	value, ok, err := r.KeyCheck(retentionMarkName)
+	if err != nil || !ok {
+		return time.Time{}, false, err
+	}
+	at, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		keyRepoLogger.LogError("KeyRepository.RetentionMark", err)
+		return time.Time{}, false, err
+	}
+	return at, true, nil
+}
+
+// SaveRetentionMark stores (or replaces) the retention mark
+func (r *keyRepository) SaveRetentionMark(at time.Time) error {
+	err := database.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&models.KeyCheck{Name: retentionMarkName, Value: at.UTC().Format(time.RFC3339Nano)}).Error
+	if err != nil {
+		keyRepoLogger.LogError("KeyRepository.SaveRetentionMark", err)
 	}
 	return err
 }

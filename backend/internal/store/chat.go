@@ -40,7 +40,7 @@ type ChatRepository interface {
 
 	NextSeq(conversationID uuid.UUID) (int64, error)
 	CreateMessage(message *models.Message) error
-	ListMessages(conversationID uuid.UUID, window MessageWindow) ([]models.Message, error)
+	ListMessages(conversationID uuid.UUID, window MessageWindow, today time.Time) ([]models.Message, error)
 	AdvanceReadSeq(conversationID uuid.UUID, memberTag string, seq int64) error
 
 	CreateRoom(room *models.Room, creator *models.ConversationMember) error
@@ -91,6 +91,8 @@ const (
 	whereConversation          = "conversation_id = ?"
 	whereMember                = "conversation_id = ? AND member_tag = ?"
 	whereExpired               = "expires_at <= ?"
+	whereMessageLive           = "expires_on >= ?"
+	whereMessageExpired        = "expires_on < ?"
 	whereKeyAfterID            = "master_key_id = ? AND id > ?"
 	selectCountPerConversation = "conversation_id, count(*) AS count"
 )
@@ -287,10 +289,17 @@ func (r *chatRepository) LastSeqs(conversationIDs []uuid.UUID) (map[uuid.UUID]in
 }
 
 // DeleteConversation burns a conversation for every member, ciphertext included. A room's row
-// goes first: lock order is rooms before conversations (LOCK_HIERARCHY.md).
+// goes first: lock order is rooms before conversations (LOCK_HIERARCHY.md). The conversation row
+// is locked next, before any row in it is deleted: a send holding that lock (NextSeq) commits
+// first and its message is deleted here; a send waiting for it then finds no conversation
+// (ErrNotFound). Deleting the messages first would miss one committed in between and leave its
+// ciphertext behind with no conversation. Burn, room expiry and account deletion all end here.
 func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) error {
 	err := r.db().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where(whereID, conversationID).Delete(&models.Room{}).Error; err != nil {
+			return err
+		}
+		if _, err := (&chatRepository{tx: tx}).LockConversation(conversationID); err != nil {
 			return err
 		}
 		if err := tx.Where(whereConversation, conversationID).Delete(&models.Message{}).Error; err != nil {
@@ -302,14 +311,7 @@ func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) error {
 		if err := tx.Where(whereConversation, conversationID).Delete(&models.RoomNote{}).Error; err != nil {
 			return err
 		}
-		result := tx.Where(whereID, conversationID).Delete(&models.Conversation{})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return ErrNotFound
-		}
-		return nil
+		return tx.Where(whereID, conversationID).Delete(&models.Conversation{}).Error
 	})
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		chatRepoLogger.LogError("ChatRepository.DeleteConversation", err)
@@ -346,9 +348,11 @@ func (r *chatRepository) CreateMessage(message *models.Message) error {
 	return err
 }
 
-// ListMessages is the one query behind every message page (MessageWindow).
-func (r *chatRepository) ListMessages(conversationID uuid.UUID, window MessageWindow) ([]models.Message, error) {
-	query := r.db().Where("conversation_id = ? AND seq > ?", conversationID, window.Floor)
+// ListMessages is the one query behind every message page (MessageWindow). A message past its
+// deletion day (expires_on before today, exactly what PurgeExpired deletes) is never served,
+// whether or not retention has run yet.
+func (r *chatRepository) ListMessages(conversationID uuid.UUID, window MessageWindow, today time.Time) ([]models.Message, error) {
+	query := r.db().Where("conversation_id = ? AND seq > ? AND "+whereMessageLive, conversationID, window.Floor, today)
 	if window.Ceiling > 0 {
 		query = query.Where("seq < ?", window.Ceiling)
 	}
@@ -384,44 +388,61 @@ func (r *chatRepository) AdvanceReadSeq(conversationID uuid.UUID, memberTag stri
 
 // PurgeExpired deletes ciphertext past its deletion day, invites and notes past expiry, and
 // expired rooms with everything in them. Nothing is kept past latest either: a lowered
-// MESSAGE_TTL_DAYS also shortens what is already stored.
+// MESSAGE_TTL_DAYS also shortens what is already stored. Every step runs on its own, so one that
+// fails (and is logged) does not starve the others; their errors come back joined.
 func (r *chatRepository) PurgeExpired(today, latest, now time.Time) (PurgeCounts, error) {
 	var counts PurgeCounts
-	capped := r.db().Model(&models.Message{}).Where("expires_on > ?", latest).UpdateColumn("expires_on", latest)
-	if capped.Error != nil {
-		chatRepoLogger.LogError("ChatRepository.PurgeExpired (cap)", capped.Error)
-		return counts, capped.Error
+	_, capErr := r.bulk("cap", func(tx *gorm.DB) *gorm.DB {
+		return tx.Model(&models.Message{}).Where("expires_on > ?", latest).UpdateColumn("expires_on", latest)
+	})
+	var messagesErr, invitesErr, notesErr error
+	counts.Messages, messagesErr = r.bulk("messages", func(tx *gorm.DB) *gorm.DB {
+		return tx.Where(whereMessageExpired, today).Delete(&models.Message{})
+	})
+	counts.Invites, invitesErr = r.bulk("invites", func(tx *gorm.DB) *gorm.DB {
+		return tx.Where(whereExpired, now).Delete(&models.Invite{})
+	})
+	counts.Notes, notesErr = r.bulk("notes", func(tx *gorm.DB) *gorm.DB {
+		return tx.Where(whereExpired, now).Delete(&models.RoomNote{})
+	})
+	var roomsErr error
+	counts.Rooms, roomsErr = r.purgeRooms(now)
+	return counts, errors.Join(capErr, messagesErr, invitesErr, notesErr, roomsErr)
+}
+
+// bulk runs one retention statement in its own transaction, allowed the longer retention
+// statement timeout, and logs its failure under the step's name.
+func (r *chatRepository) bulk(step string, statement func(tx *gorm.DB) *gorm.DB) (int64, error) {
+	var affected int64
+	err := database.LongTransaction(r.db(), database.RetentionStatementTimeout, func(tx *gorm.DB) error {
+		result := statement(tx)
+		affected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		chatRepoLogger.LogError("ChatRepository.PurgeExpired ("+step+")", err)
 	}
-	messages := r.db().Where("expires_on < ?", today).Delete(&models.Message{})
-	if messages.Error != nil {
-		chatRepoLogger.LogError("ChatRepository.PurgeExpired (messages)", messages.Error)
-		return counts, messages.Error
-	}
-	counts.Messages = messages.RowsAffected
-	invites := r.db().Where(whereExpired, now).Delete(&models.Invite{})
-	if invites.Error != nil {
-		chatRepoLogger.LogError("ChatRepository.PurgeExpired (invites)", invites.Error)
-		return counts, invites.Error
-	}
-	counts.Invites = invites.RowsAffected
-	notes := r.db().Where(whereExpired, now).Delete(&models.RoomNote{})
-	if notes.Error != nil {
-		chatRepoLogger.LogError("ChatRepository.PurgeExpired (notes)", notes.Error)
-		return counts, notes.Error
-	}
-	counts.Notes = notes.RowsAffected
+	return affected, err
+}
+
+// purgeRooms burns up to roomPurgeBatch expired rooms, each on its own: one that fails is
+// retried next pass and does not keep the others.
+func (r *chatRepository) purgeRooms(now time.Time) (int64, error) {
 	var expired []uuid.UUID
 	if err := r.db().Model(&models.Room{}).Where(whereExpired, now).Limit(roomPurgeBatch).Pluck(colID, &expired).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.PurgeExpired (rooms)", err)
-		return counts, err
+		return 0, err
 	}
+	var purged int64
+	var errs []error
 	for _, id := range expired {
 		if err := r.DeleteConversation(id); err != nil && !errors.Is(err, ErrNotFound) {
-			return counts, err
+			errs = append(errs, err)
+			continue
 		}
-		counts.Rooms++
+		purged++
 	}
-	return counts, nil
+	return purged, errors.Join(errs...)
 }
 
 // ---------- rooms ----------

@@ -6,10 +6,15 @@ import (
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
 	"elyrn/internal/pow"
+	"elyrn/internal/store"
 )
 
 // sentinels maps every service sentinel error a handler answers to its code, checked in this
 // order (the order the chat handler's switch used, so an error wrapping two keeps its answer).
+//
+// store.ErrUnavailable is the one store error with a single meaning everywhere: the database
+// failed, not the request (503, so a client retries instead of believing a key or a
+// conversation is gone).
 //
 // store.ErrNotFound and store.ErrConflict are deliberately absent: they mean different things
 // at different call sites (an absent account is "Unauthorized" for a session but a plain miss
@@ -32,6 +37,7 @@ var sentinels = []struct {
 	{pow.ErrRateLimited, PoWRateLimited},
 	{pow.ErrCapacity, PoWCapacity},
 	{pow.ErrInvalidSolution, PoWInvalid},
+	{store.ErrUnavailable, StoreUnavailable},
 }
 
 // CodeOf returns the code a sentinel error (or one wrapping it) is answered with.

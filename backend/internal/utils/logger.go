@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -128,4 +129,26 @@ func (l *Logger) LogErrorFrom(skip int, operation string, err error) {
 		// Fallback to text format
 		l.Error("Operation failed: operation=%s error=%v caller=%s", operation, err, callerInfo)
 	}
+}
+
+// peerAddress matches an IPv4 or bracketed IPv6 address, with or without a port: net/http
+// names the peer in its own error lines ("TLS handshake error from 192.0.2.1:4000")
+var peerAddress = regexp.MustCompile(`\[[0-9A-Fa-f:.%]+\](:\d+)?|\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b`)
+
+// peerRedacted replaces a peer address in a library's log line
+const peerRedacted = "[peer]"
+
+// stdWriter turns each line a library writes to a *log.Logger into one of this logger's
+// lines, peer addresses removed (zero identifiers).
+type stdWriter struct{ l *Logger }
+
+func (w stdWriter) Write(p []byte) (int, error) {
+	w.l.Error("%s", peerAddress.ReplaceAllString(strings.TrimRight(string(p), "\n"), peerRedacted))
+	return len(p), nil
+}
+
+// StdLogger returns a *log.Logger (for a library such as net/http's Server.ErrorLog) whose
+// every line goes through this logger at ERROR, with peer addresses removed.
+func (l *Logger) StdLogger() *log.Logger {
+	return log.New(stdWriter{l: l}, "", 0)
 }

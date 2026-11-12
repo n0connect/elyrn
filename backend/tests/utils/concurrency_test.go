@@ -138,3 +138,20 @@ func TestSlots_BoundsConcurrentHolders(t *testing.T) {
 	}()
 	slots.Release()
 }
+
+// net/http's error lines (Server.ErrorLog) go through the logger without the peer's address.
+func TestLogger_StdLoggerRemovesPeerAddresses(t *testing.T) {
+	std := utils.NewLogger("HTTP_SERVER").StdLogger()
+	out := captureLog(t, "info", func() {
+		std.Printf("http: TLS handshake error from 192.0.2.7:4000: EOF")
+		std.Printf("http: TLS handshake error from [2001:db8::7]:4000: EOF")
+	})
+	for _, address := range []string{"192.0.2.7", "2001:db8::7"} {
+		if strings.Contains(out, address) {
+			t.Errorf("peer address %s reached the log: %q", address, out)
+		}
+	}
+	if strings.Count(out, "[peer]") != 2 || !strings.Contains(out, "[ERROR] [HTTP_SERVER]") {
+		t.Errorf("unexpected log output %q", out)
+	}
+}
