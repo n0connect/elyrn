@@ -135,7 +135,8 @@ var (
 const minProductionDBPasswordLen = 16
 
 // ValidateStartupConfig validates all configuration at startup; the server refuses to start
-// on any value outside its whitelist or range.
+// on any value outside its whitelist or range. The checks run in this order, so the first
+// failing value is the one reported.
 func ValidateStartupConfig() error {
 	if _, ok := allowedAppEnvs[strings.ToLower(strings.TrimSpace(config.GetEnv("APP_ENV", "development")))]; !ok {
 		return fmt.Errorf("APP_ENV must be one of development, test, production")
@@ -145,6 +146,27 @@ func ValidateStartupConfig() error {
 	}
 
 	minJWTLen := config.GetJWTSecretMinLength()
+	if err := checkBounds(startupBounds(minJWTLen)); err != nil {
+		return err
+	}
+	if err := checkSecrets(minJWTLen); err != nil {
+		return err
+	}
+	if err := checkSizesFit(); err != nil {
+		return err
+	}
+	if err := checkConnections(); err != nil {
+		return err
+	}
+	if config.IsProductionMode() {
+		return checkProduction()
+	}
+	return nil
+}
+
+// startupBounds is the range of every numeric setting. It holds data only, one row per
+// setting, so it is kept as one linear table (RULES.md 7.1 exception for data initialization).
+func startupBounds(minJWTLen int) []bounded {
 	argon2Floor := config.MinArgon2MemoryKiB
 	if config.IsProductionMode() {
 		argon2Floor = config.ProductionMinArgon2MemoryKiB
@@ -155,7 +177,7 @@ func ValidateStartupConfig() error {
 	if err != nil {
 		port = 0
 	}
-	if err := checkBounds([]bounded{
+	return []bounded{
 		{"JWT_SECRET_MIN_LEN", minJWTLen, 32, 1024},
 		{"JWT_EXPIRATION_MINUTES", int(config.GetJWTExpiration() / time.Minute), 1, 1440},
 		{"MAX_REQUEST_BODY_BYTES", config.GetMaxRequestBodyBytes(), 1024, 16 << 20},
@@ -190,10 +212,11 @@ func ValidateStartupConfig() error {
 		{"SERVER_WRITE_TIMEOUT_SEC", seconds(config.GetServerWriteTimeout()), 1, 300},
 		{"SERVER_IDLE_TIMEOUT_SEC", seconds(config.GetServerIdleTimeout()), 1, 600},
 		{"SERVER_MAX_HEADER_BYTES", config.GetServerMaxHeaderBytes(), 1024, 1 << 20},
-	}); err != nil {
-		return err
 	}
+}
 
+// checkSecrets insists on the signing secret, the token claims, the master keys and the pepper.
+func checkSecrets(minJWTLen int) error {
 	if len(config.GetJWTSecret()) < minJWTLen {
 		return fmt.Errorf("JWT_SECRET must be at least %d characters (generate it: openssl rand -hex 32)", minJWTLen)
 	}
@@ -206,6 +229,11 @@ func ValidateStartupConfig() error {
 	if config.GetAccountLookupPepper() == nil {
 		return fmt.Errorf("ACCOUNT_LOOKUP_PEPPER must be at least 32 bytes as hex or base64 (generate it: openssl rand -hex 32)")
 	}
+	return nil
+}
+
+// checkSizesFit insists that the largest message, direct or to a full room, fits a request body.
+func checkSizesFit() error {
 	if config.GetMaxMessageBytes() > config.GetMaxRequestBodyBytes()/2 {
 		return fmt.Errorf("MAX_MESSAGE_BYTES must fit (base64) inside MAX_REQUEST_BODY_BYTES")
 	}
@@ -213,6 +241,11 @@ func ValidateStartupConfig() error {
 		return fmt.Errorf("a message to a room of ROOM_MAX_MEMBERS must fit (base64) inside MAX_REQUEST_BODY_BYTES")
 	}
 
+	return nil
+}
+
+// checkConnections insists on a complete database address, a libpq sslmode and exact origins.
+func checkConnections() error {
 	if config.GetDBHost() == "" || config.GetDBPort() == "" || config.GetDBUser() == "" ||
 		config.GetDBPassword() == "" || config.GetDBName() == "" {
 		return fmt.Errorf("DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_NAME are required")
@@ -224,20 +257,24 @@ func ValidateStartupConfig() error {
 		return fmt.Errorf("ALLOWED_ORIGINS must list exact origins (no wildcard)")
 	}
 
-	if config.IsProductionMode() {
-		if _, ok := productionSSLModes[config.GetDBSSLMode()]; !ok {
-			return fmt.Errorf("DB_SSL_MODE must be verify-ca or verify-full in production")
-		}
-		if len(config.GetDBPassword()) < minProductionDBPasswordLen {
-			return fmt.Errorf("DB_PASSWORD must be at least %d characters in production", minProductionDBPasswordLen)
-		}
-		if strings.TrimSpace(config.GetTrustedProxies()) == "" {
-			dbLogger.Warn("TRUSTED_PROXIES is empty: behind a reverse proxy every client shares one rate-limit bucket")
-		}
-		if config.GetLogLevel() == "debug" {
-			return fmt.Errorf("LOG_LEVEL=debug is not allowed in production")
-		}
-		dbLogger.Info("Production mode validation passed")
+	return nil
+}
+
+// checkProduction adds what production demands beyond the ranges: an authenticated database,
+// a strong database password and no debug logging.
+func checkProduction() error {
+	if _, ok := productionSSLModes[config.GetDBSSLMode()]; !ok {
+		return fmt.Errorf("DB_SSL_MODE must be verify-ca or verify-full in production")
 	}
+	if len(config.GetDBPassword()) < minProductionDBPasswordLen {
+		return fmt.Errorf("DB_PASSWORD must be at least %d characters in production", minProductionDBPasswordLen)
+	}
+	if strings.TrimSpace(config.GetTrustedProxies()) == "" {
+		dbLogger.Warn("TRUSTED_PROXIES is empty: behind a reverse proxy every client shares one rate-limit bucket")
+	}
+	if config.GetLogLevel() == "debug" {
+		return fmt.Errorf("LOG_LEVEL=debug is not allowed in production")
+	}
+	dbLogger.Info("Production mode validation passed")
 	return nil
 }

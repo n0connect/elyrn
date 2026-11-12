@@ -220,6 +220,44 @@ func (s *Service) CreateRoom(me *Member, in *RoomInput) (*models.ConversationDTO
 	return &dto, nil
 }
 
+// lockRoomByCode row-locks a live room the caller proved they hold the code of. A wrong code,
+// an expired room and a missing room answer alike, so the answer says nothing about which.
+func lockRoomByCode(tx store.ChatRepository, id uuid.UUID, lookup string) (*models.Room, error) {
+	room, err := tx.LockRoom(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !roomAlive(room, time.Now()) || !cryptoengine.ConstantTimeEqual([]byte(lookup), []byte(room.Lookup)) {
+		return nil, ErrNotFound
+	}
+	return room, nil
+}
+
+// memberStream is the live-event address of the account behind a membership row.
+func memberStream(member *models.ConversationMember) (string, error) {
+	userUUID, err := openMemberRef(member)
+	if err != nil {
+		return "", err
+	}
+	return identity.StreamTag(userUUID)
+}
+
+// memberStreams is the live-event addresses of members, so each can be told of a change.
+func memberStreams(members []models.ConversationMember) ([]string, error) {
+	var streams []string // nil when nobody is there, as before the split
+	for i := range members {
+		stream, err := memberStream(&members[i])
+		if err != nil {
+			return nil, err
+		}
+		streams = append(streams, stream)
+	}
+	return streams, nil
+}
+
 // JoinRoom adds the caller to a room whose code they hold. Joining a room the caller is
 // already in only refreshes their vault. Returns the caller's view, whether a seat was taken,
 // and the other members' live-event addresses. Lock order: users, rooms, conversations.
@@ -238,16 +276,9 @@ func (s *Service) JoinRoom(me *Member, in *RoomInput) (*models.ConversationDTO, 
 		if err != nil {
 			return err
 		}
-		room, err := tx.LockRoom(in.ID)
-		if errors.Is(err, store.ErrNotFound) {
-			return ErrNotFound
-		}
+		room, err := lockRoomByCode(tx, in.ID, lookup)
 		if err != nil {
 			return err
-		}
-		// A wrong code and a missing room answer alike
-		if !roomAlive(room, time.Now()) || !cryptoengine.ConstantTimeEqual([]byte(lookup), []byte(room.Lookup)) {
-			return ErrNotFound
 		}
 		lastSeq, err := tx.LockConversation(in.ID)
 		if err != nil {
@@ -296,16 +327,8 @@ func (s *Service) JoinRoom(me *Member, in *RoomInput) (*models.ConversationDTO, 
 		if err := s.saveIndex(tx, self, append([]uuid.UUID{in.ID}, index...)); err != nil {
 			return err
 		}
-		for i := range members {
-			userUUID, err := openMemberRef(&members[i])
-			if err != nil {
-				return err
-			}
-			stream, err := identity.StreamTag(userUUID)
-			if err != nil {
-				return err
-			}
-			streams = append(streams, stream)
+		if streams, err = memberStreams(members); err != nil {
+			return err
 		}
 		created = true
 		dto = roomDTO(room, &member, len(members)+1, 0, lastSeq)
@@ -464,11 +487,7 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 			}
 			return err
 		}
-		userUUID, err := openMemberRef(recipient)
-		if err != nil {
-			return err
-		}
-		stream, err = identity.StreamTag(userUUID)
+		stream, err = memberStream(recipient)
 		return err
 	})
 	if err != nil {
