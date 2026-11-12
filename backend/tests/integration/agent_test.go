@@ -23,6 +23,13 @@ import (
 
 const agentWait = 10 * time.Second
 
+// newIdentityPath is where an agent named name keeps its identity under dir. The directory does not
+// exist yet, so the agent creates it private (0700) itself; t.TempDir() is 0755 on Linux and the
+// agent rightly refuses an identity directory open to other users.
+func newIdentityPath(dir, name string) string {
+	return filepath.Join(dir, name, "agent.json")
+}
+
 func newAgent(t *testing.T, server, path string) *agent.Agent {
 	t.Helper()
 	a, err := agent.New(agent.Config{Server: server, IdentityPath: path})
@@ -106,9 +113,9 @@ func TestAgents_TalkInARoomWithABrowserUser(t *testing.T) {
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
 	dir := t.TempDir()
-	alphaPath := filepath.Join(dir, "alpha", "agent.json")
+	alphaPath := newIdentityPath(dir, "alpha")
 	alpha := newAgent(t, srv.URL, alphaPath)
-	beta := newAgent(t, srv.URL, filepath.Join(dir, "beta", "agent.json"))
+	beta := newAgent(t, srv.URL, newIdentityPath(dir, "beta"))
 	if agentIdentity(t, alpha, true).PublicKey == agentIdentity(t, beta, true).PublicKey {
 		t.Fatal("two agents share a public key")
 	}

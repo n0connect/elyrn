@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -194,7 +193,7 @@ func mcpWaiting(t *testing.T) *mcpSession {
 	t.Helper()
 	ctx := context.Background()
 	srv := clientServer(t, setup(t))
-	robot := newAgent(t, srv.URL, filepath.Join(t.TempDir(), "agent.json"))
+	robot := newAgent(t, srv.URL, newIdentityPath(t.TempDir(), "robot"))
 	created, err := robot.CreateRoom(ctx, mcpRoomMembers, mcpRoomTTLHours)
 	if err != nil {
 		t.Fatalf("CreateRoom: %v", err)
@@ -279,7 +278,7 @@ func TestMCP_RoomReadPagesBackToTheBeginning(t *testing.T) {
 	ctx := context.Background()
 	srv := clientServer(t, setup(t))
 	t.Setenv("MESSAGE_PAGE_LIMIT", fmt.Sprint(mcpPageLimit))
-	robot := newAgent(t, srv.URL, filepath.Join(t.TempDir(), "agent.json"))
+	robot := newAgent(t, srv.URL, newIdentityPath(t.TempDir(), "robot"))
 	created, err := robot.CreateRoom(ctx, mcpRoomMembers, mcpRoomTTLHours)
 	if err != nil {
 		t.Fatalf("CreateRoom: %v", err)
