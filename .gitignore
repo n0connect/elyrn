@@ -43,3 +43,6 @@ coverage.txt
 /frontend.sha256
 # make backup-accounts output: account data, never committed
 /backups/
+
+# make certs output: the database CA key and the PostgreSQL server key (never committed)
+/certs/

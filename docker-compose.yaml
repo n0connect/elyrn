@@ -7,15 +7,39 @@ services:
     container_name: elyrn-postgres
     security_opt:
       - no-new-privileges:true
+    # TLS only (postgres/): the entrypoint hands the key from certs/postgres (make certs) to the
+    # postgres user through a tmpfs, pg_hba.conf refuses every TCP connection without TLS
+    entrypoint: ["/bin/sh", "/etc/elyrn/entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/elyrn-tls/server.crt
+      - -c
+      - ssl_key_file=/run/elyrn-tls/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.3
+      - -c
+      - hba_file=/etc/elyrn/pg_hba.conf
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
+    # make up / make onion pass the certificate's fingerprint: a renewed certificate changes the
+    # label, so Compose recreates the container (the data volume stays) and it loads the new one
+    labels:
+      elyrn.tls-cert-sha256: ${PG_TLS_CERT_SHA256:-}
+    tmpfs:
+      - /run/elyrn-tls:size=64k,mode=0700,noexec,nosuid,nodev
     # Loopback only: reachable from this machine (psql, local tests), never from the network
     ports:
       - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./certs/postgres:/etc/elyrn/tls:ro
+      - ./postgres/entrypoint.sh:/etc/elyrn/entrypoint.sh:ro
+      - ./postgres/pg_hba.conf:/etc/elyrn/pg_hba.conf:ro
     # Like every other service: after a crash or a host reboot the database comes back too,
     # instead of leaving a running app in front of a stopped database
     restart: unless-stopped
@@ -50,7 +74,10 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       DB_PORT: ${DB_PORT}
-      DB_SSL_MODE: ${DB_SSL_MODE}
+      # The bundled database speaks TLS only: verify its certificate and its name against the
+      # private CA from make certs. Not taken from .env (there DB_SSL_MODE serves host-side tools).
+      DB_SSL_MODE: verify-full
+      PGSSLROOTCERT: /etc/elyrn/db-ca/ca.crt
       BACKEND_PORT: ${BACKEND_PORT}
       MASTER_KEY_ACTIVE: ${MASTER_KEY_ACTIVE}
       MASTER_KEY_ACTIVE_ID: ${MASTER_KEY_ACTIVE_ID}
@@ -92,8 +119,14 @@ services:
       SERVER_WRITE_TIMEOUT_SEC: ${SERVER_WRITE_TIMEOUT_SEC}
       SERVER_IDLE_TIMEOUT_SEC: ${SERVER_IDLE_TIMEOUT_SEC}
       SERVER_MAX_HEADER_BYTES: ${SERVER_MAX_HEADER_BYTES}
-      APP_ENV: ${APP_ENV}
+      # development (default, plain http://localhost) or production (required by make onion)
+      APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL}
+    # The database CA only (public); a renewed CA changes the label and recreates the backend
+    volumes:
+      - ./certs/ca:/etc/elyrn/db-ca:ro
+    labels:
+      elyrn.db-ca-sha256: ${DB_CA_SHA256:-}
     # Loopback only: browsers must go through nginx (CSP, same-origin); local debugging still works
     ports:
       - "127.0.0.1:8080:8080"

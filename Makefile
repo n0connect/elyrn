@@ -11,6 +11,8 @@ DOCKER_COMPOSE ?= $(shell if command -v docker >/dev/null 2>&1 && docker compose
 # Project paths
 ENV_FILE := .env
 ENV_EXAMPLE := .env.example
+# TLS between the backend and the bundled PostgreSQL (make certs): outside git and images
+CERT_DIR := certs
 
 # Crypto engine compiled into the backend: openssl (default, libcrypto >= 3.2 via cgo) or
 # native (Go standard library). Both are byte-for-byte equivalent (make test-equivalence).
@@ -31,10 +33,14 @@ RELEASE_BRANCH := main
 COMPOSE_ENV := ENGINE=$(ENGINE)
 # Includes the opt-in tor service, so stopping and listing always cover it too
 COMPOSE_ALL := $(DOCKER_COMPOSE) -f docker-compose.yaml --profile onion
+# Fingerprints of the current certificates, as container labels: a renewed certificate changes
+# its label, so `up` recreates exactly the container that must load it (volumes stay)
+TLS_ENV = PG_TLS_CERT_SHA256="$$(openssl x509 -noout -fingerprint -sha256 -in "$(CERT_DIR)/postgres/server.crt" | cut -d= -f2)" \
+	DB_CA_SHA256="$$(openssl x509 -noout -fingerprint -sha256 -in "$(CERT_DIR)/ca/ca.crt" | cut -d= -f2)"
 # Frontend manifest: what the release workflow signs and verify-frontend checks against
 MANIFEST ?= frontend.sha256
 
-.PHONY: all help setup check-deps check-docker build up onion onion-address start run down stop restart logs ps clean agent \
+.PHONY: all help setup certs check-production check-deps check-docker build up onion onion-address start run down stop restart logs ps clean agent \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db \
         build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts
@@ -51,10 +57,11 @@ help:
 	@echo "Crypto engine: ENGINE=openssl (default) | native  e.g. make up ENGINE=native"
 	@echo ""
 	@echo "Targets:"
-	@echo "  setup         Generate .env configuration with fresh cryptographic keys"
+	@echo "  setup         Generate .env with fresh keys (kept if it exists) and the database TLS certificates"
+	@echo "  certs         Create or renew the database TLS certificates in $(CERT_DIR)/ (never touches .env or data)"
 	@echo "  build         Build Docker container images for ENGINE"
-	@echo "  up            Build and start services in background for ENGINE"
-	@echo "  onion         Like up, and publish the app as a Tor onion service"
+	@echo "  up            Build and start services in background for ENGINE (APP_ENV from .env)"
+	@echo "  onion         Like up, and publish the app as a Tor onion service (requires APP_ENV=production)"
 	@echo "  onion-address Print the onion address (published by make onion)"
 	@echo "  down          Stop and remove running containers"
 	@echo "  restart       Restart services"
@@ -95,7 +102,7 @@ setup:
 		exit 1; \
 	fi
 	@if ! command -v openssl >/dev/null 2>&1; then \
-		echo "ERROR: openssl is required (only 'openssl rand' is used; OpenSSL or LibreSSL both work)."; \
+		echo "ERROR: openssl is required (OpenSSL or LibreSSL both work)."; \
 		exit 1; \
 	fi
 	@if [ -f "$(ENV_FILE)" ]; then \
@@ -118,6 +125,22 @@ setup:
 		chmod 600 $(ENV_FILE); \
 		echo "[OK] $(ENV_FILE) created successfully with secure permissions (0600)."; \
 	fi
+	@$(MAKE) --no-print-directory certs
+
+# Idempotent: creates what is missing, renews what expires within 30 days, keeps the rest
+certs:
+	@sh postgres/certs.sh "$(CERT_DIR)"
+
+# make onion publishes the instance: refuse to do it in development mode (unprefixed cookie
+# without Secure, production checks off). The shell's APP_ENV wins over .env, as in Compose.
+check-production: $(ENV_FILE)
+	@env="$${APP_ENV:-$$(sed -n 's/^APP_ENV=//p' "$(ENV_FILE)" | tail -n 1)}"; \
+	env=$$(printf '%s' "$$env" | tr -d "\"' \r" | tr '[:upper:]' '[:lower:]'); \
+	case "$$env" in \
+		production|prod) ;; \
+		*) echo "[ERROR] make onion requires APP_ENV=production (now: $${env:-unset})."; \
+		   echo "        Set APP_ENV=production in $(ENV_FILE); see docs/operations/onion-service.md"; exit 1 ;; \
+	esac
 
 $(ENV_FILE):
 	@$(MAKE) setup
@@ -138,16 +161,16 @@ build: check-docker $(ENV_FILE)
 	@echo "[INFO] Building Docker images (crypto engine: $(ENGINE))..."
 	@$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f docker-compose.yaml build
 
-up: check-docker $(ENV_FILE)
+up: check-docker $(ENV_FILE) certs
 	@echo "[INFO] Starting services (crypto engine: $(ENGINE))..."
-	@$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f docker-compose.yaml up -d --build
+	@$(COMPOSE_ENV) $(TLS_ENV) $(DOCKER_COMPOSE) -f docker-compose.yaml up -d --build
 	@echo "[OK] Services running"
 	@$(DOCKER_COMPOSE) -f docker-compose.yaml ps
 
 # The tor service is opt-in: it makes this instance reachable from anywhere through Tor
-onion: check-docker $(ENV_FILE)
+onion: check-docker check-production certs
 	@echo "[INFO] Starting services and the onion service (crypto engine: $(ENGINE))..."
-	@$(COMPOSE_ENV) $(COMPOSE_ALL) up -d --build
+	@$(COMPOSE_ENV) $(TLS_ENV) $(COMPOSE_ALL) up -d --build
 	@echo "[OK] Services running; the onion address appears once tor has published it (about a minute):"
 	@echo "     make onion-address"
 
