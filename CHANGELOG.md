@@ -7,6 +7,12 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **Lookalike room members.** A room message from someone else was labelled with the sender's
+  name alone, which carries 12 bits: anyone holding the room code could grind an account offline
+  (about 4,096 tries) until its member key bore a member's name, join, and write as them. Every
+  room message now shows the sender's glyph, name and code (43 bits to match), gap warnings name
+  the sender with its code, and two keys under one name are tagged "same name as another member"
+  in the member list and on their messages, with one warning per session.
 - **Shared rate limits behind nginx.** `TRUSTED_PROXIES` was empty in the Docker stack, so the
   backend saw every user as nginx's address: about 20 failed logins locked everyone out, and
   five PoW challenges per minute were shared by all clients. nginx now has a fixed address that
