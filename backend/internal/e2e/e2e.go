@@ -1,4 +1,4 @@
-// Package e2e is the Go implementation of the noaddx. client message protocol, the
+// Package e2e is the Go implementation of the elyrn. client message protocol, the
 // twin of frontend/js/crypto.js. The server never imports it (it only relays ciphertext);
 // it exists so Go code can speak the real protocol — integration tests exchange genuine
 // ciphertext through the real server, and interop vectors pin both implementations together.
@@ -16,17 +16,18 @@ import (
 	"errors"
 	"fmt"
 
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/utils"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 )
 
 const (
-	keySize          = 32
-	padBlock         = 256 // smallest frame; frames double from here up to maxFrameBytes
-	maxFrameBytes    = 4096
-	maxPayloadBytes  = maxFrameBytes - 2
+	keySize         = 32
+	padBlock        = 256 // smallest frame; frames double from here up to maxFrameBytes
+	maxFrameBytes   = 4096
+	maxPayloadBytes = maxFrameBytes - 2
+	// "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
 	infoConversation = "noaddx/conv/v1"
 	aadVersion       = 0x01
 )

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/encryption"
-	"noaddx/tests/testutil"
+	"elyrn/internal/encryption"
+	"elyrn/tests/testutil"
 )
 
 // masterKeyHex draws a fresh 256-bit master key from the CSPRNG, as `make setup` does.

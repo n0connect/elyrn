@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"noaddx/internal/config"
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/utils"
+	"elyrn/internal/config"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/utils"
 )
 
 var accountLogger = utils.NewLogger("ACCOUNT")

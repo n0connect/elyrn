@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"noaddx/internal/utils"
+	"elyrn/internal/utils"
 )
 
 var originLogger = utils.NewLogger("ORIGIN")

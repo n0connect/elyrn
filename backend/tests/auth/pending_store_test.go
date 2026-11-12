@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/config"
-	"noaddx/tests/testutil"
+	"elyrn/internal/auth"
+	"elyrn/internal/config"
+	"elyrn/tests/testutil"
 )
 
 func setupPendingStoreEnv(t *testing.T) {

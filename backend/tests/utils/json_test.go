@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/config"
-	"noaddx/internal/models"
-	"noaddx/internal/utils"
-	"noaddx/tests/testutil"
+	"elyrn/internal/config"
+	"elyrn/internal/models"
+	"elyrn/internal/utils"
+	"elyrn/tests/testutil"
 )
 
 func setupJSONTestEnv(t *testing.T) {

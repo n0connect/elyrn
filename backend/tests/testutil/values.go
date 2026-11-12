@@ -6,10 +6,10 @@ package testutil
 import (
 	"testing"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/identity"
-	"noaddx/internal/utils"
+	"elyrn/internal/auth"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/identity"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 )

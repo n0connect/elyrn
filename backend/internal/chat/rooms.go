@@ -10,13 +10,13 @@ import (
 	"sort"
 	"time"
 
-	"noaddx/internal/config"
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/encryption"
-	"noaddx/internal/identity"
-	"noaddx/internal/models"
-	"noaddx/internal/store"
-	"noaddx/internal/utils"
+	"elyrn/internal/config"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/encryption"
+	"elyrn/internal/identity"
+	"elyrn/internal/models"
+	"elyrn/internal/store"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 )
@@ -27,6 +27,7 @@ var (
 )
 
 const (
+	// "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
 	roomRosterPrefix = "noaddx/room/roster/v1"
 	// expirySkew tolerates a client clock this far off when it proposes a room's expiry
 	expirySkew = 10 * time.Minute

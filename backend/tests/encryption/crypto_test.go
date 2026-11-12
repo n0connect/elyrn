@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/encryption"
-	"noaddx/tests/testutil"
+	"elyrn/internal/encryption"
+	"elyrn/tests/testutil"
 )
 
 func TestEncryptWithAAD_Basic(t *testing.T) {

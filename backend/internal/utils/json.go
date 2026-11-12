@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"noaddx/internal/config"
+	"elyrn/internal/config"
 )
 
 func maxRequestBodyBytes() (int, error) {

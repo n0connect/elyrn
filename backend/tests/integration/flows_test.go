@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/chat"
-	"noaddx/internal/database"
-	"noaddx/internal/identity"
-	"noaddx/internal/models"
-	"noaddx/tests/testutil"
+	"elyrn/internal/auth"
+	"elyrn/internal/chat"
+	"elyrn/internal/database"
+	"elyrn/internal/identity"
+	"elyrn/internal/models"
+	"elyrn/tests/testutil"
 )
 
 func TestRegisterAndLogin_UsesDerivedAuthKeyOnly(t *testing.T) {

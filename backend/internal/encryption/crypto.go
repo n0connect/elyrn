@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/utils"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/utils"
 )
 
 var cryptoLogger = utils.NewLogger("CRYPTO")

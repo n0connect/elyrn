@@ -11,8 +11,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"noaddx/internal/config"
-	"noaddx/internal/utils"
+	"elyrn/internal/config"
+	"elyrn/internal/utils"
 )
 
 var masterKeyLogger = utils.NewLogger("MASTER_KEY")

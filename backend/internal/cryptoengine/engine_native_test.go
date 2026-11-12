@@ -5,7 +5,7 @@ package cryptoengine_test
 import (
 	"testing"
 
-	"noaddx/internal/cryptoengine"
+	"elyrn/internal/cryptoengine"
 )
 
 func TestDefaultBuildUsesTheNativeEngine(t *testing.T) {

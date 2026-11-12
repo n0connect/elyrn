@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/tests/testutil"
+	"elyrn/internal/auth"
+	"elyrn/tests/testutil"
 )
 
 func setupAuthTestEnv(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/auth"
-	"noaddx/tests/testutil"
+	"elyrn/internal/auth"
+	"elyrn/tests/testutil"
 )
 
 func setupPendingJWTEnv(t *testing.T) {

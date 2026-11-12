@@ -9,15 +9,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/chat"
-	"noaddx/internal/config"
-	"noaddx/internal/identity"
-	"noaddx/internal/middleware"
-	"noaddx/internal/models"
-	"noaddx/internal/realtime"
-	"noaddx/internal/store"
-	"noaddx/internal/utils"
+	"elyrn/internal/auth"
+	"elyrn/internal/chat"
+	"elyrn/internal/config"
+	"elyrn/internal/identity"
+	"elyrn/internal/middleware"
+	"elyrn/internal/models"
+	"elyrn/internal/realtime"
+	"elyrn/internal/store"
+	"elyrn/internal/utils"
 )
 
 const (

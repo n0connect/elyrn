@@ -4,8 +4,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"noaddx/internal/middleware"
-	"noaddx/tests/testutil"
+	"elyrn/internal/middleware"
+	"elyrn/tests/testutil"
 )
 
 func TestClientIP_UntrustedProxy_IgnoresForwardedHeaders(t *testing.T) {

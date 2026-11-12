@@ -3,7 +3,7 @@ package e2e
 import (
 	"testing"
 
-	"noaddx/internal/utils"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 )

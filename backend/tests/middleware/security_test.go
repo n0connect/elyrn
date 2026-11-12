@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/middleware"
-	"noaddx/tests/testutil"
+	"elyrn/internal/middleware"
+	"elyrn/tests/testutil"
 )
 
 func TestSecurityHeadersMiddleware(t *testing.T) {

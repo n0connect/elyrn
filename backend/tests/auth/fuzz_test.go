@@ -3,9 +3,9 @@ package auth
 import (
 	"testing"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/identity"
-	"noaddx/tests/testutil"
+	"elyrn/internal/auth"
+	"elyrn/internal/identity"
+	"elyrn/tests/testutil"
 )
 
 // The AccountNumber of the shared Go/JS interop vector (backend/tests/identity,

@@ -1,8 +1,8 @@
 package encryption
 
 import (
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/utils"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 )

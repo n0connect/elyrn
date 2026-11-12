@@ -4,12 +4,12 @@ import (
 	"errors"
 	"net/http"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/identity"
-	"noaddx/internal/middleware"
-	"noaddx/internal/models"
-	"noaddx/internal/realtime"
-	"noaddx/internal/utils"
+	"elyrn/internal/auth"
+	"elyrn/internal/identity"
+	"elyrn/internal/middleware"
+	"elyrn/internal/models"
+	"elyrn/internal/realtime"
+	"elyrn/internal/utils"
 )
 
 var logoutLogger = utils.NewLogger("LOGOUT")

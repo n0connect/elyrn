@@ -6,7 +6,7 @@ package openssl
 #cgo pkg-config: libcrypto
 #include <openssl/opensslv.h>
 #if OPENSSL_VERSION_NUMBER < 0x30200000L
-#error "noaddx: the OpenSSL engine needs OpenSSL >= 3.2 (EVP_KDF ARGON2ID)"
+#error "elyrn: the OpenSSL engine needs OpenSSL >= 3.2 (EVP_KDF ARGON2ID)"
 #endif
 #include <openssl/core_names.h>
 #include <openssl/crypto.h>

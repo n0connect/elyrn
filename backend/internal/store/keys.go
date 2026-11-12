@@ -3,9 +3,9 @@ package store
 import (
 	"errors"
 
-	"noaddx/internal/database"
-	"noaddx/internal/models"
-	"noaddx/internal/utils"
+	"elyrn/internal/database"
+	"elyrn/internal/models"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"

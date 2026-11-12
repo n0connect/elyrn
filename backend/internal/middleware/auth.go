@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/config"
-	"noaddx/internal/models"
-	"noaddx/internal/store"
-	"noaddx/internal/utils"
+	"elyrn/internal/auth"
+	"elyrn/internal/config"
+	"elyrn/internal/models"
+	"elyrn/internal/store"
+	"elyrn/internal/utils"
 )
 
 var (

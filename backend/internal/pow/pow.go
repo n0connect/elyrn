@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"noaddx/internal/config"
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/models"
-	"noaddx/internal/utils"
+	"elyrn/internal/config"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/models"
+	"elyrn/internal/utils"
 )
 
 type ChallengeEntry struct {

@@ -11,15 +11,15 @@ import (
 	"syscall"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/chat"
-	"noaddx/internal/config"
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/database"
-	"noaddx/internal/encryption"
-	"noaddx/internal/pow"
-	"noaddx/internal/server"
-	"noaddx/internal/utils"
+	"elyrn/internal/auth"
+	"elyrn/internal/chat"
+	"elyrn/internal/config"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/database"
+	"elyrn/internal/encryption"
+	"elyrn/internal/pow"
+	"elyrn/internal/server"
+	"elyrn/internal/utils"
 )
 
 // shutdownGrace bounds how long in-flight requests may finish after SIGINT/SIGTERM
@@ -29,9 +29,9 @@ var mainLogger = utils.NewLogger("MAIN")
 
 func main() {
 	if config.IsProductionMode() {
-		mainLogger.Info("Starting noaddx. backend (production)")
+		mainLogger.Info("Starting elyrn. backend (production)")
 	} else {
-		mainLogger.Info("Starting noaddx. backend (development)")
+		mainLogger.Info("Starting elyrn. backend (development)")
 	}
 
 	// Known-answer self-test of the compiled crypto engine before any key or user data is touched

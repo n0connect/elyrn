@@ -87,7 +87,7 @@ go test -tags=test ./tests/utils -v
 | Encryption | 11 | Gecti |
 | Middleware | 21 | Gecti |
 | Identity | 5 | Gecti |
-| Integration (noaddx flows) | 45 | Gecti |
+| Integration (elyrn flows) | 45 | Gecti |
 | Utils | 22 | Gecti |
 | **TOPLAM (tests/)** | **137** | Gecti |
 

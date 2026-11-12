@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"noaddx/internal/models"
+	"elyrn/internal/models"
 )
 
 // A solution is accepted only when it was issued, unused, unexpired, and its hash meets

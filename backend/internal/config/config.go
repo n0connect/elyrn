@@ -10,7 +10,8 @@ import (
 )
 
 const (
-	defaultJWTSecretMinLen         = 32
+	defaultJWTSecretMinLen = 32
+	// The "noaddx" issuer, audience and database defaults are stored names kept across the rename to elyrn.
 	defaultJWTIssuer               = "noaddx-backend"
 	defaultJWTAudience             = "noaddx-web"
 	defaultJWTExpirationMinutes    = 15

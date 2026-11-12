@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"noaddx/internal/chat"
-	"noaddx/internal/database"
-	"noaddx/internal/e2e"
-	"noaddx/internal/models"
+	"elyrn/internal/chat"
+	"elyrn/internal/database"
+	"elyrn/internal/e2e"
+	"elyrn/internal/models"
 
 	"github.com/google/uuid"
 )

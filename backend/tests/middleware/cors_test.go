@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"noaddx/internal/middleware"
-	"noaddx/tests/testutil"
+	"elyrn/internal/middleware"
+	"elyrn/tests/testutil"
 )
 
 func TestCORSMiddleware_AllowedOrigin(t *testing.T) {

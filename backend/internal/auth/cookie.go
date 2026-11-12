@@ -4,13 +4,14 @@ import (
 	"net/http"
 	"time"
 
-	"noaddx/internal/config"
+	"elyrn/internal/config"
 )
 
 const (
 	// __Host- prefix requires: Secure flag, no Domain, Path=/ (blocks subdomain/MITM cookie injection)
 	productionCookieName = "__Host-Session"
 	// Browsers reject __Host- cookies without Secure, so plain-HTTP development uses an unprefixed name
+	// Kept as "noaddx_session" across the rename to elyrn so existing development sessions survive.
 	developmentCookieName = "noaddx_session"
 )
 

@@ -17,14 +17,14 @@ import (
 	"strings"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/config"
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/encryption"
-	"noaddx/internal/identity"
-	"noaddx/internal/models"
-	"noaddx/internal/store"
-	"noaddx/internal/utils"
+	"elyrn/internal/auth"
+	"elyrn/internal/config"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/encryption"
+	"elyrn/internal/identity"
+	"elyrn/internal/models"
+	"elyrn/internal/store"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 )

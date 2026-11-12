@@ -4,8 +4,8 @@
 package testutil
 
 import (
-	"noaddx/internal/auth"
-	"noaddx/internal/middleware"
+	"elyrn/internal/auth"
+	"elyrn/internal/middleware"
 )
 
 // resetRateLimiterForTesting calls the test-only reset function

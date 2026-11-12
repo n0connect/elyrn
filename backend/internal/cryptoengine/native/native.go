@@ -1,8 +1,8 @@
 // Package native is the pure-Go crypto engine: the Go standard library (crypto/*) plus
 // golang.org/x/crypto/argon2, CGO disabled. It is byte-for-byte interchangeable with the
-// OpenSSL engine (noaddx/internal/cryptoengine/openssl); the equivalence package proves it.
+// OpenSSL engine (elyrn/internal/cryptoengine/openssl); the equivalence package proves it.
 //
-// Inputs are validated by the engine-independent layer (noaddx/internal/cryptoengine)
+// Inputs are validated by the engine-independent layer (elyrn/internal/cryptoengine)
 // before they reach an engine, so both engines see exactly the same well-formed calls.
 package native
 

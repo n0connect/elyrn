@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"noaddx/internal/config"
-	"noaddx/tests/testutil"
+	"elyrn/internal/config"
+	"elyrn/tests/testutil"
 )
 
 // The lookup pepper must be real key material (hex or base64 of >= 32 bytes); a long

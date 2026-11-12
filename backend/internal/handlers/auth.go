@@ -5,14 +5,14 @@ import (
 	"errors"
 	"net/http"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/encryption"
-	"noaddx/internal/identity"
-	"noaddx/internal/middleware"
-	"noaddx/internal/models"
-	"noaddx/internal/pow"
-	"noaddx/internal/store"
-	"noaddx/internal/utils"
+	"elyrn/internal/auth"
+	"elyrn/internal/encryption"
+	"elyrn/internal/identity"
+	"elyrn/internal/middleware"
+	"elyrn/internal/models"
+	"elyrn/internal/pow"
+	"elyrn/internal/store"
+	"elyrn/internal/utils"
 )
 
 var (

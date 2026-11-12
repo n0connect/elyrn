@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/chat"
-	"noaddx/internal/database"
-	"noaddx/internal/models"
+	"elyrn/internal/auth"
+	"elyrn/internal/chat"
+	"elyrn/internal/database"
+	"elyrn/internal/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

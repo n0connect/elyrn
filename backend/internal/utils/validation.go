@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"regexp"
 
-	"noaddx/internal/config"
-	"noaddx/internal/cryptoengine"
+	"elyrn/internal/config"
+	"elyrn/internal/cryptoengine"
 
 	"github.com/google/uuid"
 )

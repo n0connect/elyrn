@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"noaddx/internal/config"
-	"noaddx/internal/encryption"
-	"noaddx/internal/models"
-	"noaddx/internal/utils"
+	"elyrn/internal/config"
+	"elyrn/internal/encryption"
+	"elyrn/internal/models"
+	"elyrn/internal/utils"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

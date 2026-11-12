@@ -6,7 +6,7 @@ package realtime
 import (
 	"errors"
 
-	"noaddx/internal/utils"
+	"elyrn/internal/utils"
 )
 
 const (

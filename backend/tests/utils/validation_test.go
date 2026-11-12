@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"testing"
 
-	"noaddx/internal/utils"
-	"noaddx/tests/testutil"
+	"elyrn/internal/utils"
+	"elyrn/tests/testutil"
 )
 
 func TestGenerateAccountNumber_LengthAndCharset(t *testing.T) {

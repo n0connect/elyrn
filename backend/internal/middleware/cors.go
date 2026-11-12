@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"noaddx/internal/config"
-	"noaddx/internal/utils"
+	"elyrn/internal/config"
+	"elyrn/internal/utils"
 )
 
 var (

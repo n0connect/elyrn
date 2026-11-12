@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/cryptoengine"
+	"elyrn/internal/cryptoengine"
 )
 
 // Known-answer tests run against whichever engine this binary was built with

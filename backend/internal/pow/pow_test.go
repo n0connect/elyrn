@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"noaddx/internal/config"
-	"noaddx/internal/models"
+	"elyrn/internal/config"
+	"elyrn/internal/models"
 )
 
 // Every test drives the real issuer and validator: challenges come from GenerateChallenge,

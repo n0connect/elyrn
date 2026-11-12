@@ -8,8 +8,8 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"noaddx/internal/cryptoengine/native"
-	"noaddx/internal/cryptoengine/openssl"
+	"elyrn/internal/cryptoengine/native"
+	"elyrn/internal/cryptoengine/openssl"
 )
 
 // Differential tests: every deterministic primitive is fed the same inputs through both

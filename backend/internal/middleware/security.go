@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"noaddx/internal/config"
+	"elyrn/internal/config"
 )
 
 // apiCSP makes every API response inert: JSON is data, never a document that loads or runs anything

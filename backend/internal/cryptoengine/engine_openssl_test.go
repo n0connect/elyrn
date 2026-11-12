@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/cryptoengine"
+	"elyrn/internal/cryptoengine"
 )
 
 func TestOpenSSLBuildUsesTheOpenSSLEngine(t *testing.T) {

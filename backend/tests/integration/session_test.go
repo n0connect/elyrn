@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"noaddx/internal/auth"
-	"noaddx/internal/models"
+	"elyrn/internal/auth"
+	"elyrn/internal/models"
 )
 
 // The session token lives only in the HttpOnly cookie: no response body ever carries it,

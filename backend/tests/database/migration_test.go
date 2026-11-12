@@ -1,15 +1,15 @@
 package database
 
 import (
+	"elyrn/internal/auth"
+	"elyrn/internal/identity"
 	"encoding/hex"
-	"noaddx/internal/auth"
-	"noaddx/internal/identity"
 	"testing"
 
-	"noaddx/internal/database"
-	"noaddx/internal/encryption"
-	"noaddx/internal/models"
-	"noaddx/tests/testutil"
+	"elyrn/internal/database"
+	"elyrn/internal/encryption"
+	"elyrn/internal/models"
+	"elyrn/tests/testutil"
 )
 
 // TestDatabaseMigration tests that database migrations run successfully

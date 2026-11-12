@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/utils"
-	"noaddx/tests/testutil"
+	"elyrn/internal/utils"
+	"elyrn/tests/testutil"
 
 	"github.com/google/uuid"
 )

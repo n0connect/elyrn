@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"noaddx/internal/realtime"
+	"elyrn/internal/realtime"
 )
 
 const (

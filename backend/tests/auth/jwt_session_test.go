@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"noaddx/internal/auth"
-	"noaddx/tests/testutil"
+	"elyrn/internal/auth"
+	"elyrn/tests/testutil"
 
 	"github.com/golang-jwt/jwt/v5"
 )

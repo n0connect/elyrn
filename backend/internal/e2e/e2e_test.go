@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"noaddx/internal/identity"
+	"elyrn/internal/identity"
 
 	"github.com/google/uuid"
 )

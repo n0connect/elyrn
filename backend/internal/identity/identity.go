@@ -1,4 +1,4 @@
-// Package identity derives every account-scoped value noaddx needs from a single
+// Package identity derives every account-scoped value elyrn needs from a single
 // AccountNumber, with strict domain separation. The browser runs the same
 // derivations (frontend/js/crypto.js); both sides MUST stay byte-for-byte equal.
 package identity
@@ -8,9 +8,9 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"noaddx/internal/config"
-	"noaddx/internal/cryptoengine"
-	"noaddx/internal/utils"
+	"elyrn/internal/config"
+	"elyrn/internal/cryptoengine"
+	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
 )
@@ -21,6 +21,7 @@ const (
 	// EncodedKeyLength is the base64url (no padding) length of a 32-byte value.
 	EncodedKeyLength = 43
 
+	// "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
 	derivationSalt      = "noaddx.v1"
 	infoAuthKey         = "noaddx/auth"
 	infoIdentityKey     = "noaddx/identity/x25519"

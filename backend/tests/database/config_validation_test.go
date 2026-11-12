@@ -4,10 +4,10 @@ import (
 	"net/url"
 	"testing"
 
-	"noaddx/internal/config"
-	"noaddx/internal/database"
-	"noaddx/internal/encryption"
-	"noaddx/tests/testutil"
+	"elyrn/internal/config"
+	"elyrn/internal/database"
+	"elyrn/internal/encryption"
+	"elyrn/tests/testutil"
 )
 
 func validate(t *testing.T) error {

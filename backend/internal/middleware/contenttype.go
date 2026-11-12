@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"noaddx/internal/utils"
+	"elyrn/internal/utils"
 )
 
 var contentTypeLogger = utils.NewLogger("CONTENT_TYPE")

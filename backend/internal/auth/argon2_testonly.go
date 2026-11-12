@@ -3,7 +3,7 @@
 
 package auth
 
-import "noaddx/internal/config"
+import "elyrn/internal/config"
 
 // HoldArgon2SlotsForTesting takes every Argon2id slot so tests can observe a saturated
 // server; the returned function gives them back. Test builds only.

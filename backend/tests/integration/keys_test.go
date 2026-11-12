@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"noaddx/internal/chat"
-	"noaddx/internal/database"
-	"noaddx/internal/encryption"
-	"noaddx/internal/models"
+	"elyrn/internal/chat"
+	"elyrn/internal/database"
+	"elyrn/internal/encryption"
+	"elyrn/internal/models"
 )
 
 func newKeyHex(t *testing.T) string {

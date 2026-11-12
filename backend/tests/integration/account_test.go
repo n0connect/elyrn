@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"noaddx/internal/database"
-	"noaddx/internal/models"
+	"elyrn/internal/database"
+	"elyrn/internal/models"
 )
 
 // Erasing an account takes the account number again (as its derived auth key): a session left
