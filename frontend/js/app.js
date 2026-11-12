@@ -111,15 +111,62 @@ function copyShownText(sourceId, notice, accepts) {
     };
 }
 
+// The robot door: a person is told so and shown the way back; anything else gets the challenge.
+// Theatre only (js/robot-door.js): the robot entrance behind it is public either way.
+function pressRobotDoor(event) {
+    const judged = judgeDoorPress(event);
+    if (judged.human) {
+        showDoorVerdict(RobotDoor.verdictLine(judged), RobotDoor.measurementLines(judged.measurements));
+    } else {
+        showDoorChallenge();
+    }
+}
+
+// Checked here, in this page: nothing is sent. Wrong or malformed is a person; right is a robot.
+async function answerDoorChallenge() {
+    const button = document.getElementById('doorAnswerBtn');
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+        const right = await RobotDoor.checkAnswer(
+            document.getElementById('doorNonce').textContent,
+            document.getElementById('doorAnswerInput').value);
+        if (right) {
+            showRobot(RobotDoor.MODE.ROBOT);
+        } else {
+            showDoorVerdict(RobotDoor.LINES.WRONG, []);
+        }
+    } catch (e) {
+        Errors.report(Errors.CODES.W_DOOR_CHECK_UNAVAILABLE, null, e);
+        showRobot(RobotDoor.MODE.ROBOT);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+// The two door screens in front of the robot entrance
+function setupDoorListeners() {
+    document.getElementById('showRobotBtn').addEventListener('click', pressRobotDoor);
+    document.getElementById('humanDoorBtn').addEventListener('click', showMainMenu);
+    document.getElementById('operatorDoorBtn').addEventListener('click', () => showRobot(RobotDoor.MODE.OPERATOR));
+    document.getElementById('doorHumanBtn').addEventListener('click', () => showDoorVerdict(RobotDoor.LINES.HONEST, []));
+    document.getElementById('doorAnswerBtn').addEventListener('click', answerDoorChallenge);
+    document.getElementById('doorAnswerInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') answerDoorChallenge();
+    });
+    ['verdictBrandTitle', 'challengeBrandTitle', 'robotBrandTitle'].forEach(id => {
+        document.getElementById(id).addEventListener('click', showMainMenu);
+    });
+}
+
 // Main menu, the robot entrance, and the brand titles that lead back to the menu
 function setupMenuListeners() {
     document.getElementById('showLoginBtn').addEventListener('click', showLogin);
     document.getElementById('showRegisterFormBtn').addEventListener('click', showRegisterForm);
     document.getElementById('backToMenuFromLogin').addEventListener('click', showMainMenu);
-    document.getElementById('showRobotBtn').addEventListener('click', showRobot);
+    setupDoorListeners();
     document.getElementById('backToMenuFromRobot').addEventListener('click', showMainMenu);
-    document.getElementById('robotBrandTitle').addEventListener('click', showMainMenu);
-    document.getElementById('copyRobotBtn').addEventListener('click', copyShownText('robotCommand', 'command copied'));
+    document.getElementById('copyRobotBtn').addEventListener('click', copyShownText('robotCommand', Errors.NOTICE.COMMAND_COPIED));
     document.getElementById('retryResumeBtn').addEventListener('click', retryResume);
 
     // Brand title click - go back to main menu
@@ -226,10 +273,10 @@ function setupComposerListeners() {
 
 // Keys and page events that apply whatever is on screen
 function setupGlobalListeners() {
-    // Escape leaves a conversation, or the robot entrance
+    // Escape leaves a conversation, or the robot side (its doors and the robot entrance)
     document.addEventListener('keydown', function(e) {
         if (e.key !== 'Escape') return;
-        if (document.getElementById('robotContainer').style.display !== 'none') {
+        if (isRobotSide()) {
             showMainMenu();
         } else if (document.getElementById('chatView').style.display !== 'none') {
             Chat.backToList();

@@ -90,6 +90,9 @@ const Errors = (() => {
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_LIVE_UPDATES_PAUSED: w('live updates paused — reload to resume'),
         W_COPY_MANUALLY: w('copy it manually'),
+        // The robot door's challenge cannot run here (no random source, or no SHA-256 outside
+        // https). The door is theatre and gates nothing, so the visitor is let through.
+        W_DOOR_CHECK_UNAVAILABLE: w('this browser cannot run the door check — come in anyway'),
         // Shown in place of a message whose sender counter was already used (counters.js)
         W_MESSAGE_REPLAYED: w('⚠ a message from {who} was replayed or reordered by the server'),
 
@@ -177,7 +180,8 @@ const Errors = (() => {
         CREATING_ACCOUNT: 'creating your account...',
         ACCOUNT_NUMBER_READY: 'your account number is ready! click continue to create account.',
         INVITE_COPIED: 'invite copied',
-        ROOM_CODE_COPIED: 'room code copied'
+        ROOM_CODE_COPIED: 'room code copied',
+        COMMAND_COPIED: 'command copied'
     });
 
     const PLACEHOLDER = /\{([a-z]+)\}/g;

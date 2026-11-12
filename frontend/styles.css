@@ -1328,3 +1328,129 @@ header {
     color: var(--danger);
     border-color: var(--danger);
 }
+
+/* ========================================
+   THE OTHER DOOR (robot side)
+   Theatre in front of the robot entrance, not a gate (js/robot-door.js). One class on <body>
+   swaps the palette; every view of the robot side then reads its colours from the same tokens.
+   ======================================== */
+
+body {
+    transition: background-color 0.4s ease, color 0.4s ease;
+}
+
+body.robot-side {
+    --bg: #000000;
+    --fg: #ffffff;
+    --border: #ffffff;
+    --muted: #b3b3b3;
+    --hover-bg: #ffffff;
+    --hover-fg: #000000;
+    --danger: #ff6b6b;
+    --danger-bg: #1a0000;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body {
+        transition: none;
+    }
+}
+
+/* Thin ornaments: a hand-drawn line on the human side, a circuit trace on the robot side */
+.door-ornament {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: -24px auto 8px auto;
+    color: var(--fg);
+}
+
+/* Main menu: the robot door is the inverted slab, stitched in the page's colour */
+.door-slot {
+    width: 100%;
+    max-width: 300px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.door-btn {
+    background: var(--fg);
+    color: var(--bg);
+    border-color: var(--fg);
+    outline: 1px dashed var(--bg);
+    outline-offset: -6px;
+}
+
+.door-btn:focus-visible {
+    outline: 2px solid var(--fg);
+    outline-offset: 3px;
+}
+
+.door-caption {
+    font-size: 14px;
+    letter-spacing: 1px;
+    color: var(--muted);
+}
+
+/* Robot side panels carry the same stitching, in white */
+.robot-side .door-panel {
+    outline: 1px dashed var(--fg);
+    outline-offset: -6px;
+}
+
+.door-line {
+    font-size: 20px;
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+}
+
+.door-measurements {
+    list-style: none;
+    font-size: 16px;
+    color: var(--muted);
+    margin-bottom: 8px;
+}
+
+.door-measurements li::before {
+    content: '· ';
+}
+
+.door-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.door-task {
+    display: block;
+    font-size: 14px;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+}
+
+.door-aside {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    color: var(--fg);
+}
+
+/* Legible on black: a white focus ring everywhere (inputs drop theirs above), no dark shadows,
+   and a hover tint that shows on black */
+.robot-side :focus-visible {
+    outline: 2px solid var(--fg);
+    outline-offset: 3px;
+}
+
+.robot-side button,
+.robot-side button:hover,
+.robot-side button:active {
+    box-shadow: none;
+}
+
+.robot-side .text-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+}

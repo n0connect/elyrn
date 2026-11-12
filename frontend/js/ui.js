@@ -4,7 +4,11 @@
 // Rendering only: no network, no crypto. Every user- or server-supplied string
 // reaches the DOM through textContent (never innerHTML).
 
-const VIEW_IDS = ['mainMenu', 'loginContainer', 'registerContainer', 'robotContainer', 'appContainer'];
+const VIEW_IDS = ['mainMenu', 'loginContainer', 'registerContainer', 'doorVerdictContainer',
+    'doorChallengeContainer', 'robotContainer', 'appContainer'];
+// The robot side of the other door: these views turn the page black (one class on <body>)
+const ROBOT_SIDE_VIEWS = new Set(['doorVerdictContainer', 'doorChallengeContainer', 'robotContainer']);
+const ROBOT_SIDE_CLASS = 'robot-side';
 
 // Time units: an hour is the room code's own unit (room-crypto.js)
 const SECOND_MS = 1000;
@@ -42,10 +46,83 @@ document.querySelectorAll('[data-hidden]').forEach(element => {
     element.style.display = 'none';
 });
 
+// Every view change passes here, so any way out of the robot side (buttons, brand title, Escape,
+// logging in) turns the page white again, and the pointer trail exists only on the main menu
 function setView(activeId) {
     VIEW_IDS.forEach(id => {
         document.getElementById(id).style.display = id === activeId ? 'block' : 'none';
     });
+    document.body.classList.toggle(ROBOT_SIDE_CLASS, ROBOT_SIDE_VIEWS.has(activeId));
+    watchDoorTrail(activeId === 'mainMenu');
+    if (activeId !== 'doorVerdictContainer') clearDoorVerdict();
+}
+
+function isRobotSide() {
+    return document.body.classList.contains(ROBOT_SIDE_CLASS);
+}
+
+// ---------- the other door ----------
+// Theatre, not a gate (js/robot-door.js). The trail is kept in memory while the main menu is
+// shown, read once when the robot door is pressed, and dropped as soon as the menu is left.
+
+const doorTrail = RobotDoor.createTrail();
+
+function recordDoorTrail(event) {
+    doorTrail.push(event.clientX, event.clientY, event.timeStamp);
+}
+
+function watchDoorTrail(watching) {
+    if (watching) {
+        document.addEventListener('pointermove', recordDoorTrail, { passive: true });
+    } else {
+        document.removeEventListener('pointermove', recordDoorTrail);
+        doorTrail.clear();
+    }
+}
+
+// The click on the robot door, judged against the trail (read before the view changes clears it)
+function judgeDoorPress(event) {
+    return RobotDoor.classify(
+        { pointerType: event.pointerType, detail: event.detail, at: event.timeStamp },
+        doorTrail.points());
+}
+
+// The verdict for a person: measured lines (none for an honest or wrong answer) and one line.
+// Written after the view is shown, so the live region announces it.
+function showDoorVerdict(line, measurements) {
+    setView('doorVerdictContainer');
+    clearDoorVerdict();
+    const list = document.getElementById('doorMeasurements');
+    measurements.forEach(text => {
+        const item = document.createElement('li');
+        item.textContent = text;
+        list.appendChild(item);
+    });
+    document.getElementById('doorVerdictLine').textContent = line;
+    document.getElementById('humanDoorBtn').focus();
+}
+
+// Measurements are forgotten as soon as the verdict screen is left
+function clearDoorVerdict() {
+    clearChildren(document.getElementById('doorMeasurements'));
+    document.getElementById('doorVerdictLine').textContent = '';
+}
+
+// A fresh nonce each time; a browser without a random source skips the show
+function showDoorChallenge() {
+    let nonce;
+    try {
+        nonce = RobotDoor.newNonce();
+    } catch (e) {
+        Errors.report(Errors.CODES.W_DOOR_CHECK_UNAVAILABLE, null, e);
+        showRobot(RobotDoor.MODE.ROBOT);
+        return;
+    }
+    setView('doorChallengeContainer');
+    document.getElementById('doorNonce').textContent = nonce;
+    const input = document.getElementById('doorAnswerInput');
+    input.value = '';
+    input.focus();
 }
 
 function showMainMenu() {
@@ -95,9 +172,11 @@ function showRegisterForm() {
     );
 }
 
-// Robot entrance: explains how an AI agent connects to this instance; no account, no network
-function showRobot() {
+// Robot entrance: explains how an AI agent connects to this instance; no account, no network.
+// mode (RobotDoor.MODE) only picks the greeting: a robot that passed, or its person.
+function showRobot(mode) {
     setView('robotContainer');
+    document.getElementById('robotGreeting').textContent = RobotDoor.greeting(mode);
     document.getElementById('robotCommand').textContent =
         buildAgentCommand(window.location.origin) || buildAgentCommand(AGENT_SERVER_EXAMPLE);
     document.getElementById('copyRobotBtn').focus();
