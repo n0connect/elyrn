@@ -17,6 +17,10 @@ const Chat = (() => {
     const MAX_CIPHERTEXT_CHARS = 11000;
     // A roster can change between fetching it and sending (412): fetch, re-encrypt, retry, bounded
     const MAX_ROSTER_RETRIES = 2;
+    // Live events arrive in bursts: one list refresh per burst, this long after its last event
+    const REFRESH_DEBOUNCE_MS = 250;
+    // The page title, prefixed by the unread count when there is one
+    const APP_TITLE = 'elyrn.';
 
     let me = null;                    // { privateKey, publicKey, roomsRoot, aura, ttlDays, limits }
     const conversations = new Map();  // id -> conversation state
@@ -77,7 +81,7 @@ const Chat = (() => {
         conversations.forEach(conv => {
             if (conv.id !== activeId && conv.lastSeq > conv.readSeq) unread++;
         });
-        document.title = unread > 0 ? `(${unread}) elyrn.` : 'elyrn.';
+        document.title = unread > 0 ? `(${unread}) ${APP_TITLE}` : APP_TITLE;
     }
 
     // The server keeps no cross-conversation recency, so ordering is decided here:
@@ -150,7 +154,7 @@ const Chat = (() => {
         document.getElementById('inviteInput').value = '';
         document.getElementById('deleteAccountInput').value = '';
         document.getElementById('messageInput').value = '';
-        document.title = 'elyrn.';
+        document.title = APP_TITLE;
     }
 
     // ---------- conversations ----------
@@ -293,7 +297,7 @@ const Chat = (() => {
 
     function scheduleRefresh() {
         clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(refreshConversations, 250);
+        refreshTimer = setTimeout(refreshConversations, REFRESH_DEBOUNCE_MS);
     }
 
     async function open(id) {

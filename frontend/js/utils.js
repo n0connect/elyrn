@@ -3,9 +3,6 @@
 // ========================================
 
 const API_BASE_URL = '/api/v2';
-// An account number is 32 random bytes in base64url
-const ACCOUNT_NUMBER_LEN = 43;
-const ACCOUNT_NUMBER_REGEX = new RegExp('^[A-Za-z0-9_-]{' + ACCOUNT_NUMBER_LEN + '}$');
 // The static status pages nginx serves; the names are opaque so they cannot be guessed at
 const STATUS_PAGES = Object.freeze({
     BAD_REQUEST: '/76e556a4-0575-4d98-a663-73b1080f26df.html',

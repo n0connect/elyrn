@@ -6,7 +6,9 @@
 // so it may contain any Unicode except control characters.
 
 const MAX_MESSAGE_CHARS = 2000;
-const ACCOUNT_NUMBER_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+// An account number is 32 random bytes in base64url (no padding): the one home of its shape
+const ACCOUNT_NUMBER_LEN = 43;
+const ACCOUNT_NUMBER_REGEX = new RegExp('^[A-Za-z0-9_-]{' + ACCOUNT_NUMBER_LEN + '}$');
 // Control characters other than \n and \t (C0, DEL, C1) plus bidi overrides
 const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F‪-‮⁦-⁩]/;
 
@@ -62,7 +64,7 @@ function neutralizeReceivedText(text) {
  * @returns {boolean}
  */
 function looksLikeAccountNumber(input) {
-    return typeof input === 'string' && ACCOUNT_NUMBER_SHAPE.test(input.trim());
+    return typeof input === 'string' && ACCOUNT_NUMBER_REGEX.test(input.trim());
 }
 
 /**
