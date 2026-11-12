@@ -3,7 +3,6 @@ package handlers
 import (
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -295,13 +294,11 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if !bindInput(w, r, &req, "CreateRoomHandler") {
 		return
 	}
-	in, err := chat.ParseRoomInput(req.ID, req.Lookup, req.Card, req.Vault)
+	in, err := chat.ParseRoomInput(req.ID, req.Lookup, req.Card, req.Vault, req.MaxMembers, req.ExpiresAt)
 	if err != nil {
 		apperr.WriteError(w, "CreateRoom", err)
 		return
 	}
-	in.MaxMembers = req.MaxMembers
-	in.ExpiresAt = time.Unix(req.ExpiresAt, 0)
 	if !requireProofOfWork(w, req.PoW, bucketRoom) {
 		return
 	}
@@ -325,7 +322,7 @@ func JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if !bindInput(w, r, &req, "JoinRoomHandler") {
 		return
 	}
-	in, err := chat.ParseRoomInput(req.ID, req.Lookup, req.Card, req.Vault)
+	in, err := chat.ParseRoomInput(req.ID, req.Lookup, req.Card, req.Vault, req.MaxMembers, req.ExpiresAt)
 	if err != nil {
 		apperr.WriteError(w, "JoinRoom", err)
 		return

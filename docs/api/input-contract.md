@@ -180,7 +180,7 @@ HEAD: bare 405 (`E_HEAD_NOT_ALLOWED`).
 ### POST
 
 - Query: none.
-- Body: required, at most 353 bytes; shape refused with 400 `E_INVALID_REQUEST`.
+- Body: required, at most 422 bytes; shape refused with 400 `E_INVALID_REQUEST`.
 
 | Field | Type | Required | Whitelist | Missing | Invalid |
 |---|---|---|---|---|---|
@@ -188,6 +188,8 @@ HEAD: bare 405 (`E_HEAD_NOT_ALLOWED`).
 | `lookup` | string | true | base64url-32 | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
 | `card` | string | true | room-card | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
 | `vault` | string | true | room-vault | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
+| `max_members` | integer | true | room-size | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
+| `expires_at` | integer | true | room-expiry | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
 
 ## `/api/v2/conversations`
 

@@ -73,7 +73,7 @@ func (s *roomSide) createRequest(t *testing.T) models.CreateRoomRequest {
 		ID:         s.room.ID.String(),
 		Lookup:     s.room.Lookup,
 		MaxMembers: s.code.MaxMembers,
-		ExpiresAt:  int64(s.code.ExpiresHour) * 3600,
+		ExpiresAt:  s.code.ExpiresAt(),
 		Card:       s.member.Card,
 		Vault:      s.vault(t),
 	}
@@ -81,7 +81,8 @@ func (s *roomSide) createRequest(t *testing.T) models.CreateRoomRequest {
 
 func (s *roomSide) joinRequest(t *testing.T) models.JoinRoomRequest {
 	t.Helper()
-	return models.JoinRoomRequest{ID: s.room.ID.String(), Lookup: s.room.Lookup, Card: s.member.Card, Vault: s.vault(t)}
+	return models.JoinRoomRequest{ID: s.room.ID.String(), Lookup: s.room.Lookup, Card: s.member.Card, Vault: s.vault(t),
+		MaxMembers: s.code.MaxMembers, ExpiresAt: s.code.ExpiresAt()}
 }
 
 func createRoom(t *testing.T, u *user, maxMembers, ttlHours int) *roomSide {
@@ -249,7 +250,7 @@ func TestRooms_CreateJoinAndTalk(t *testing.T) {
 		if err != nil || !bytes.Equal(code.Secret, a.code.Secret) {
 			t.Fatalf("%s's vault: %v", name, err)
 		}
-		if conv.Room.MaxMembers != 3 || conv.Room.ExpiresAt != int64(a.code.ExpiresHour)*3600 || conv.Room.Members != 3 || conv.Room.Owner != (s == a) {
+		if conv.Room.MaxMembers != 3 || conv.Room.ExpiresAt != a.code.ExpiresAt() || conv.Room.Members != 3 || conv.Room.Owner != (s == a) {
 			t.Fatalf("%s's room view %+v", name, conv.Room)
 		}
 		if conv.LastSeq != 3 {
@@ -315,6 +316,117 @@ func TestRooms_FullRoomRefusesAndRejoinIsHarmless(t *testing.T) {
 	}
 	if len(listOf(t, bob)) != 1 {
 		t.Fatal("rejoining added the room to bob's list twice")
+	}
+}
+
+// doctoredCodes are code with the same secret (so the same room id and lookup) and other
+// limit bytes, as a code someone edited before handing it over
+func doctoredCodes(code *e2e.RoomCode) map[string]*e2e.RoomCode {
+	return map[string]*e2e.RoomCode{
+		"max_members": {Secret: code.Secret, MaxMembers: code.MaxMembers + 1, ExpiresHour: code.ExpiresHour},
+		"expires_at":  {Secret: code.Secret, MaxMembers: code.MaxMembers, ExpiresHour: code.ExpiresHour + 1},
+	}
+}
+
+// wrongLookupAnswer is the server's answer to a join whose lookup is wrong: the answer a
+// doctored code must get, byte for byte, so it tells a holder of the secret nothing new.
+func wrongLookupAnswer(t *testing.T, s *roomSide) *httptest.ResponseRecorder {
+	t.Helper()
+	req := s.joinRequest(t)
+	req.Lookup = sideOf(t, s.u, newCode(t, s.code.MaxMembers, 24)).room.Lookup
+	rr := s.u.do("POST", "/api/v2/rooms/join", req)
+	expectStatus(t, rr, http.StatusNotFound, "join with a wrong lookup")
+	return rr
+}
+
+func expectSameAnswer(t *testing.T, got, want *httptest.ResponseRecorder, what string) {
+	t.Helper()
+	if got.Code != want.Code || got.Body.String() != want.Body.String() ||
+		got.Header().Get("Content-Type") != want.Header().Get("Content-Type") {
+		t.Fatalf("%s answered %d %q, a wrong lookup %d %q", what, got.Code, got.Body.String(), want.Code, want.Body.String())
+	}
+}
+
+func roomVault(t *testing.T, u *user, id uuid.UUID) string {
+	t.Helper()
+	conv := findConversation(listOf(t, u), id.String())
+	if conv == nil || conv.Room == nil {
+		t.Fatal("the room is not listed")
+	}
+	return conv.Room.Vault
+}
+
+// A member who pastes a code doctored in its limit bytes must not lose the room: the server
+// refuses the join like a wrong lookup and keeps the verified vault byte for byte.
+func TestRooms_DoctoredCodeCannotReplaceAMembersVault(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	a := createRoom(t, alice, 3, 24)
+	b := joinRoom(t, bob, a.code)
+	want := wrongLookupAnswer(t, b)
+	for name, code := range doctoredCodes(a.code) {
+		for _, s := range []*roomSide{a, b} {
+			before := roomVault(t, s.u, a.room.ID)
+			rr := s.u.do("POST", "/api/v2/rooms/join", sideOf(t, s.u, code).joinRequest(t))
+			expectSameAnswer(t, rr, want, "a member's rejoin with altered "+name)
+			if after := roomVault(t, s.u, a.room.ID); after != before {
+				t.Fatalf("a refused rejoin with altered %s replaced the stored vault", name)
+			}
+			opened, err := e2e.OpenVault(s.root, a.room.ID, before)
+			if err != nil || opened.MaxMembers != a.code.MaxMembers || opened.ExpiresHour != a.code.ExpiresHour {
+				t.Fatalf("the kept vault does not open to the honest code: %v", err)
+			}
+		}
+	}
+	if n := len(a.members(t)); n != 2 {
+		t.Fatalf("refused rejoins changed the roster to %d members", n)
+	}
+}
+
+// A non-member with a doctored code takes no seat and stores no vault.
+func TestRooms_DoctoredCodeTakesNoSeat(t *testing.T) {
+	mux := setup(t)
+	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
+	a := createRoom(t, alice, 3, 24)
+	want := wrongLookupAnswer(t, sideOf(t, carol, a.code))
+	for name, code := range doctoredCodes(a.code) {
+		for _, u := range []*user{bob, carol} {
+			rr := u.do("POST", "/api/v2/rooms/join", sideOf(t, u, code).joinRequest(t))
+			expectSameAnswer(t, rr, want, "a non-member's join with altered "+name)
+			if findConversation(listOf(t, u), a.room.ID.String()) != nil {
+				t.Fatalf("a refused join with altered %s listed the room", name)
+			}
+		}
+	}
+	if n := len(a.members(t)); n != 1 {
+		t.Fatalf("refused joins changed the roster to %d members", n)
+	}
+	// The honest code still seats both: no seat was consumed
+	joinRoom(t, bob, a.code)
+	joinRoom(t, carol, a.code)
+	if n := len(a.members(t)); n != 3 {
+		t.Fatalf("honest joins after refused ones left %d members", n)
+	}
+}
+
+// The honest code rejoins as before: 200, the roster unchanged, and the refreshed vault
+// verifies against the room's limits.
+func TestRooms_HonestRejoinStillWorks(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	a := createRoom(t, alice, 3, 24)
+	b := joinRoom(t, bob, a.code)
+	expectStatus(t, bob.do("POST", "/api/v2/rooms/join", b.joinRequest(t)), http.StatusOK, "honest rejoin")
+	conv := findConversation(listOf(t, bob), a.room.ID.String())
+	if conv == nil || conv.Room == nil {
+		t.Fatal("the room is not listed after an honest rejoin")
+	}
+	opened, err := e2e.OpenVault(b.root, a.room.ID, conv.Room.Vault)
+	if err != nil || opened.MaxMembers != conv.Room.MaxMembers || opened.ExpiresAt() != conv.Room.ExpiresAt {
+		t.Fatalf("the refreshed vault does not verify against the room: %v", err)
+	}
+	if n := len(a.members(t)); n != 2 {
+		t.Fatalf("an honest rejoin changed the roster to %d members", n)
 	}
 }
 

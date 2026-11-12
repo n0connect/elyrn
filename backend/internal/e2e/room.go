@@ -17,6 +17,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"elyrn/internal/cryptoengine"
 	"elyrn/internal/utils"
@@ -139,6 +140,11 @@ type RoomCode struct {
 	Secret      []byte
 	MaxMembers  int
 	ExpiresHour uint32 // deletion time, in hours since the Unix epoch
+}
+
+// ExpiresAt is the room's deletion time in Unix seconds, as create and join send it.
+func (c *RoomCode) ExpiresAt() int64 {
+	return int64(c.ExpiresHour) * int64(time.Hour/time.Second)
 }
 
 func (c *RoomCode) valid() bool {

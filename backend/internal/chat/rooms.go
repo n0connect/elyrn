@@ -43,14 +43,14 @@ type RoomInput struct {
 	Lookup     []byte
 	Card       string
 	Vault      string
-	MaxMembers int       // create only
-	ExpiresAt  time.Time // create only
+	MaxMembers int       // the limits the code carries: create stores them, join must match them
+	ExpiresAt  time.Time // on the hour, as the code carries it
 }
 
 // ParseRoomInput converts the client-derived room fields into their parsed forms. The input
 // contract (internal/contract) refused every malformed value before the handler ran; the same
 // parsers run here because they produce the id and lookup, so a failure is a wiring fault.
-func ParseRoomInput(id, lookup, card, vault string) (*RoomInput, error) {
+func ParseRoomInput(id, lookup, card, vault string, maxMembers int, expiresAt int64) (*RoomInput, error) {
 	roomID, okID := utils.ParseCanonicalUUIDv4(id)
 	rawLookup, okLookup := utils.DecodeExact(lookup, utils.RoomLookupBytes)
 	_, okCard := utils.DecodeExact(card, utils.RoomCardBytes)
@@ -58,7 +58,8 @@ func ParseRoomInput(id, lookup, card, vault string) (*RoomInput, error) {
 	if !okID || !okLookup || !okCard || !okVault {
 		return nil, ErrInvalidInput
 	}
-	return &RoomInput{ID: roomID, Lookup: rawLookup, Card: card, Vault: vault}, nil
+	return &RoomInput{ID: roomID, Lookup: rawLookup, Card: card, Vault: vault,
+		MaxMembers: maxMembers, ExpiresAt: time.Unix(expiresAt, 0)}, nil
 }
 
 // checkLimits validates what only a creator sends against this server's settings and clock:
@@ -228,17 +229,21 @@ func (s *Service) CreateRoom(me *Member, in *RoomInput) (*models.ConversationDTO
 	return &dto, nil
 }
 
-// lockRoomByCode row-locks a live room the caller proved they hold the code of. A wrong code,
+// lockRoomByCode row-locks a live room the caller proved they hold the code of: the lookup
+// and the limits the code carries must both match the stored room, so a code whose limit
+// bytes were altered (same secret, other limits) opens nothing. A wrong code, altered limits,
 // an expired room and a missing room answer alike, so the answer says nothing about which.
-func lockRoomByCode(tx store.ChatRepository, id uuid.UUID, lookup string) (*models.Room, error) {
-	room, err := tx.LockRoom(id)
+func lockRoomByCode(tx store.ChatRepository, in *RoomInput, lookup string) (*models.Room, error) {
+	room, err := tx.LockRoom(in.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !roomAlive(room, time.Now()) || !cryptoengine.ConstantTimeEqual([]byte(lookup), []byte(room.Lookup)) {
+	lookupOK := cryptoengine.ConstantTimeEqual([]byte(lookup), []byte(room.Lookup))
+	limitsOK := in.MaxMembers == room.MaxMembers && in.ExpiresAt.Unix() == room.ExpiresAt.Unix()
+	if !roomAlive(room, time.Now()) || !lookupOK || !limitsOK {
 		return nil, ErrNotFound
 	}
 	return room, nil
@@ -266,7 +271,8 @@ func memberStreams(members []models.ConversationMember) ([]string, error) {
 	return streams, nil
 }
 
-// JoinRoom adds the caller to a room whose code they hold. Joining a room the caller is
+// JoinRoom adds the caller to a room whose code they hold, limits included (lockRoomByCode
+// refuses altered ones before any seat or vault is touched). Joining a room the caller is
 // already in only refreshes their vault. Returns the caller's view, whether a seat was taken,
 // and the other members' live-event addresses. Lock order: users, rooms, conversations.
 func (s *Service) JoinRoom(me *Member, in *RoomInput) (*models.ConversationDTO, bool, []string, error) {
@@ -284,7 +290,7 @@ func (s *Service) JoinRoom(me *Member, in *RoomInput) (*models.ConversationDTO, 
 		if err != nil {
 			return err
 		}
-		room, err := lockRoomByCode(tx, in.ID, lookup)
+		room, err := lockRoomByCode(tx, in, lookup)
 		if err != nil {
 			return err
 		}

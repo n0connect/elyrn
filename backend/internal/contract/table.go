@@ -133,6 +133,12 @@ var (
 	lookupField = Field{Name: "lookup", Kind: KindString, Required: true, Str: patternKey32}
 	cardField   = Field{Name: "card", Kind: KindString, Required: true, Str: patternRoomCard}
 	vaultField  = Field{Name: "vault", Kind: KindString, Required: true, Str: patternRoomVault}
+	// limitFields: the room's limits as its code carries them; create stores them, join must
+	// repeat them exactly (rooms.md, "Join")
+	limitFields = []Field{
+		{Name: "max_members", Kind: KindInt, Required: true, Int: rangeMaxMembers},
+		{Name: "expires_at", Kind: KindInt, Required: true, Int: rangeExpiry},
+	}
 
 	// pageQueries: at most one cursor; "before=0" could only ever answer an empty page
 	pageQueries = []QueryParam{
@@ -185,11 +191,11 @@ func chatEndpoints() []Endpoint {
 		// Room fields first, then the proof of work, then the creator's limits: the order the
 		// handler checked them in
 		{Template: models.PathRooms, Ops: []Op{{ID: OpRoomCreate, Method: http.MethodPost, Body: jsonBody(
-			idField, lookupField, cardField, vaultField, powField,
-			Field{Name: "max_members", Kind: KindInt, Required: true, Int: rangeMaxMembers},
-			Field{Name: "expires_at", Kind: KindInt, Required: true, Int: rangeExpiry},
+			append([]Field{idField, lookupField, cardField, vaultField, powField}, limitFields...)...,
 		)}}},
-		{Template: models.PathRoomsJoin, Ops: []Op{{ID: OpRoomJoin, Method: http.MethodPost, Body: jsonBody(idField, lookupField, cardField, vaultField)}}},
+		{Template: models.PathRoomsJoin, Ops: []Op{{ID: OpRoomJoin, Method: http.MethodPost, Body: jsonBody(
+			append([]Field{idField, lookupField, cardField, vaultField}, limitFields...)...,
+		)}}},
 		{Template: models.PathConversations, Ops: []Op{{ID: OpConversationList, Method: http.MethodGet}}},
 		{Template: conversation, Ops: []Op{{ID: OpConversationBurn, Method: http.MethodDelete}}},
 		{Template: conversation + "/" + models.SubMessages, Ops: []Op{

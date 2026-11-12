@@ -142,11 +142,15 @@ type CreateRoomRequest struct {
 	PoW        *PoWSolution `json:"pow"`
 }
 
+// JoinRoomRequest: the limits are the ones the code carries; the server refuses a join whose
+// limits differ from the stored room's exactly like a wrong lookup (a doctored code)
 type JoinRoomRequest struct {
-	ID     string `json:"id"`
-	Lookup string `json:"lookup"`
-	Card   string `json:"card"`
-	Vault  string `json:"vault"`
+	ID         string `json:"id"`
+	Lookup     string `json:"lookup"`
+	Card       string `json:"card"`
+	Vault      string `json:"vault"`
+	MaxMembers int    `json:"max_members"` // as in CreateRoomRequest
+	ExpiresAt  int64  `json:"expires_at"`  // as in CreateRoomRequest
 }
 
 type RoomMemberDTO struct {

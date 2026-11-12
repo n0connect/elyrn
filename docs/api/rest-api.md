@@ -387,7 +387,7 @@ Stores a new room. Costs a fresh proof of work, like an invite.
 ---
 
 ### `POST /api/v2/rooms/join`
-Takes a seat. A wrong lookup, an unknown room and an expired room all answer `404`, so the answer says nothing about which. Joining a room the caller is already in refreshes their vault and answers `200`.
+Takes a seat. A wrong lookup, limits other than the room's, an unknown room and an expired room all answer `404`, so the answer says nothing about which. Joining a room the caller is already in refreshes their vault and answers `200`.
 
 - **Request Body:**
 ```json
@@ -395,7 +395,9 @@ Takes a seat. A wrong lookup, an unknown room and an expired room all answer `40
   "id": "UUIDv4 derived from the room secret",
   "lookup": "32 bytes derived from the room secret",
   "card": "the caller's member card (60 bytes)",
-  "vault": "the room code, sealed for the caller's account (65 bytes)"
+  "vault": "the room code, sealed for the caller's account (65 bytes)",
+  "max_members": "the code's member limit, as on create",
+  "expires_at": "the code's expiry in Unix seconds, as on create"
 }
 ```
 - **Errors:** `400` out of shape (or a copy of a member's card), `404` no such room for this code, `409` the room is full, `429` too many conversations or requests.
