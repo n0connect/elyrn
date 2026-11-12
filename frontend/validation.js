@@ -117,3 +117,21 @@ function validateJoinCode(input) {
 function validateConversationId(id) {
     return ElyrnCrypto.isUuidV4(id);
 }
+
+// Robot entrance: the command that registers elyrn-agent with an MCP client
+const AGENT_COMMAND = 'elyrn-agent mcp --server';
+const AGENT_SERVER_EXAMPLE = 'https://your-server';
+// What window.location.origin is for an http(s) page: scheme, lowercase host or [IPv6], port
+const AGENT_ORIGIN_SHAPE = /^https?:\/\/(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])(?::[0-9]{1,5})?$/;
+
+/**
+ * Builds the agent command for this instance's origin
+ * @param {any} origin - window.location.origin
+ * @returns {string} - the command, or '' when origin is not an http(s) origin
+ */
+function buildAgentCommand(origin) {
+    if (typeof origin !== 'string' || !AGENT_ORIGIN_SHAPE.test(origin)) {
+        return '';
+    }
+    return AGENT_COMMAND + ' ' + origin;
+}

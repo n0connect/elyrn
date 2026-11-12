@@ -99,7 +99,8 @@ body {
    ======================================== */
 
 .login-container,
-.register-container {
+.register-container,
+.robot-container {
     text-align: center;
     animation: slideInFromLeft 0.5s ease;
 }
@@ -951,6 +952,11 @@ header {
 .pair-panel .text-btn {
     margin-top: 4px;
     padding-left: 0;
+}
+
+/* Robot entrance: the explanation sits apart from the command below it */
+.robot-gap {
+    margin-bottom: 16px;
 }
 
 .join-input-group {

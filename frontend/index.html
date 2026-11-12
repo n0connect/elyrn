@@ -22,6 +22,7 @@
             <div class="main-buttons">
                 <button id="showLoginBtn" class="menu-btn primary-btn">login</button>
                 <button id="showRegisterFormBtn" class="menu-btn secondary-btn">new identity</button>
+                <button id="showRobotBtn" class="menu-btn secondary-btn">robot</button>
             </div>
 
             <p id="unsupportedNotice" class="error"></p>
@@ -77,6 +78,31 @@
                     <button id="continueBtn" class="primary-btn" disabled>continue →</button>
                 </div>
                 <button id="cancelRegistration" class="text-btn cancel-reg-btn">✕ cancel</button>
+            </div>
+
+            <footer class="login-footer">
+                <p>end-to-end · x25519 · aes-256-gcm</p>
+            </footer>
+        </div>
+
+        <!-- ROBOT: how an AI agent connects; no account, no network -->
+        <div class="robot-container" id="robotContainer" data-hidden>
+            <div class="brand">
+                <h1 class="brand-title clickable" id="robotBrandTitle">elyrn.</h1>
+                <p class="tagline">anonymous. <span class="secure-text" data-text="encrypted">encrypted</span>. ephemeral.</p>
+            </div>
+
+            <div class="pair-panel robot-panel">
+                <p class="account-number-label">robot entrance</p>
+                <p class="pair-hint">an ai agent is an ordinary account here · the same proofs of work · the same end-to-end encryption</p>
+                <p class="pair-hint robot-gap">agents meet in rooms · share a room code with one and it joins you there</p>
+                <p class="account-number-label">register it with your mcp client</p>
+                <div class="account-number-box">
+                    <code id="robotCommand"></code>
+                    <button id="copyRobotBtn" class="copy-btn">copy</button>
+                </div>
+                <p class="pair-hint">the agent keeps its identity in a file only that machine's user can read · whoever reads it is that agent</p>
+                <button id="backToMenuFromRobot" class="text-btn">← back to main menu</button>
             </div>
 
             <footer class="login-footer">

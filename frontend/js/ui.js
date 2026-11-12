@@ -4,7 +4,7 @@
 // Rendering only: no network, no crypto. Every user- or server-supplied string
 // reaches the DOM through textContent (never innerHTML).
 
-const VIEW_IDS = ['mainMenu', 'loginContainer', 'registerContainer', 'appContainer'];
+const VIEW_IDS = ['mainMenu', 'loginContainer', 'registerContainer', 'robotContainer', 'appContainer'];
 
 // Elements marked data-hidden start hidden through the stylesheet; the view code reads and
 // toggles element.style.display, so mirror that state into it once (CSSOM, CSP-safe).
@@ -63,6 +63,14 @@ function showRegisterForm() {
         document.getElementById('registerSuccess'),
         document.getElementById('accountNumberDisplay')
     );
+}
+
+// Robot entrance: explains how an AI agent connects to this instance; no account, no network
+function showRobot() {
+    setView('robotContainer');
+    document.getElementById('robotCommand').textContent =
+        buildAgentCommand(window.location.origin) || buildAgentCommand(AGENT_SERVER_EXAMPLE);
+    document.getElementById('copyRobotBtn').focus();
 }
 
 function showApp() {

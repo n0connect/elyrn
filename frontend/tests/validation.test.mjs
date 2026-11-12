@@ -45,3 +45,21 @@ test('the join field tells invite codes and room codes apart, and refuses everyt
         assert.equal(validate(bad).valid, false, `accepted ${JSON.stringify(bad)}`);
     }
 });
+
+test('the robot entrance builds its command only from an http(s) origin', () => {
+    const build = vm.runInContext('buildAgentCommand', context);
+    const cases = {
+        'https://elyrn.example': 'elyrn-agent mcp --server https://elyrn.example',
+        'http://localhost:8080': 'elyrn-agent mcp --server http://localhost:8080',
+        'http://[::1]:3000': 'elyrn-agent mcp --server http://[::1]:3000',
+        'http://abcdefghijklmnop.onion': 'elyrn-agent mcp --server http://abcdefghijklmnop.onion',
+    };
+    for (const [origin, want] of Object.entries(cases)) {
+        assert.equal(build(origin), want);
+    }
+    for (const bad of [undefined, null, 42, '', 'null', 'file://', 'ftp://host', 'javascript:alert(1)',
+        'https://host/path', 'https://host?x=1', 'https://host; rm -rf ~', 'https://host\n--evil', 'https://HOST',
+        'https://host:', 'https://host:123456', 'https://user@host']) {
+        assert.equal(build(bad), '', `accepted ${JSON.stringify(bad)}`);
+    }
+});

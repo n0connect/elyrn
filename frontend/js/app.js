@@ -51,6 +51,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             'this browser cannot run elyrn. securely (needs https and WebCrypto X25519). update your browser.';
         document.getElementById('showLoginBtn').disabled = true;
         document.getElementById('showRegisterFormBtn').disabled = true;
+        // The robot entrance needs no crypto here, so it stays usable
         return;
     }
 
@@ -62,6 +63,19 @@ function setupEventListeners() {
     document.getElementById('showLoginBtn').addEventListener('click', showLogin);
     document.getElementById('showRegisterFormBtn').addEventListener('click', showRegisterForm);
     document.getElementById('backToMenuFromLogin').addEventListener('click', showMainMenu);
+    document.getElementById('showRobotBtn').addEventListener('click', showRobot);
+    document.getElementById('backToMenuFromRobot').addEventListener('click', showMainMenu);
+    document.getElementById('robotBrandTitle').addEventListener('click', showMainMenu);
+    document.getElementById('copyRobotBtn').addEventListener('click', async () => {
+        const command = document.getElementById('robotCommand').textContent;
+        if (!command) return;
+        try {
+            await copyToClipboard(command);
+            showSuccess('command copied');
+        } catch (e) {
+            showWarning('copy it manually');
+        }
+    });
 
     // Brand title click - go back to main menu
     const loginBrandTitle = document.getElementById('loginBrandTitle');
@@ -165,9 +179,12 @@ function setupEventListeners() {
     });
     messageInput.addEventListener('input', updateComposerMeta);
 
-    // Escape leaves a conversation
+    // Escape leaves a conversation, or the robot entrance
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && document.getElementById('chatView').style.display !== 'none') {
+        if (e.key !== 'Escape') return;
+        if (document.getElementById('robotContainer').style.display !== 'none') {
+            showMainMenu();
+        } else if (document.getElementById('chatView').style.display !== 'none') {
             Chat.backToList();
         }
     });
