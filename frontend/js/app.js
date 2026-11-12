@@ -38,7 +38,11 @@ async function resumeSession() {
     }
 }
 
-async function retryResume() {
+function retryResume() {
+    return once('resume', retryResumeNow);
+}
+
+async function retryResumeNow() {
     const button = document.getElementById('retryResumeBtn');
     button.disabled = true;
     clearResumeFailure();
@@ -72,8 +76,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // WebCrypto X25519 + secure context are hard requirements (no JS crypto fallbacks)
     if (!window.isSecureContext || !(await ElyrnCrypto.isSupported())) {
         showMainMenu();
-        document.getElementById('unsupportedNotice').textContent =
-            'this browser cannot run elyrn. securely (needs https and WebCrypto X25519). update your browser.';
+        Errors.inline(document.getElementById('unsupportedNotice'), Errors.CODES.E_BROWSER_UNSUPPORTED);
         document.getElementById('showLoginBtn').disabled = true;
         document.getElementById('showRegisterFormBtn').disabled = true;
         // The robot entrance needs no crypto here, so it stays usable
@@ -97,18 +100,14 @@ function setupEventListeners() {
 }
 
 // A click handler that copies the text shown in sourceId and confirms with notice; accepts
-// (optional) rejects text that is not yet the real value
-function copyShownText(sourceId, notice, accepts) {
-    return async () => {
+// (optional) rejects text that is not yet the real value; clearLater clears a secret from the
+// clipboard afterwards (copyWithNotice). One copy per button at a time.
+function copyShownText(sourceId, notice, accepts, clearLater) {
+    return () => once('copy-' + sourceId, async () => {
         const text = document.getElementById(sourceId).textContent;
         if (!text || (accepts && !accepts(text))) return;
-        try {
-            await copyToClipboard(text);
-            showSuccess(notice);
-        } catch (e) {
-            Errors.report(Errors.CODES.W_COPY_MANUALLY);
-        }
-    };
+        await copyWithNotice(text, notice, Boolean(clearLater));
+    });
 }
 
 // The robot door: a person is told so and shown the way back; anything else gets the challenge.
@@ -123,9 +122,12 @@ function pressRobotDoor(event) {
 }
 
 // Checked here, in this page: nothing is sent. Wrong or malformed is a person; right is a robot.
-async function answerDoorChallenge() {
+function answerDoorChallenge() {
+    return once('door', answerDoorChallengeNow);
+}
+
+async function answerDoorChallengeNow() {
     const button = document.getElementById('doorAnswerBtn');
-    if (button.disabled) return;
     button.disabled = true;
     try {
         const right = await RobotDoor.checkAnswer(
@@ -240,7 +242,7 @@ function setupRoomListeners() {
     document.getElementById('closeRoomBtn').addEventListener('click', () => resetRoomPanel());
     document.getElementById('createRoomBtn').addEventListener('click', () => Chat.createRoom());
     document.getElementById('copyRoomBtn').addEventListener('click', copyShownText('roomCode', Errors.NOTICE.ROOM_CODE_COPIED,
-        code => code.startsWith(ElyrnRoomCrypto.CODE_PREFIX)));
+        code => code.startsWith(ElyrnRoomCrypto.CODE_PREFIX), true));
     document.getElementById('membersBtn').addEventListener('click', () => Chat.toggleMembers());
     document.getElementById('roomCodeBtn').addEventListener('click', () => Chat.toggleRoomCode());
     document.getElementById('copyRoomCodeBtn').addEventListener('click', () => Chat.copyRoomCode());
@@ -288,4 +290,13 @@ function setupGlobalListeners() {
 
     // Catch up after the tab was hidden or the machine slept
     document.addEventListener('visibilitychange', () => Chat.onVisible());
+
+    // Back from the back-forward cache: the session is checked again before anything is trusted
+    window.addEventListener('pageshow', event => {
+        if (event.persisted) Chat.onRestored();
+    });
+
+    // What the user copies or cuts here replaces what the page copied (clearClipboardIfHolds)
+    document.addEventListener('copy', noteUserCopy);
+    document.addEventListener('cut', noteUserCopy);
 }

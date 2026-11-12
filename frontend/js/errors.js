@@ -19,8 +19,9 @@ const Errors = (() => {
     const GENERIC = 'something went wrong — reload the page and try again';
     // Registration phase 2 keeps the account number redeemable, so every failure ends alike
     const REGISTRATION_RETRY = ' — your account number is still valid, press continue again';
-    // One sentence, two moments: sending to a room that ran out (warning), joining one (error)
-    const ROOM_EXPIRED = 'this room has expired';
+    // One sentence, two moments: sending to a room that ran out (warning), joining one (error).
+    // Expiry is judged by this device's clock, so a clock running fast is named as a cause.
+    const ROOM_EXPIRED = 'this room has expired — if it should not have, check your device clock';
 
     const REGISTRY = Object.freeze({
         // programming errors
@@ -51,6 +52,11 @@ const Errors = (() => {
         E_LOGIN_INVITE_PASTED: e('that is an invite — log in first, then use join'),
         E_LOGIN_FORMAT: e('invalid format'),
         E_IDENTITY_MISMATCH: e('identity mismatch — the server returned a different public key'),
+        // /me answered with a message lifetime or room limits outside what this app accepts
+        E_SERVER_LIMITS_INVALID: e('the server sent settings this app does not accept — try again later'),
+        E_BROWSER_UNSUPPORTED: e('this browser cannot run elyrn. securely (needs https and WebCrypto X25519) — update your browser'),
+        // Every apiCall answer is read up to a bound (utils.js MAX_RESPONSE_BYTES)
+        E_RESPONSE_TOO_LARGE: e('the server sent an answer too large to read — try again later'),
 
         // registration
         E_ACCOUNT_NUMBER_FAILED: e('error - try again'),
@@ -70,6 +76,8 @@ const Errors = (() => {
         E_DELETE_INVALID_NUMBER: e('invalid account number'),
         E_DELETE_WRONG_IDENTITY: e('that is not the account number of this identity'),
         E_IDENTITY_NOT_DELETED: e('identity not deleted'),
+        // The delete got no answer and neither did the check after it
+        E_IDENTITY_DELETE_UNKNOWN: e('no answer — the identity may already be deleted. reload: if you are logged out it is gone, otherwise try again'),
         W_TOO_MANY_ATTEMPTS: w('too many attempts — wait a moment'),
 
         // conversations and messages
@@ -86,7 +94,14 @@ const Errors = (() => {
         E_MESSAGE_TOO_LONG: e('message too long'),
         W_MESSAGE_RATE_LIMITED: w('slow down — too many messages'),
         E_MESSAGE_NOT_SENT: e('message not sent — press send again'),
+        // A 409 on a first attempt: a fresh id cannot exist yet, so nothing is taken as stored
+        E_MESSAGE_ID_CONFLICT: e('the server refused the message as a duplicate — press send again'),
         W_VERIFICATION_NOT_SAVED: w('could not save verification on this device'),
+        // Browser storage (keystore.js): refused or failed, another tab blocking an upgrade, or
+        // another tab upgrading or deleting it under this one
+        W_STORAGE_UNAVAILABLE: w('this browser is not keeping anything — you will be logged out on reload, and replay protection lasts only until then'),
+        W_STORAGE_BLOCKED: w('another elyrn. tab is holding the storage — close the other tabs, then reload this one'),
+        W_STORAGE_CLOSED: w('another elyrn. tab changed this browser\'s storage — reload this tab'),
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_LIVE_UPDATES_PAUSED: w('live updates paused — reload to resume'),
         W_COPY_MANUALLY: w('copy it manually'),
@@ -111,7 +126,7 @@ const Errors = (() => {
         E_PEER_KEY_SUBSTITUTED: e('verification FAILED: the server substituted the peer key. conversation burned.'),
 
         // rooms
-        E_ROOM_UNVERIFIED: e('a room failed verification against its code — hidden'),
+        E_ROOM_UNVERIFIED: e('a room failed verification against its code — it cannot be opened, only left'),
         E_ROSTER_UNVERIFIED: e('the member list failed verification — not sending to it'),
         W_LOOKALIKE_MEMBERS: w('two members share a name — tell them apart by glyph and code'),
         W_ROOM_EXPIRED: w(ROOM_EXPIRED),
@@ -123,6 +138,8 @@ const Errors = (() => {
         E_ROOM_JOIN_FAILED: e('could not join the room'),
         W_ROOM_CREATE_RATE_LIMITED: w('too many rooms or attempts — wait a moment'),
         E_ROOM_CLOCK_REFUSED: e('the server refused the room — check your device clock'),
+        // A 400 while this device's clock agrees with the server's: the limits themselves
+        E_ROOM_LIMITS_REFUSED: e('the server refused the room\'s settings — reload the page and try again'),
         E_ROOM_NOT_CREATED: e('could not create room'),
         E_ROOM_NOT_LEFT: e('could not leave the room'),
         W_FRIEND_REQUEST_PENDING: w('you already have a request waiting with them'),
@@ -142,7 +159,10 @@ const Errors = (() => {
         W_KEYSTORE_UNAVAILABLE: 'W_KEYSTORE_UNAVAILABLE',
         W_COUNTERS_UNAVAILABLE: 'W_COUNTERS_UNAVAILABLE',
         E_SYNC_FAILED: 'E_SYNC_FAILED',
-        W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT'
+        W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT',
+        W_RESPONSE_TOO_LARGE: 'W_RESPONSE_TOO_LARGE',
+        // No Web Locks API: counters are still read fresh and written ahead, without the lock
+        W_COUNTER_LOCK_UNAVAILABLE: 'W_COUNTER_LOCK_UNAVAILABLE'
     });
 
     // Server error texts we recognise (compared lowercased); anything else is E_REQUEST_FAILED
@@ -181,7 +201,20 @@ const Errors = (() => {
         ACCOUNT_NUMBER_READY: 'your account number is ready! click continue to create account.',
         INVITE_COPIED: 'invite copied',
         ROOM_CODE_COPIED: 'room code copied',
-        COMMAND_COPIED: 'command copied'
+        COMMAND_COPIED: 'command copied',
+        ACCOUNT_NUMBER_COPIED: 'account number copied to clipboard',
+        WELCOME: 'welcome to elyrn.',
+        IDENTITY_DELETED: 'identity deleted',
+        CONNECTED: 'connected',
+        INVITE_REDEEMED: 'someone joined with your invite',
+        ROOM_JOINED: 'you joined the room',
+        ROOM_ALREADY_JOINED: 'you are already in this room',
+        ROOM_LEFT: 'you left the room',
+        BURNED: 'burned',
+        MARKED_VERIFIED: 'marked as verified on this device',
+        FRIEND_REQUEST_PREPARING: 'preparing a friend request · solving a proof of work',
+        FRIEND_REQUEST_SENT: 'friend request sent to {name}',
+        FRIENDS_NOW: 'you are now friends — a private conversation opened'
     });
 
     const PLACEHOLDER = /\{([a-z]+)\}/g;
@@ -191,17 +224,40 @@ const Errors = (() => {
         return typeof code === 'string' && has(REGISTRY, code);
     }
 
-    // Fills {name} placeholders; throws on a code that is not registered or a missing parameter
-    function format(code, params) {
-        if (!isCode(code)) {
-            throw new TypeError('unknown error code');
-        }
-        return REGISTRY[code].text.replace(PLACEHOLDER, (match, name) => {
+    // Fills {name} placeholders in text; throws on a missing parameter
+    function fill(text, params) {
+        return text.replace(PLACEHOLDER, (match, name) => {
             if (!params || !has(params, name) || params[name] === undefined || params[name] === null) {
                 throw new TypeError('missing parameter');
             }
             return String(params[name]);
         });
+    }
+
+    // Fills {name} placeholders; throws on a code that is not registered or a missing parameter
+    function format(code, params) {
+        if (!isCode(code)) {
+            throw new TypeError('unknown error code');
+        }
+        return fill(REGISTRY[code].text, params);
+    }
+
+    const NOTICE_TEXTS = new Set(Object.values(NOTICE));
+
+    // A notice (one of NOTICE's texts, so a misspelt name is undefined) with its {name}
+    // placeholders filled. Never throws: an unknown notice or a missing parameter is a
+    // programming error, logged as such, and shows the generic sentence.
+    function notice(text, params) {
+        if (!NOTICE_TEXTS.has(text)) {
+            Log.error(CODES.E_UNKNOWN_CODE);
+            return REGISTRY.E_UNKNOWN_CODE.text;
+        }
+        try {
+            return fill(text, params);
+        } catch (error) {
+            Log.error(CODES.E_BAD_PARAMS);
+            return REGISTRY.E_BAD_PARAMS.text;
+        }
     }
 
     // Never throws: a wrong code or missing parameter becomes the generic sentence under its own code
@@ -251,9 +307,13 @@ const Errors = (() => {
         return has(API_STATUSES, status) ? API_STATUSES[status] : CODES.E_REQUEST_FAILED;
     }
 
-    // A failed apiCall result ({ status, data, timedOut }) as a code: no answer (status 0) says
-    // whether it timed out, any other answer is mapped by fromApi
+    // A failed apiCall result ({ status, data, timedOut, tooLarge }) as a code: an answer refused
+    // for its size says so, no answer (status 0) says whether it timed out, any other answer is
+    // mapped by fromApi
     function fromResult(result) {
+        if (result.tooLarge) {
+            return CODES.E_RESPONSE_TOO_LARGE;
+        }
         if (result.status === 0) {
             return result.timedOut ? CODES.E_REQUEST_TIMEOUT : CODES.E_SERVER_UNREACHABLE;
         }
@@ -261,7 +321,7 @@ const Errors = (() => {
     }
 
     return Object.freeze({
-        CODES, INTERNAL, NOTICE, REGISTRY, report, inline, fromApi, fromResult, format,
+        CODES, INTERNAL, NOTICE, REGISTRY, report, inline, fromApi, fromResult, format, notice,
         message: (code, params) => resolve(code, params).text
     });
 })();

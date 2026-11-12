@@ -1470,7 +1470,7 @@ body.robot-side {
 }
 
 /* Code boxes on black: white text in a white 2px frame (account-number-animation.css gives the
-   box an undefined --bg-secondary and the revealed code dark shadows) */
+   revealed code dark shadows) */
 .robot-side .account-number-box code {
     color: var(--fg);
     background: transparent;

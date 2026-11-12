@@ -395,8 +395,9 @@ function resetInvitePanel() {
     document.getElementById('newInviteBtn').disabled = false;
 }
 
-// items: [{ id, aura, unread, verified, room }] in display order
-function renderConversationList(items, onOpen) {
+// items: [{ id, aura, unread, verified, room }] in display order; an item marked unverified
+// ({ id, aura, owner, unverified }) is a room that failed verification: onLeave(id) is its only action
+function renderConversationList(items, onOpen, onLeave) {
     const list = document.getElementById('conversationList');
     clearChildren(list);
 
@@ -409,6 +410,10 @@ function renderConversationList(items, onOpen) {
     }
 
     items.forEach(item => {
+        if (item.unverified) {
+            list.appendChild(createUnverifiedRow(item, onLeave));
+            return;
+        }
         const row = document.createElement('li');
         row.className = 'conversation-item' + (item.unread ? ' unread' : '');
         row.tabIndex = 0;
@@ -445,6 +450,52 @@ function renderConversationList(items, onOpen) {
     });
 }
 
+const UNVERIFIED_MARK = '⚠ failed verification · cannot be opened';
+
+// A room that failed verification: named from its id, marked, never opened. Its one action
+// (leave; burn for its owner, as the server says) asks first, in the row, as burning does.
+function createUnverifiedRow(item, onLeave) {
+    const row = document.createElement('li');
+    row.className = 'conversation-item';
+    row.dataset.id = item.id;
+    row.appendChild(createGlyph(item.aura.grid));
+    const name = document.createElement('span');
+    name.className = 'aura-name';
+    name.textContent = roomName(item.aura);
+    row.appendChild(name);
+    const mark = document.createElement('span');
+    mark.className = 'aura-code member-broken';
+    mark.textContent = UNVERIFIED_MARK;
+    row.appendChild(mark);
+    const actions = document.createElement('span');
+    actions.className = 'unread-marker';
+    row.appendChild(actions);
+
+    const room = { owner: item.owner };
+    const offer = () => {
+        clearChildren(actions);
+        actions.appendChild(actionButton(burnLabel(room), '', ask));
+    };
+    const ask = () => {
+        clearChildren(actions);
+        const question = document.createElement('span');
+        question.textContent = burnQuestion(room) + ' ';
+        actions.appendChild(question);
+        actions.appendChild(actionButton(burnLabel(room), 'burn-yes', () => onLeave(item.id)));
+        actions.appendChild(actionButton(KEEP_LABEL, '', offer));
+    };
+    offer();
+    return row;
+}
+
+function actionButton(text, extraClass, onClick) {
+    const button = document.createElement('button');
+    button.className = extraClass ? 'menu-opt ' + extraClass : 'menu-opt';
+    button.textContent = text;
+    button.addEventListener('click', onClick);
+    return button;
+}
+
 // ---------- chat ----------
 
 function showChatView(aura, room) {
@@ -461,7 +512,7 @@ function showChatView(aura, room) {
     document.getElementById('verifyBtn').style.display = room ? 'none' : 'inline';
     document.getElementById('peerVerified').style.display = 'none';
     const burnButton = document.getElementById('burnBtn');
-    burnButton.textContent = room && !room.owner ? 'leave' : 'burn';
+    burnButton.textContent = burnLabel(room);
     burnButton.title = room && !room.owner ? 'Leave room' : (room ? 'Burn room for everyone' : 'Burn conversation');
     clearChildren(document.getElementById('messageList'));
     setEarlierControl(false, false);
@@ -708,16 +759,27 @@ function toggleRoomPanel(panelId) {
 function renderRoomHeader(room) {
     document.getElementById('roomMeta').textContent = roomMeta(room);
     const burnButton = document.getElementById('burnBtn');
-    burnButton.textContent = room.owner ? 'burn' : 'leave';
+    burnButton.textContent = burnLabel(room);
 }
 
-function setBurnConfirm(room) {
-    document.getElementById('burnConfirmText').textContent = !room
+const KEEP_LABEL = 'keep';
+
+// What burning asks, and its button: a pair (room null) and a room's owner burn, others leave
+function burnQuestion(room) {
+    return !room
         ? 'burn for both sides? this cannot be undone.'
         : room.owner
             ? 'burn this room for everyone? this cannot be undone.'
             : 'leave this room? you can come back with the code while a seat is free.';
-    document.getElementById('burnYesBtn').textContent = room && !room.owner ? 'leave' : 'burn';
+}
+
+function burnLabel(room) {
+    return room && !room.owner ? 'leave' : 'burn';
+}
+
+function setBurnConfirm(room) {
+    document.getElementById('burnConfirmText').textContent = burnQuestion(room);
+    document.getElementById('burnYesBtn').textContent = burnLabel(room);
 }
 
 // The creator's choices, within what this server allows

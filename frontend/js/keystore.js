@@ -19,6 +19,13 @@
 // members, so the records left behind belong to the account that wrote them (OWNER, its public
 // key). save() clears them before another account's identity is stored: a different account on
 // this device never inherits, reads or links to the previous account's conversations.
+//
+// When storage fails (a private window that refuses it, a full quota, a database from a newer
+// version), the user is told once per page load (W_STORAGE_UNAVAILABLE): nothing survives a
+// reload, replay protection included. Each operation opens and closes its own connection, so
+// another tab can upgrade or delete the database in between; one that does so while a
+// connection is open closes it here, and this tab then stops using storage (W_STORAGE_CLOSED).
+// An upgrade another tab holds back (W_STORAGE_BLOCKED) fails the operation instead of waiting.
 
 const Keystore = (() => {
     'use strict';
@@ -33,17 +40,45 @@ const Keystore = (() => {
     const RECORD = 'identity';
     // The public key of the account the counter and verified records belong to (kept by wipeIdentity)
     const OWNER = 'owner';
+    // Web Locks name of one conversation's counter record, shared by every tab of this browser
+    const COUNTER_LOCK_PREFIX = 'elyrn-counter-';
 
-    // A storage that refuses once (private window) refuses every time: log it once, not per sync
-    let countersWarned = false;
+    // A storage that refuses once (private window) refuses every time: say it once, not per sync
+    let storageWarned = false;
+    // Another tab upgraded or deleted the database under this one: storage is not used again here
+    let retired = false;
+    // This tab is deleting the database itself (wipeAll): its own versionchange is no news
+    let wiping = false;
+    let lockWarned = false;
+
+    // A failed operation: logged under its own code and told to the user, both once per page load
+    function unavailable(logCode, error) {
+        if (storageWarned) return;
+        storageWarned = true;
+        Log.warn(logCode, error);
+        Errors.report(Errors.CODES.W_STORAGE_UNAVAILABLE, null, error);
+    }
+
+    // Says why storage stopped (code) once; every later failure is then silent
+    function stopped(code) {
+        if (storageWarned) return;
+        storageWarned = true;
+        Errors.report(code);
+    }
 
     function open() {
         return new Promise((resolve, reject) => {
+            if (retired) {
+                reject(new Error('storage closed by another tab'));
+                return;
+            }
             if (!window.indexedDB) {
                 reject(new Error('indexeddb unavailable'));
                 return;
             }
             const request = indexedDB.open(DB_NAME, DB_VERSION);
+            // Set once the caller has its answer: a connection arriving after a block is closed
+            let settled = false;
             request.onupgradeneeded = () => {
                 const db = request.result;
                 for (const name of [STORE, VERIFIED_STORE, COUNTERS_STORE]) {
@@ -52,9 +87,35 @@ const Keystore = (() => {
                     }
                 }
             };
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                const db = request.result;
+                if (settled) {
+                    db.close();
+                    return;
+                }
+                settled = true;
+                db.onversionchange = () => retire(db);
+                resolve(db);
+            };
+            request.onerror = () => {
+                settled = true;
+                reject(request.error);
+            };
+            // Another tab holds an older connection open: fail now rather than wait on it
+            request.onblocked = () => {
+                settled = true;
+                stopped(Errors.CODES.W_STORAGE_BLOCKED);
+                reject(new Error('storage blocked by another tab'));
+            };
         });
+    }
+
+    // Another tab wants to upgrade or delete the database: let it, and stop using storage here
+    function retire(db) {
+        db.close();
+        if (wiping) return;
+        retired = true;
+        stopped(Errors.CODES.W_STORAGE_CLOSED);
     }
 
     // Runs action(tx) in one transaction over storeNames; resolves to the result of the request
@@ -85,7 +146,7 @@ const Keystore = (() => {
             return true;
         } catch (e) {
             // Private windows may block IndexedDB: identity then lives in memory only
-            Log.warn(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
+            unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return false;
         }
     }
@@ -123,6 +184,7 @@ const Keystore = (() => {
             }
             return { privateKey: record.privateKey, publicKey: record.publicKey, roomsRoot: record.roomsRoot };
         } catch (e) {
+            unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return null;
         }
     }
@@ -135,6 +197,7 @@ const Keystore = (() => {
                 : store.delete(conversationId), VERIFIED_STORE);
             return true;
         } catch (e) {
+            unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return false;
         }
     }
@@ -143,6 +206,7 @@ const Keystore = (() => {
         try {
             return (await transact('readonly', store => store.get(conversationId), VERIFIED_STORE)) === peerPublicKey;
         } catch (e) {
+            unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return false;
         }
     }
@@ -154,12 +218,23 @@ const Keystore = (() => {
             const value = await transact(mode, action, COUNTERS_STORE);
             return mode === 'readonly' ? value : true;
         } catch (e) {
-            if (!countersWarned) {
-                countersWarned = true;
-                Log.warn(Errors.INTERNAL.W_COUNTERS_UNAVAILABLE, e);
-            }
+            unavailable(Errors.INTERNAL.W_COUNTERS_UNAVAILABLE, e);
             return null;
         }
+    }
+
+    // Runs action holding one conversation's counter lock, shared by every tab of this browser,
+    // so two tabs never read, raise and write one counter record at once (chat.js). Without the
+    // Web Locks API action runs unlocked, still reading fresh and writing ahead; logged once.
+    function withCounterLock(conversationId, action) {
+        if (navigator.locks && typeof navigator.locks.request === 'function') {
+            return navigator.locks.request(COUNTER_LOCK_PREFIX + conversationId, () => action());
+        }
+        if (!lockWarned) {
+            lockWarned = true;
+            Log.warn(Errors.INTERNAL.W_COUNTER_LOCK_UNAVAILABLE);
+        }
+        return action();
     }
 
     function loadCounters(conversationId) {
@@ -184,21 +259,29 @@ const Keystore = (() => {
         try {
             await transact('readwrite', store => store.delete(RECORD));
         } catch (e) {
-            Log.warn(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
+            unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
         }
     }
 
-    // The user's own logout or identity deletion: nothing stays
+    // The user's own logout or identity deletion: nothing stays. A connection of this tab still
+    // open (a save queued behind a sync) is closed by its versionchange without retiring storage.
     function wipeAll() {
         return new Promise(resolve => {
             if (!window.indexedDB) {
                 resolve();
                 return;
             }
+            wiping = true;
             const request = indexedDB.deleteDatabase(DB_NAME);
-            request.onsuccess = request.onerror = request.onblocked = () => resolve();
+            request.onsuccess = request.onerror = request.onblocked = () => {
+                wiping = false;
+                resolve();
+            };
         });
     }
 
-    return Object.freeze({ save, load, wipeIdentity, wipeAll, setVerified, isVerified, loadCounters, saveCounters, forgetCounters });
+    return Object.freeze({
+        save, load, wipeIdentity, wipeAll, setVerified, isVerified,
+        loadCounters, saveCounters, forgetCounters, withCounterLock
+    });
 })();

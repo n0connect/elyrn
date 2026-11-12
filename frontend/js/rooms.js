@@ -74,13 +74,18 @@ const Rooms = (() => {
 
     // ---------- roster ----------
 
-    // Fetches the room's member list, verifies it, and makes it the room's roster
+    // Fetches the room's member list, verifies it, and makes it the room's roster. A failed
+    // request throws an error carrying its result (the caller reports it as such); anything the
+    // server answered that does not verify throws one without it.
     async function loadRoster(api, conv) {
         const room = conv.room;
         const result = await api('GET', `/conversations/${conv.id}/members`);
-        if (!result.ok || !result.data || !Array.isArray(result.data.members) ||
+        if (!result.ok) {
+            throw Object.assign(new Error('roster not served'), { status: result.status, result: result });
+        }
+        if (!result.data || !Array.isArray(result.data.members) ||
             result.data.members.length === 0 || result.data.members.length > R.MAX_MEMBERS) {
-            throw Object.assign(new Error('roster unavailable'), { status: result.status });
+            throw new Error('malformed roster');
         }
         const { cards, roster, skipped, storedCard } = await verifyMembers(room, result.data.members);
         // A card is sealed under a random nonce, so the one derived at login differs in bytes from

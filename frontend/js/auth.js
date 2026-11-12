@@ -49,11 +49,12 @@ function powWorkerURL() {
 }
 
 // Gets a PoW challenge without ever leaving the page, so callers keep what is on screen.
-// Returns { challenge, status, timedOut }: challenge is null on failure, status 0 means no answer.
+// Returns { challenge, status, timedOut, tooLarge }: challenge is null on failure, status 0 means
+// no usable answer (Errors.fromResult reads the rest).
 async function getPowChallenge() {
     const result = await apiCall('GET', '/pow/challenge');
     const challenge = result.ok && result.data && result.data.success ? result.data.challenge : null;
-    return { challenge: challenge || null, status: result.status, timedOut: result.timedOut };
+    return { challenge: challenge || null, status: result.status, timedOut: result.timedOut, tooLarge: result.tooLarge };
 }
 
 // Solves a PoW challenge in a Web Worker. Rejects with PowStopped when the challenge is harder
@@ -176,11 +177,13 @@ async function enterApp(identity, persist) {
     }
     const ttlDays = check.data && Number.isSafeInteger(check.data.message_ttl_days) ? check.data.message_ttl_days : 0;
     const limits = roomLimits(check.data);
-    if (!check.ok || !check.data || check.data.public_key !== identity.publicKey || ttlDays < 1 || ttlDays > MAX_MESSAGE_TTL_DAYS || !limits) {
+    const sameKey = Boolean(check.data) && check.data.public_key === identity.publicKey;
+    if (!check.ok || !sameKey || ttlDays < 1 || ttlDays > MAX_MESSAGE_TTL_DAYS || !limits) {
         // Server-driven: the replay records stay (Keystore.wipeIdentity)
         await Keystore.wipeIdentity();
         if (check.ok) {
-            Errors.report(Errors.CODES.E_IDENTITY_MISMATCH);
+            // Another key is an attack on the identity; settings out of range are only refused
+            Errors.report(sameKey ? Errors.CODES.E_SERVER_LIMITS_INVALID : Errors.CODES.E_IDENTITY_MISMATCH);
             await apiCall('POST', '/logout');
         }
         return { entry: ENTRY.REFUSED, result: check };
@@ -192,7 +195,12 @@ async function enterApp(identity, persist) {
     return { entry: ENTRY.ENTERED, result: check };
 }
 
-async function login() {
+// Enter held down in the field, or a click while it runs, never starts a second login
+function login() {
+    return once('login', loginNow);
+}
+
+async function loginNow() {
     const accountNumberInputElement = document.getElementById('accountNumberInput');
     const errorElement = document.getElementById('loginError');
     const successElement = document.getElementById('loginSuccess');
@@ -309,7 +317,11 @@ function stopAccountNumberScramble() {
 
 // Copy button - get real Account Number from backend (but don't create account yet)
 // Zero-trust: Backend returns a pending_token that we must use to confirm
-async function copyAccountNumber() {
+function copyAccountNumber() {
+    return once('register', copyAccountNumberNow);
+}
+
+async function copyAccountNumberNow() {
     const accountNumberElement = document.getElementById('generatedAccountNumber');
     const successElement = document.getElementById('registerSuccess');
     const errorElement = document.getElementById('registerError');
@@ -427,7 +439,7 @@ async function revealAccountNumber(accountNumberElement, successElement, account
 async function copyIssuedAccountNumber(accountNumber) {
     try {
         await copyToClipboard(accountNumber);
-        showSuccess('Account number copied to clipboard!');
+        showSuccess(Errors.NOTICE.ACCOUNT_NUMBER_COPIED);
     } catch (e) {
         Errors.report(Errors.CODES.W_ACCOUNT_NUMBER_NOT_COPIED);
     }
@@ -474,7 +486,12 @@ function failRegistrationStep(status, cause) {
     Errors.inline(document.getElementById('registerError'), code, null, cause || { status: status });
 }
 
-async function continueWithAccountNumber() {
+// Shares its key with the copy step: phase 1 and phase 2 never run at once
+function continueWithAccountNumber() {
+    return once('register', continueWithAccountNumberNow);
+}
+
+async function continueWithAccountNumberNow() {
     const generatedAccountNumber = document.getElementById('generatedAccountNumber').textContent;
     const successElement = document.getElementById('registerSuccess');
     const errorElement = document.getElementById('registerError');
@@ -559,17 +576,15 @@ async function finishRegistration() {
     }
 
     // The account number was copied for the user to save; do not leave it in the clipboard
-    // (clipboard histories and cross-device sync would keep it). Best effort only: a page
-    // without focus may not write the clipboard, and registration must not fail over it.
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText('').catch(error => Log.warn(Errors.INTERNAL.W_CLIPBOARD_NOT_CLEARED, error));
-    }
+    // (clipboard histories and cross-device sync would keep it). Best effort only, and only if the
+    // clipboard still holds it (utils.js): registration must not fail over it.
+    clearClipboardIfHolds(accountNumber);
 
     // Clear pending state
     pendingRegistrationAccountNumber = null;
     pendingRegistrationToken = null;
     document.getElementById('generatedAccountNumber').textContent = '';
-    showSuccess('welcome to elyrn.');
+    showSuccess(Errors.NOTICE.WELCOME);
 }
 
 // A 401 means the server no longer holds this registration. Either an earlier attempt created
@@ -592,7 +607,15 @@ async function recoverRegistration() {
     Errors.inline(document.getElementById('registerError'), Errors.CODES.E_ACCOUNT_NUMBER_EXPIRED);
 }
 
-async function logout() {
+// Logging out and deleting the identity share one key: a second press, or the other one, while
+// either runs is ignored (a double logout would report the server unreachable)
+const ACCOUNT_ACTION = 'account';
+
+function logout() {
+    return once(ACCOUNT_ACTION, logoutNow);
+}
+
+async function logoutNow() {
     // Forget local key material first, then revoke every server session
     Chat.stop();
     await Keystore.wipeAll();
@@ -608,7 +631,11 @@ async function logout() {
 // Erases this identity once the account number is re-entered. Only its derived auth key is
 // sent, and only after it proves to be this identity's: another account's key would let the
 // server link the two accounts.
-async function deleteIdentity() {
+function deleteIdentity() {
+    return once(ACCOUNT_ACTION, deleteIdentityNow);
+}
+
+async function deleteIdentityNow() {
     const input = document.getElementById('deleteAccountInput');
     const accountNumber = String(input.value).normalize('NFKC').trim();
     input.value = '';
@@ -630,19 +657,32 @@ async function deleteIdentity() {
             Errors.report(Errors.CODES.W_TOO_MANY_ATTEMPTS);
             return;
         }
-        if (!result.ok) {
-            Errors.report(Errors.CODES.E_IDENTITY_NOT_DELETED, null, result);
-            return;
+        const outcome = result.ok ? DELETION.DELETED : await deletionOutcome(result);
+        if (outcome === DELETION.DELETED) {
+            Chat.stop();
+            await Keystore.wipeAll();
+            showMainMenu();
+            showSuccess(Errors.NOTICE.IDENTITY_DELETED);
+        } else {
+            Errors.report(outcome === DELETION.UNKNOWN ? Errors.CODES.E_IDENTITY_DELETE_UNKNOWN : Errors.CODES.E_IDENTITY_NOT_DELETED, null, result);
         }
-        Chat.stop();
-        await Keystore.wipeAll();
-        showMainMenu();
-        showSuccess('identity deleted');
     } catch (error) {
         Errors.report(Errors.CODES.E_IDENTITY_NOT_DELETED, null, error);
     } finally {
         button.disabled = false;
     }
+}
+
+// What a delete that did not answer 2xx did
+const DELETION = Object.freeze({ DELETED: 'deleted', KEPT: 'kept', UNKNOWN: 'unknown' });
+
+// A lost answer (no answer, or a server error) may hide a delete that happened: the session
+// says which. 401: the identity is gone with it; 200: still there; anything else: unknown.
+async function deletionOutcome(result) {
+    if (result.status !== 0 && result.status < 500) return DELETION.KEPT;
+    const check = await apiCall('GET', '/me');
+    if (check.status === 401) return DELETION.DELETED;
+    return check.ok ? DELETION.KEPT : DELETION.UNKNOWN;
 }
 
 // Cancel registration - just go back (no account was created yet)

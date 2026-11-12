@@ -15,7 +15,7 @@
 }
 
 .secure-text.scrambling {
-    color: var(--fg-muted);
+    color: var(--muted);
 }
 
 .secure-text.revealed {

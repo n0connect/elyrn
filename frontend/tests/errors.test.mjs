@@ -106,3 +106,38 @@ test('the situation codes exist with the severity they are reported at', () => {
         assert.equal(Errors.INTERNAL[code], code);
     }
 });
+
+test('wave 2 codes exist with the severity they are reported at', () => {
+    const C = Errors.CODES;
+    for (const code of ['E_SERVER_LIMITS_INVALID', 'E_BROWSER_UNSUPPORTED', 'E_RESPONSE_TOO_LARGE',
+        'E_IDENTITY_DELETE_UNKNOWN', 'E_MESSAGE_ID_CONFLICT', 'E_ROOM_LIMITS_REFUSED']) {
+        assert.equal(C[code], code);
+        assert.equal(Errors.REGISTRY[code].severity, 'error', code);
+    }
+    for (const code of ['W_STORAGE_UNAVAILABLE', 'W_STORAGE_BLOCKED', 'W_STORAGE_CLOSED']) {
+        assert.equal(C[code], code);
+        assert.equal(Errors.REGISTRY[code].severity, 'warning', code);
+    }
+    for (const code of ['W_RESPONSE_TOO_LARGE', 'W_COUNTER_LOCK_UNAVAILABLE']) {
+        assert.equal(Errors.INTERNAL[code], code);
+    }
+    // A room judged expired by this device's clock names the clock
+    assert.match(Errors.REGISTRY.E_ROOM_CODE_EXPIRED.text, /device clock/);
+    assert.match(Errors.REGISTRY.W_ROOM_EXPIRED.text, /device clock/);
+    // An oversized answer is its own code, whatever its status says
+    assert.equal(Errors.fromResult({ status: 0, data: null, timedOut: false, tooLarge: true }), C.E_RESPONSE_TOO_LARGE);
+});
+
+test('notices: every one is a non-empty sentence; notice() fills parameters and never throws', () => {
+    for (const [name, text] of Object.entries(Errors.NOTICE)) {
+        assert.equal(typeof text, 'string', name);
+        assert.notEqual(text.trim(), '', name);
+    }
+    assert.equal(Errors.notice(Errors.NOTICE.FRIEND_REQUEST_SENT, { name: 'quiet-fox' }), 'friend request sent to quiet-fox');
+    assert.equal(Errors.notice(Errors.NOTICE.WELCOME), Errors.NOTICE.WELCOME);
+    // Missing parameter, misspelt notice (undefined) or free text: the generic sentence
+    assert.equal(Errors.notice(Errors.NOTICE.FRIEND_REQUEST_SENT, {}), Errors.REGISTRY.E_BAD_PARAMS.text);
+    for (const text of [undefined, null, 'free text', 42]) {
+        assert.equal(Errors.notice(text), Errors.REGISTRY.E_UNKNOWN_CODE.text);
+    }
+});

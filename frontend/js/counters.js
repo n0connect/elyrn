@@ -36,7 +36,9 @@
 // device's view is not checked. A replay given a seq at or below the remembered one is shown
 // as history, under its original authenticated time. A server that rolls its seqs back below
 // the remembered one makes new messages look like history. Two devices of one account sending
-// at once can spend the same counter; the second is then flagged as a replay.
+// at once can spend the same counter; the second is then flagged as a replay. Two tabs of one
+// browser cannot: chat.js takes each counter under a lock they share, from the record as stored
+// at that moment, and stores the raised record before the message is posted.
 
 const Counters = (() => {
     'use strict';

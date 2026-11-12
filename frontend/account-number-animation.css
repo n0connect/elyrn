@@ -21,7 +21,7 @@
     letter-spacing: 2px;
     padding: 15px;
     border: 2px solid var(--border);
-    background: var(--bg-secondary);
+    background: var(--bg);
     border-radius: 5px;
     transition: all 0.3s ease;
     text-align: center;
@@ -31,13 +31,13 @@
 
 /* Subtle generating animation - theme compatible */
 .account-number-box code.generating {
-    border-color: var(--fg-muted);
+    border-color: var(--muted);
     color: var(--fg);
 }
 
 /* Masking animation state */
 .account-number-box code.masking {
-    color: var(--fg-muted);
+    color: var(--muted);
     border-color: var(--border);
 }
 
@@ -84,7 +84,7 @@
 .cancel-reg-btn {
     margin-top: 25px;
     font-size: 12px;
-    color: var(--fg-muted);
+    color: var(--muted);
     opacity: 0.7;
     transition: opacity 0.2s ease;
 }
