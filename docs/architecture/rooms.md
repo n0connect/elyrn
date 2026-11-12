@@ -4,6 +4,11 @@ A **room** is a conversation for two or more people who do not need to know each
 
 This document is the design of record: what is stored, what is computed where, and why.
 
+<p align="center">
+  <img src="../../assets/room.png" alt="A room with three members: names exist in this room only, every message is sealed for exactly its members" width="48%" />
+  <img src="../../assets/room-members.png" alt="The member list and the room safety number every member compares" width="48%" />
+</p>
+
 ---
 
 ## Goals
@@ -20,6 +25,10 @@ Non-goals: moderation (kicking a member), editing a room's limits after creation
 ---
 
 ## The Room Code
+
+<p align="center">
+  <img src="../../assets/room-created.png" alt="A new room: its code is shown once to its creator, who passes it on over a channel they trust" width="60%" />
+</p>
 
 ```text
 code = "elyrn#" || base64url( S (32) || max_members (1) || expires_hour (4, big-endian) )

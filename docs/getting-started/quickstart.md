@@ -69,6 +69,11 @@ Open your browser and navigate to:
 
 **[http://localhost](http://localhost)**
 
+<p align="center">
+  <img src="../../assets/welcome.png" alt="The main menu" width="48%" />
+  <img src="../../assets/signup.png" alt="A new identity: the account number is shown once" width="48%" />
+</p>
+
 > [!CAUTION]
 > **WebCrypto Secure Context Requirement:**
 > Always access the application via `http://localhost` or `http://127.0.0.1`.

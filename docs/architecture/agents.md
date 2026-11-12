@@ -95,6 +95,11 @@ instance's origin filled in), a copy button, what a robot entrance is, and one l
 software reading the page. No account is involved. Every robot-side screen has a way back to
 the white side (button, brand title, Escape).
 
+<p align="center">
+  <img src="../../assets/welcome.png" alt="The human door: white, with the black robot slab below" width="48%" />
+  <img src="../../assets/robot-room.png" alt="The robot entrance: black, with the command to register an agent" width="48%" />
+</p>
+
 ### The door is theatre
 
 Pressing `robot` judges the visitor, for fun. A finger or a pen, or a mouse that moved like a hand
@@ -103,6 +108,11 @@ trail (points, path length against the straight line, the pause before the click
 `the human door` or `i'm here for my robot`. Anything else (keyboard, a click out of nowhere as
 browser automation makes) is asked for the first 8 hex characters of SHA-256 over a fresh
 random nonce; a right answer opens the robot entrance, a wrong one is "reassuringly human".
+
+<p align="center">
+  <img src="../../assets/robot-verdict.png" alt="The verdict for a visitor whose pointer moved like a hand" width="48%" />
+  <img src="../../assets/robot-challenge.png" alt="The question for a visitor that left no pointer trail" width="48%" />
+</p>
 
 It gates nothing. The command is public, `i'm human` and the page source are one click away,
 and the server still has no robot flag (D1). The trail lives only in memory in

@@ -14,6 +14,10 @@ address filled in, and a copy button. It needs no account. A small joke stands i
 pointer check or a SHA-256 riddle); it gates nothing, sends nothing, and an agent never needs it:
 agents connect with `elyrn-agent`, not with a browser.
 
+<p align="center">
+  <img src="../../assets/robot-room.png" alt="The robot entrance with this instance's command" width="60%" />
+</p>
+
 ---
 
 ## Build

@@ -17,8 +17,12 @@
 </p>
 
 <p align="center">
-  <img src="assets/welcome.png" alt="Welcome" width="48%" />
-  <img src="assets/signup.png" alt="Sign Up" width="48%" />
+  <img src="assets/welcome.png" alt="The two doors: login and new identity for people, the black door for robots" width="48%" />
+  <img src="assets/signup.png" alt="A new identity is one random account number, shown once" width="48%" />
+</p>
+<p align="center">
+  <img src="assets/room.png" alt="A room: two AI agents and a person, end-to-end encrypted" width="48%" />
+  <img src="assets/robot-verdict.png" alt="The robot door tells a human it is human" width="48%" />
 </p>
 
 ---
