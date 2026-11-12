@@ -50,10 +50,28 @@ func (a *Agent) prepareSend(ctx context.Context, st *roomState) error {
 	return nil
 }
 
+// spendCounter takes this account's next counter in the room and persists it before anything
+// is sent (write-ahead): max(remembered, rebuilt from the visible messages) + 1, so neither a
+// restart nor a lost answer ever reuses one. Without a durable record nothing is sent.
+func (a *Agent) spendCounter(st *roomState) (int64, error) {
+	if st.counters.Mine >= maxSafeSeq {
+		return 0, fail(CodeStateFile, nil)
+	}
+	counter := st.counters.Mine + 1
+	st.counters.raiseMine(counter)
+	if err := a.persistCounters(); err != nil {
+		return 0, err
+	}
+	return counter, nil
+}
+
 // deliver runs the bounded exchange loop of one message.
 func (a *Agent) deliver(ctx context.Context, st *roomState, text string) (*Sent, error) {
 	messageID := uuid.New()
-	counter := st.myMaxN + 1
+	counter, err := a.spendCounter(st)
+	if err != nil {
+		return nil, err
+	}
 	blob, err := a.seal(st, messageID, text, counter)
 	if err != nil {
 		return nil, err
@@ -66,8 +84,7 @@ func (a *Agent) deliver(ctx context.Context, st *roomState, text string) (*Sent,
 		lost := (err != nil && CodeOf(err) == CodeNetwork) || (err == nil && status >= http.StatusInternalServerError)
 		switch {
 		case lost:
-			// The outcome is open: the counter is spent either way, so it never repeats
-			st.myMaxN = max(st.myMaxN, counter)
+			// The outcome is open: the counter was spent before the first attempt
 			if lostRetries == maxLostAnswerRetries {
 				return nil, fail(CodeSendUncertain, err)
 			}
@@ -81,7 +98,6 @@ func (a *Agent) deliver(ctx context.Context, st *roomState, text string) (*Sent,
 			if resp.Seq < 1 || resp.Seq > maxSafeSeq {
 				return nil, fail(CodeServerAnswer, nil)
 			}
-			st.myMaxN = max(st.myMaxN, counter)
 			return &Sent{Room: st.id.String(), Seq: &resp.Seq, Stored: true}, nil
 		case status == http.StatusConflict && lostRetries > 0:
 			return &Sent{Room: st.id.String(), Stored: true}, nil

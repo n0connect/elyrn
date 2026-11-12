@@ -91,15 +91,18 @@ func withAgent(name string, args []string, serverRequired bool, body func(*agent
 	if err != nil {
 		return report(err)
 	}
-	a, err := agent.New(agent.Config{Server: server, IdentityPath: path})
+	// whoami only reads the identity, so it runs beside an agent that holds the identity's lock
+	a, err := agent.New(agent.Config{Server: server, IdentityPath: path, ReadOnly: name == commandWhoami})
 	if err != nil {
 		return report(err)
 	}
-	defer a.Close()
+	defer a.Close() // waits (bounded) for the call in flight, then releases the identity lock
 	return report(body(a))
 }
 
-// serve runs the MCP server until stdin ends or a signal arrives.
+// serve runs the MCP server until stdin ends or a signal arrives. A signal cancels ctx, which
+// cancels the tool call in flight; the caller's a.Close then waits for that call to return
+// before wiping the agent, and only then does the process exit.
 func serve(ctx context.Context, a *agent.Agent) error {
 	if err := a.RequireServer(); err != nil {
 		return err

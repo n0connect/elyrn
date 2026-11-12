@@ -59,6 +59,8 @@ func (a *Agent) createOnce(ctx context.Context, code *e2e.RoomCode) (*roomState,
 		ExpiresAt: code.ExpiresAt(), Card: member.Card, Vault: vault, PoW: solution,
 	}, &resp)
 	switch {
+	case err != nil && CodeOf(err) == CodeNetwork:
+		return a.settleLost(ctx, keys, err)
 	case err != nil:
 		return nil, err
 	case status == http.StatusConflict:
@@ -68,6 +70,20 @@ func (a *Agent) createOnce(ctx context.Context, code *e2e.RoomCode) (*roomState,
 	default:
 		return nil, powStatusError(status)
 	}
+}
+
+// settleLost answers a create whose answer was lost: the server may have stored the room, and
+// a retry would make a second one. If the listing holds it (verified against the code, as any
+// listed room), the create succeeded; otherwise the original network failure stands.
+func (a *Agent) settleLost(ctx context.Context, keys *e2e.Room, lost error) (*roomState, error) {
+	if _, err := a.listRooms(ctx); err != nil {
+		return nil, lost
+	}
+	if st := a.rooms[keys.ID]; st != nil {
+		logger.Info("a room create whose answer was lost was found stored")
+		return st, nil
+	}
+	return nil, lost
 }
 
 // JoinRoom takes a seat in the room a code opens.

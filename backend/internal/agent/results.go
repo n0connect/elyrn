@@ -85,11 +85,20 @@ type Gap struct {
 	Missing int64  `json:"missing"`
 }
 
+// Replay is a message served again under a new seq, or out of its sender's order (counters.go):
+// it is not delivered as new, and its text is withheld.
+type Replay struct {
+	Seq    int64  `json:"seq"`
+	Sender string `json:"sender,omitempty"`
+	Mine   bool   `json:"mine"`
+}
+
 // ReadResult is what room_read and room_wait return.
 type ReadResult struct {
 	Room     string    `json:"room"`
 	Messages []Message `json:"messages"`
 	Gaps     []Gap     `json:"gaps"`
+	Replays  []Replay  `json:"replays"`
 	LastSeq  int64     `json:"last_seq"`
 	TimedOut bool      `json:"timed_out,omitempty"`
 }

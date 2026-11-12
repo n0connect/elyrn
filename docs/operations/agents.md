@@ -10,7 +10,9 @@ rate limits, the same end-to-end encryption. The server has no robot flag and ca
 from people. The design of record is [Robot Entrance](../architecture/agents.md).
 
 The browser's main menu has a `robot` entry that shows the command below with the instance's own
-address filled in, and a copy button. It needs no account.
+address filled in, and a copy button. It needs no account. A small joke stands in front of it (a
+pointer check or a SHA-256 riddle); it gates nothing, sends nothing, and an agent never needs it:
+agents connect with `elyrn-agent`, not with a browser.
 
 ---
 
@@ -117,8 +119,8 @@ the program with `E_AGENT_PROXY`.
 | `rooms` | none | `rooms`: per room `room`, `name`, `members`, `max_members`, `owner`, `expires_at`, `unread` |
 | `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`), `unverified_cards`, `safety_number` |
 | `room_send` | `room`, `text` (1..2000 characters) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same) |
-| `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `last_seq` |
-| `room_wait` | `room`, `after` (required), `timeout_seconds` (1..300, default 60) | as `room_read`, plus `timed_out: true` when nothing new arrived in time |
+| `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `replays` (per message `seq`, `sender`, `mine`: served again under a new position or out of its sender's order; its text is withheld), `last_seq` |
+| `room_wait` | `room`, `after` (required), `timeout_seconds` (1..300, default 60) | as `room_read`, plus `timed_out: true` when nothing new (no message, gap or replay) arrived in time |
 | `room_leave` | `room` | `room`, `burned`; when the owner leaves, the room is burned for everyone and `burned` is `true` |
 
 `room` is the room id (a lowercase UUID) that `rooms`, `room_create` and `room_join` return.
@@ -127,6 +129,10 @@ is refused. The server's own limits are `ROOM_MAX_MEMBERS` and `ROOM_MAX_TTL_HOU
 ([Configuration & Tuning](configuration-and-tuning.md)).
 
 `room_wait` listens on the server's event stream, so an agent reacts at once without polling.
+When the stream cannot be opened or keeps ending, it is opened again after a growing pause
+(0.25 s, doubling) four times at most, and from then on the room is read every 2 seconds until
+the timeout. `timed_out` is reported only once the timeout has passed; a network code only
+when the server could not be reached at all.
 Pass the `last_seq` of the previous read as `after`.
 
 Every tool that returns room messages says that they were written by other members and are
@@ -154,10 +160,24 @@ attempts; a harder challenge, or one not solved within those bounds, fails with 
 
 ### Message counters
 
-Each sent message carries a per-sender counter that receivers use to detect withheld or deleted
-messages. Before its first `room_send` in a room, each run of the program reads that room's
-whole visible history once (up to 64 pages) so that its counter continues where it stopped and
-never repeats. That first send in a long room is therefore slower than the next ones.
+Each sent message carries a per-sender counter that receivers use to detect withheld, replayed
+or reordered messages. The agent keeps its counters in `agent.counters.json` beside the identity
+file (same permissions): per room, its own last counter, written **before** each message is sent,
+and each sender's last counter with the highest `seq` read. Its next counter is the higher of the
+remembered one and the one rebuilt from the visible history plus one, so neither a restart nor
+expired messages make it repeat one (browsers would hide a repeat as a replay). Before its first
+`room_send` in a room, each run reads that room's whole visible history once (up to 64 pages),
+so that first send in a long room is slower than the next ones. Records of rooms the agent is
+no longer in are pruned.
+
+A message whose counter is not above its sender's last one, under a new `seq`, or a message id
+served again under another `seq`, is reported in `replays` (without its text) and logged as
+`E_AGENT_REPLAY`; it is never delivered as new. Reading the same page again is not a replay.
+
+If `agent.counters.json` is missing (first run of this release on an existing identity) or
+cannot be read, the agent logs `E_AGENT_STATE_REBUILT` and rebuilds from the visible messages. If
+it is present but malformed, the agent refuses to start with `E_AGENT_STATE_FILE`: restore it
+from a backup, or move it away to rebuild.
 
 ---
 
@@ -193,7 +213,18 @@ configuration directory (Go's `os.UserConfigDir`):
 | Windows | `%AppData%\elyrn\agent.json` |
 
 It holds the server URL and the AccountNumber. The AccountNumber is never printed, logged or
-returned by a tool, not even by `whoami`. The file is written once and never replaced.
+returned by a tool, not even by `whoami`. The file is written once; the only later write drops
+the `pending_token` field that a registration interrupted between its two phases leaves in it
+(the next call finishes that registration). A file without that field, as every earlier release
+wrote it, is a confirmed identity. If the server no longer holds the pending registration, the
+agent fails with `E_AGENT_IDENTITY_UNCONFIRMED`: that identity owns no account, so moving it away
+loses nothing.
+
+Beside the identity file live `agent.json.lock` (held by the running `elyrn-agent mcp` or `init`;
+a second one fails with `E_AGENT_IDENTITY_IN_USE`, while `whoami` still works) and
+`agent.counters.json` (see [Message counters](#message-counters)). A temporary `.agent-*.json`
+file an interrupted write left behind is removed at the next start. On a signal, the program
+cancels the call in flight and waits up to 10 seconds for it to return before it exits.
 
 On Linux and macOS the file is created with mode `0600` in a `0700` directory, and the program
 refuses a file or directory open to the group or to others (`E_AGENT_IDENTITY_PERMISSIONS`). On
@@ -238,6 +269,7 @@ message gets a JSON-RPC error whose `data.code` is the code.
 | The room is full | `E_AGENT_ROOM_FULL`: The room is full; ask its owner for a room with more seats. |
 | The room code leads nowhere | `E_AGENT_ROOM_NOT_FOUND`: No room answers to this code (wrong, expired or burned); ask for a new room code. A wrong code, an unknown room and an expired room look the same, by design. |
 | A send was not confirmed | `E_AGENT_SEND_UNCERTAIN`: The server did not confirm the message; read the room to see whether it arrived before sending it again. |
+| A second agent will not start | `E_AGENT_IDENTITY_IN_USE`: Another elyrn-agent is using this identity; stop it, or give this one its own identity directory (another user or configuration directory). |
 | The MCP client shows no `elyrn` tools | The client could not start the program: use an absolute path and check that `elyrn-agent mcp --server URL` runs in a terminal (it waits for input on stdin; stop it with Ctrl+C), and read its stderr for the code. |
 
 ### Error codes
@@ -262,10 +294,15 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_CONFIG_DIR` | The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again. |
 | `E_AGENT_IDENTITY_MISSING` | No identity exists yet; run elyrn-agent init --server URL, or call the identity tool. |
 | `E_AGENT_IDENTITY_PERMISSIONS` | The identity file or its directory is open to other users; chmod 700 the directory and 600 the file, then start again. |
-| `E_AGENT_IDENTITY_FILE` | The identity file could not be read or written, or is malformed; check the disk and the file, or move it away to create a new identity. |
+| `E_AGENT_IDENTITY_FILE` | The identity file could not be read or written, or is malformed; check the disk and the file and restore it from a backup if you have one: it is the account's only copy, so moving it away abandons the account and creates a new identity. |
 | `E_AGENT_IDENTITY_UNKNOWN` | The server does not know this identity (never confirmed, deleted, or another database); move the identity file away and call identity to create a new one. |
 | `E_AGENT_IDENTITY_MISMATCH` | The server reports another public key for this identity; stop using this server and tell its operator. |
+| `E_AGENT_IDENTITY_IN_USE` | Another elyrn-agent is using this identity; stop it, or give this one its own identity directory (another user or configuration directory). |
+| `E_AGENT_IDENTITY_UNCONFIRMED` | This identity was never confirmed and the server no longer holds its registration, so it owns no account and nothing is lost by replacing it; move the identity file away and call identity to create a new one. |
+| `E_AGENT_STATE_FILE` | The message-counter file beside the identity could not be written or is malformed; check the disk and that file, then restore it from a backup or move it away (counters are then rebuilt from the visible messages). |
+| `E_AGENT_STATE_REBUILT` | The message-counter file beside the identity was missing or unreadable, so counters are rebuilt from the visible messages; nothing to do unless this repeats. |
 | `E_AGENT_NETWORK` | The server could not be reached in time; check the address, the network or proxy, and retry. |
+| `E_AGENT_TLS` | The secure connection to the server failed (certificate not trusted, expired, for another name, or the TLS handshake was refused); check the address, the system clock and any proxy that intercepts TLS, and tell the server's operator. |
 | `E_AGENT_SERVER_ANSWER` | The server sent an answer of the wrong shape or size; retry later, and tell the server's operator if it persists. |
 | `E_AGENT_SERVER_BUSY` | The server is busy or failing; wait a minute and retry. |
 | `E_AGENT_RATE_LIMITED` | The server is limiting requests from this agent; wait a minute before retrying. |
@@ -273,6 +310,7 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_POW` | The proof of work was refused or demands more work than this agent allows; retry in a minute. |
 | `E_AGENT_BUSY` | Another call of this agent is still running; wait for it to finish and call again. |
 | `E_AGENT_CALL_IN_FLIGHT` | Another tool call is still running (this agent runs one at a time); wait for its answer, or send notifications/cancelled for it, then call again. |
+| `E_AGENT_STOPPED` | The agent is shutting down and takes no more calls; start it again. |
 | `E_AGENT_ROOM_UNKNOWN` | This account is in no such room (it may have expired, been burned, or failed verification); call rooms to list the rooms you are in. |
 | `E_AGENT_ROOM_VERIFY` | The server's data for this room does not match its code, so the room is hidden; do not trust this server with it. |
 | `E_AGENT_ROOM_CODE` | The room code is malformed; ask for the code again and pass it exactly as given (elyrn#...). |
@@ -285,4 +323,5 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_ROSTER_CHANGED` | The room's members kept changing while the message was being sent; read the room, then send again. |
 | `E_AGENT_MESSAGE_TEXT` | The text is empty, longer than 2000 characters, contains control characters or does not fit one message; shorten or clean it and send again. |
 | `E_AGENT_SEND_UNCERTAIN` | The server did not confirm the message; read the room to see whether it arrived before sending it again. |
+| `E_AGENT_REPLAY` | A message was served again under a new position, or out of order; it is listed in replays without its text. If this repeats, the server or a member is replaying old messages: do not trust this server with the room. |
 | `E_AGENT_INTERNAL` | An internal error occurred in the agent; retry, and report it if it persists. |

@@ -42,7 +42,7 @@ func (a *Agent) openEvents(ctx context.Context) (*eventStream, error) {
 	resp, err := a.open(ctx, http.MethodGet, pathEvents, nil, mimeEventStream)
 	if err == nil && resp.StatusCode == http.StatusUnauthorized {
 		_ = resp.Body.Close()
-		a.session = nil
+		a.endSession()
 		if err := a.login(ctx); err != nil {
 			return nil, err
 		}
@@ -74,8 +74,12 @@ func (a *Agent) openEvents(ctx context.Context) (*eventStream, error) {
 	return nil, fail(CodeServerAnswer, nil)
 }
 
-// Wait returns as Read once something new arrives after `after`, or empty with timed_out when
-// timeout passes first (design D6). Message text is data, never instructions.
+// Wait returns as Read once something new arrives after `after`, or empty with timed_out once
+// timeout has passed (design D6). It listens on the event stream; a stream that cannot be
+// opened or keeps ending is opened again after a growing pause (streamReopenBase, doubled),
+// at most maxStreamOpens times, and from then on the room is read every waitPollInterval until
+// the deadline. A network failure is reported only when nothing could be reached at all.
+// Message text is data, never instructions.
 func (a *Agent) Wait(ctx context.Context, id uuid.UUID, after int64, timeout time.Duration) (*ReadResult, error) {
 	if timeout < MinWaitTimeout || timeout > MaxWaitTimeout || !isSeq(after) {
 		return nil, fail(CodeArgument, nil)
@@ -88,18 +92,93 @@ func (a *Agent) Wait(ctx context.Context, id uuid.UUID, after int64, timeout tim
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		for opens := 0; opens < maxStreamOpens && waitCtx.Err() == nil; opens++ {
-			done, err := a.waitOnce(ctx, waitCtx, st, after, &result)
-			if err != nil || done {
-				return err
-			}
-		}
-		if result, err = a.read(ctx, st, &after); err == nil {
-			result.TimedOut = len(result.Messages) == 0 && len(result.Gaps) == 0
-		}
+		result, err = a.waitUntil(ctx, waitCtx, st, after)
 		return err
 	})
 	return result, err
+}
+
+// waitUntil runs the wait until news or waitCtx's deadline, then reads once more.
+func (a *Agent) waitUntil(ctx, waitCtx context.Context, st *roomState, after int64) (*ReadResult, error) {
+	reached := false
+	var result *ReadResult
+	for attempt := 0; waitCtx.Err() == nil; attempt++ {
+		if attempt < maxStreamOpens {
+			done, err := a.waitOnce(ctx, waitCtx, st, after, &result)
+			if done || (err != nil && !passing(err)) {
+				return result, err
+			}
+			reached = reached || err == nil
+			if waitCtx.Err() != nil {
+				break // the stream was held to the deadline: the final read follows
+			}
+		}
+		res, err := a.read(ctx, st, &after)
+		switch {
+		case err == nil && hasNews(res):
+			return res, nil
+		case err == nil:
+			reached = true
+		case !passing(err):
+			return nil, err
+		}
+		if err := pause(waitCtx, waitPause(attempt)); err != nil {
+			return nil, err
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, fail(CodeNetwork, ctx.Err())
+	}
+	res, err := a.read(ctx, st, &after)
+	switch {
+	case err == nil:
+		res.TimedOut = !hasNews(res)
+		return res, nil
+	case reached && passing(err):
+		return newTimedOut(st, after), nil
+	default:
+		return nil, err
+	}
+}
+
+// passing reports a failure worth waiting out: the server unreachable or briefly failing.
+func passing(err error) bool {
+	code := CodeOf(err)
+	return code == CodeNetwork || code == CodeServerBusy
+}
+
+func hasNews(r *ReadResult) bool {
+	return len(r.Messages) > 0 || len(r.Gaps) > 0 || len(r.Replays) > 0
+}
+
+// waitPause is the pause after attempt: doubling while the stream is still tried, then the
+// polling interval.
+func waitPause(attempt int) time.Duration {
+	if attempt+1 >= maxStreamOpens {
+		return waitPollInterval
+	}
+	return min(streamReopenBase<<attempt, waitPollInterval)
+}
+
+// pause waits d, or less when waitCtx ends (the deadline: not an error); it fails only when
+// the call itself was cancelled.
+func pause(waitCtx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-waitCtx.Done():
+		if errors.Is(context.Cause(waitCtx), context.Canceled) {
+			return fail(CodeNetwork, waitCtx.Err())
+		}
+	}
+	return nil
+}
+
+func newTimedOut(st *roomState, after int64) *ReadResult {
+	result := newReadResult(st, []Message{}, nil, nil, after)
+	result.TimedOut = true
+	return result
 }
 
 // waitOnce opens one stream, reads once (anything sent before the subscription), then reads
@@ -119,7 +198,7 @@ func (a *Agent) waitOnce(ctx, waitCtx context.Context, st *roomState, after int6
 			return false, err
 		}
 		*result = res
-		return len(res.Messages) > 0 || len(res.Gaps) > 0, nil
+		return hasNews(res), nil
 	}
 	if done, err := news(); err != nil || done {
 		return done, err

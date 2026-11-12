@@ -15,6 +15,9 @@ const maxMessageTTLDays = 3650
 
 // ensureAccount creates the account on first use; it reports whether it did.
 func (a *Agent) ensureAccount(ctx context.Context) (bool, error) {
+	if err := a.requireWritable(); err != nil {
+		return false, err
+	}
 	if a.authKey != "" {
 		return false, nil
 	}
@@ -24,33 +27,68 @@ func (a *Agent) ensureAccount(ctx context.Context) (bool, error) {
 	return true, a.register(ctx)
 }
 
-// ensureSession logs in when there is no session (creating the account first if needed).
+// ensureSession logs in when there is no checked session (creating the account first, or
+// finishing a registration an earlier run left unconfirmed). A session counts only once /me
+// has been checked: both the cookie and the limits it reported must be there.
 func (a *Agent) ensureSession(ctx context.Context) error {
-	if a.session != nil {
+	if a.session != nil && a.limits != nil {
 		return nil
 	}
 	created, err := a.ensureAccount(ctx)
 	if err != nil || created {
 		return err
 	}
+	if a.pendingToken != "" {
+		return a.confirm(ctx, a.pendingToken)
+	}
 	return a.login(ctx)
 }
 
-// register runs both phases. The AccountNumber is written to the identity file between them,
-// as a person saves it before confirming: a lost confirmation can then still log in.
+// endSession forgets the session and what /me reported: the next call logs in again.
+func (a *Agent) endSession() {
+	a.session, a.limits = nil, nil
+}
+
+// endSessionOnError is deferred by every step that establishes a session: whatever it got
+// before failing (a cookie from a server that then failed the /me check) is not a session.
+func (a *Agent) endSessionOnError(err *error) {
+	if *err != nil {
+		a.endSession()
+	}
+}
+
+// register runs both phases. The AccountNumber and the pending token are written to the
+// identity file between them, as a person saves the number before confirming: a confirmation
+// that fails or is interrupted is finished by the next call or the next run (ensureSession),
+// while the server still holds the registration.
 func (a *Agent) register(ctx context.Context) error {
 	phase1, err := a.registerPreview(ctx)
 	if err != nil {
 		return err
 	}
-	if err := saveIdentity(a.idPath, &identityFile{Server: a.origin, AccountNumber: phase1.AccountNumber}); err != nil {
+	pending := &identityFile{Server: a.origin, AccountNumber: phase1.AccountNumber, PendingToken: phase1.PendingToken}
+	if err := saveIdentity(a.idPath, pending, false); err != nil {
 		return err
 	}
 	if err := a.adoptIdentity(phase1.AccountNumber); err != nil {
 		return err
 	}
+	a.pendingToken = phase1.PendingToken
 	logger.Info("identity file written; confirming the account")
 	return a.confirm(ctx, phase1.PendingToken)
+}
+
+// markConfirmed records that the account exists: the pending token leaves the identity file.
+func (a *Agent) markConfirmed() error {
+	if a.pendingToken == "" {
+		return nil
+	}
+	if err := confirmIdentityFile(a.idPath); err != nil {
+		return err
+	}
+	a.pendingToken = ""
+	logger.Info("account confirmed")
+	return nil
 }
 
 func (a *Agent) registerPreview(ctx context.Context) (*models.RegisterResponse, error) {
@@ -87,7 +125,8 @@ func validPendingToken(token string) bool {
 
 // confirm is phase 2, retried with a fresh proof of work after a passing failure; a 401 means
 // an earlier attempt created the account (or the registration expired): login decides.
-func (a *Agent) confirm(ctx context.Context, pendingToken string) error {
+func (a *Agent) confirm(ctx context.Context, pendingToken string) (err error) {
+	defer a.endSessionOnError(&err)
 	for attempt := 0; attempt < maxConfirmAttempts; attempt++ {
 		status, err := a.confirmOnce(ctx, pendingToken)
 		passing := (err != nil && CodeOf(err) == CodeNetwork) || (err == nil && status >= http.StatusInternalServerError)
@@ -99,6 +138,9 @@ func (a *Agent) confirm(ctx context.Context, pendingToken string) error {
 		case err != nil:
 			return err
 		case status == http.StatusCreated:
+			if err := a.markConfirmed(); err != nil {
+				return err
+			}
 			if a.session == nil {
 				return fail(CodeServerAnswer, nil)
 			}
@@ -126,8 +168,11 @@ func (a *Agent) confirmOnce(ctx context.Context, pendingToken string) (int, erro
 	return status, err
 }
 
-// login proves the account with its derived auth key; the AccountNumber never travels.
-func (a *Agent) login(ctx context.Context) error {
+// login proves the account with its derived auth key; the AccountNumber never travels. A 401
+// for an identity still pending means its registration expired unconfirmed.
+func (a *Agent) login(ctx context.Context) (err error) {
+	defer a.endSessionOnError(&err)
+	a.endSession()
 	var resp models.LoginResponse
 	status, err := a.public(ctx, http.MethodPost, pathLogin, models.LoginRequest{AuthKey: a.authKey}, &resp)
 	if err != nil {
@@ -135,9 +180,14 @@ func (a *Agent) login(ctx context.Context) error {
 	}
 	switch {
 	case status == http.StatusOK && resp.Success && a.session != nil:
+		if err := a.markConfirmed(); err != nil {
+			return err
+		}
 		return a.checkMe(ctx)
 	case status == http.StatusOK:
 		return fail(CodeServerAnswer, nil)
+	case status == http.StatusUnauthorized && a.pendingToken != "":
+		return fail(CodeIdentityUnconfirmed, nil)
 	case status == http.StatusUnauthorized:
 		return fail(CodeIdentityUnknown, nil)
 	default:
@@ -146,8 +196,9 @@ func (a *Agent) login(ctx context.Context) error {
 }
 
 // checkMe verifies that the server serves this identity's public key (as the browser does) and
-// takes the room limits it reports.
-func (a *Agent) checkMe(ctx context.Context) error {
+// takes the room limits it reports. Any failure ends the session (fail closed).
+func (a *Agent) checkMe(ctx context.Context) (err error) {
+	defer a.endSessionOnError(&err)
 	var me models.MeResponse
 	status, err := a.public(ctx, http.MethodGet, pathMe, nil, &me)
 	if err != nil {

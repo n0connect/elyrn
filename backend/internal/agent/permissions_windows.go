@@ -2,7 +2,19 @@
 
 package agent
 
-import "io/fs"
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"syscall"
+)
+
+// errorSharingViolation is ERROR_SHARING_VIOLATION: another handle holds the file without
+// sharing it.
+const errorSharingViolation = syscall.Errno(32)
+
+// lockShareMode shares the lock file with nobody: a second open fails until this handle closes.
+const lockShareMode = 0
 
 // checkPrivateMode accepts any mode on Windows. Go synthesises Windows modes from the read-only
 // attribute alone (0666 or 0444 for files, 0777 for directories), so they say nothing about who
@@ -17,6 +29,24 @@ func checkPrivateMode(fs.FileInfo) error {
 // syncDir does nothing on Windows: a directory cannot be opened for writing through os.Open, so
 // FlushFileBuffers on it fails, and NTFS journals metadata changes such as the new entry. The file's
 // own content was synced before it was linked into place.
-func syncDir(string) error {
+func syncDir(string, Code) error {
 	return nil
+}
+
+// lockFile opens path with no sharing at all, which Windows enforces across processes, and
+// holds it until the returned file is closed or the process ends.
+func lockFile(path string) (*os.File, error) {
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, fail(CodeIdentityFile, err)
+	}
+	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ|syscall.GENERIC_WRITE, lockShareMode, nil,
+		syscall.OPEN_ALWAYS, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		if errors.Is(err, errorSharingViolation) {
+			return nil, fail(CodeIdentityInUse, nil)
+		}
+		return nil, fail(CodeIdentityFile, err)
+	}
+	return os.NewFile(uintptr(handle), path), nil
 }

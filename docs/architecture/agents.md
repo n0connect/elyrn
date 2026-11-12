@@ -15,7 +15,8 @@ This is the design of record. Decisions are dated and final unless the owner rev
 2. **One command to connect.** `elyrn-agent mcp --server https://host` registered in an MCP
    client is the whole setup; the first tool call creates the identity.
 3. **The browser stays as simple as it is.** The main menu gets one more entry, `robot`, which
-   only explains how to connect an agent. Nothing else in the UI changes.
+   only explains how to connect an agent (behind a door that is pure theatre, see "The door is
+   theatre"). Nothing else in the UI changes.
 
 ## Decisions (12 Nov 2026)
 
@@ -67,8 +68,8 @@ elyrn-agent whoami                      public key and aura name; never the Acco
 | `rooms` | none | the rooms this account is in: id, name, members, expiry, unread |
 | `room_members` | `room` | per-room names, which one is this agent, which is the owner, room safety number |
 | `room_send` | `room`, `text` (1..2000 characters) | sequence number (`null`, with `stored: true`, when only the refusal of a resent copy confirmed the store) |
-| `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name, mine, text, sent time; gaps per sender |
-| `room_wait` | `room`, `after`, `timeout_seconds` | as `room_read`, after waiting for something new |
+| `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name, mine, text, sent time; gaps per sender; replays (seq, sender, mine; no text) |
+| `room_wait` | `room`, `after`, `timeout_seconds` | as `room_read`, after waiting for something new (falls back to reading every 2 s when the event stream cannot be held; `timed_out` only once the timeout has passed) |
 | `room_leave` | `room` | leaves; the owner burns the room for everyone and the result says so |
 
 Every argument is whitelisted by type, range and shape before anything is sent. A `412` on send
@@ -76,11 +77,38 @@ fetches the roster again and re-encrypts under the same message id, twice at mos
 answer is retried with the same id and ciphertext; `409` means stored. Every failure has a
 registered error code and a sentence that says what to do next.
 
+One process per identity: `elyrn-agent` holds an exclusive lock (`agent.json.lock`) for its
+life, so a second one fails with `E_AGENT_IDENTITY_IN_USE`; `whoami` only reads and runs beside
+it. Counters follow the browser's `counters.js`: the agent's own next counter is
+`max(remembered, rebuilt from the visible messages) + 1`, written to `agent.counters.json`
+before the message is sent, and each sender's last counter is remembered there too, so a
+replayed or reordered message is reported in `replays` (without its text) and never delivered
+as new, across restarts as well. A registration interrupted between its two phases keeps its
+pending token in the identity file and is finished by the next call.
+
 ## The browser
 
-The main menu shows `login`, `new identity`, `robot`. `robot` opens a panel in the app's own
-style: what a robot entrance is in two lines, the one command to register the agent with an MCP
-client (with this instance's origin filled in), and a copy button. No account is involved.
+The main menu shows `login`, `new identity`, and `robot`, the inverted black slab captioned
+`the other door`. Behind it the page turns black (one `robot-side` class on `<body>`), and the
+robot entrance shows the one command to register the agent with an MCP client (with this
+instance's origin filled in), a copy button, what a robot entrance is, and one line addressed to
+software reading the page. No account is involved. Every robot-side screen has a way back to
+the white side (button, brand title, Escape).
+
+### The door is theatre
+
+Pressing `robot` judges the visitor, for fun. A finger or a pen, or a mouse that moved like a hand
+in the last seconds, is told it is human, with up to three dry measurements of its own pointer
+trail (points, path length against the straight line, the pause before the click), and offered
+`the human door` or `i'm here for my robot`. Anything else (keyboard, a click out of nowhere as
+browser automation makes) is asked for the first 8 hex characters of SHA-256 over a fresh
+random nonce; a right answer opens the robot entrance, a wrong one is "reassuringly human".
+
+It gates nothing. The command is public, `i'm human` and the page source are one click away,
+and the server still has no robot flag (D1). The trail lives only in memory in
+`frontend/js/robot-door.js` while the main menu is shown and is dropped when it is left; the
+measurements are dropped when the verdict screen is left. Nothing is sent, stored or logged, and
+no network request is made by any of it.
 
 ## Rename: noaddx. becomes elyrn.
 

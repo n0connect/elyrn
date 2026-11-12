@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
+	"time"
 
 	"elyrn/internal/e2e"
 	"elyrn/internal/identity"
@@ -13,30 +16,40 @@ import (
 )
 
 // Config names the server (optional once the identity file holds one) and the identity file.
+// ReadOnly loads the identity without taking its lock or its counter file: such an agent
+// answers Whoami only, and may run beside the agent that holds the identity.
 type Config struct {
 	Server       string
 	IdentityPath string
+	ReadOnly     bool
 }
 
 // Agent is one account on one server. Its public methods are serialized: one call at a time.
 type Agent struct {
-	origin string
-	idPath string
-	client *http.Client
-	lock   *utils.SafeMutex
+	origin   string
+	idPath   string
+	readOnly bool
+	client   *http.Client
+	lock     *utils.SafeMutex
+	closed   bool     // guarded by lock
+	held     *os.File // the identity lock, held for the agent's life (nil when read-only)
 
 	// Derived from the AccountNumber when the identity is loaded; the number itself is not kept.
 	authKey   string
 	publicKey string
 	root      []byte
+	// pendingToken is set while the account is not confirmed yet (registration phase 2 to redo).
+	pendingToken string
 
-	session *http.Cookie
-	limits  *models.MeResponse
-	rooms   map[uuid.UUID]*roomState
+	session  *http.Cookie
+	limits   *models.MeResponse
+	rooms    map[uuid.UUID]*roomState
+	counters *counterState
 }
 
-// New validates the server address, loads the identity file if there is one, and checks that
-// both agree. It touches no network.
+// New validates the server address, takes the identity's lock (unless read-only), loads the
+// identity file if there is one and the counter file beside it, and checks that the address
+// and the identity agree. It touches no network.
 func New(cfg Config) (*Agent, error) {
 	origin := ""
 	if cfg.Server != "" {
@@ -48,36 +61,80 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.IdentityPath == "" {
 		return nil, fail(CodeIdentityFile, nil)
 	}
-	stored, err := loadIdentity(cfg.IdentityPath)
-	if err != nil {
+	a := &Agent{
+		idPath:   cfg.IdentityPath,
+		readOnly: cfg.ReadOnly,
+		lock:     utils.NewSafeMutexWithTimeout(callLockTimeout),
+		rooms:    make(map[uuid.UUID]*roomState),
+	}
+	if !cfg.ReadOnly {
+		if err := a.takeIdentityLock(); err != nil {
+			return nil, err
+		}
+	}
+	if err := a.load(origin); err != nil {
+		a.releaseIdentityLock()
 		return nil, err
+	}
+	return a, nil
+}
+
+// takeIdentityLock holds agent.json.lock for the agent's life (second process: fails fast with
+// E_AGENT_IDENTITY_IN_USE), then sweeps temporary files an interrupted write left behind.
+func (a *Agent) takeIdentityLock() error {
+	dir := filepath.Dir(a.idPath)
+	if err := ensurePrivateDir(dir, CodeIdentityFile); err != nil {
+		return err
+	}
+	held, err := lockFile(lockPath(a.idPath))
+	if err != nil {
+		return err
+	}
+	a.held = held
+	sweepTemps(dir)
+	return nil
+}
+
+func (a *Agent) releaseIdentityLock() {
+	if a.held != nil {
+		_ = a.held.Close()
+		a.held = nil
+	}
+}
+
+// load reads the identity and, for a writable agent, the counter file.
+func (a *Agent) load(origin string) error {
+	stored, err := loadIdentity(a.idPath)
+	if err != nil {
+		return err
 	}
 	proxy, err := proxyFunc()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	a := &Agent{
-		idPath: cfg.IdentityPath,
-		client: newHTTPClient(proxy),
-		lock:   utils.NewSafeMutexWithTimeout(callLockTimeout),
-		rooms:  make(map[uuid.UUID]*roomState),
-	}
+	a.client = newHTTPClient(proxy)
 	if stored != nil {
 		if origin != "" && origin != stored.Server {
-			return nil, fail(CodeServerMismatch, nil)
+			return fail(CodeServerMismatch, nil)
 		}
 		origin = stored.Server
 		if err := a.adoptIdentity(stored.AccountNumber); err != nil {
-			return nil, err
+			return err
 		}
+		a.pendingToken = stored.PendingToken
 	}
 	a.origin = origin
 	if origin != "" {
 		if err := requireProxyForOnion(origin, proxy); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return a, nil
+	if !a.readOnly {
+		if a.counters, err = loadCounterState(statePath(a.idPath), stored != nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RequireServer fails unless a server is known (from --server or the identity file).
@@ -106,12 +163,40 @@ func (a *Agent) adoptIdentity(accountNumber string) error {
 	return nil
 }
 
-// Close wipes the rooms root; the agent is unusable afterwards.
+// Close waits (at most shutdownWait) for the call in flight to return, which a cancelled
+// context makes prompt, then wipes the rooms root and releases the identity lock; the agent
+// refuses every call afterwards. If the call does not return in time, nothing is touched under
+// it: the process is ending anyway, and the operating system releases the lock. Close may be
+// called more than once.
 func (a *Agent) Close() {
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		a.closeAfterCall()
+	}()
+	timer := time.NewTimer(shutdownWait)
+	defer timer.Stop()
+	select {
+	case <-closed:
+	case <-timer.C:
+		logger.Warn("the call in flight did not end within the shutdown bound")
+	}
+}
+
+// closeAfterCall takes the call lock, so it runs once the call in flight has returned.
+func (a *Agent) closeAfterCall() {
+	if err := a.lock.Lock(); err != nil {
+		return
+	}
+	defer a.lock.Unlock()
+	a.closed = true
 	zeroBytes(a.root)
 	a.root = nil
 	a.rooms = nil
 	a.session = nil
+	a.limits = nil
+	a.pendingToken = ""
+	a.releaseIdentityLock()
 }
 
 // serialized runs one public call under the agent's lock.
@@ -120,7 +205,18 @@ func (a *Agent) serialized(call func() error) error {
 		return fail(CodeBusy, err)
 	}
 	defer a.lock.Unlock()
+	if a.closed {
+		return fail(CodeStopped, nil)
+	}
 	return call()
+}
+
+// requireWritable refuses network calls on a read-only agent (Whoami is all it answers).
+func (a *Agent) requireWritable() error {
+	if a.readOnly {
+		return fail(CodeInternal, nil)
+	}
+	return nil
 }
 
 // Identity creates the account on first use (two proofs of work), logs in, and reports the

@@ -40,6 +40,9 @@ const (
 	headerTimeout      = 20 * time.Second
 	idleConnTimeout    = 90 * time.Second
 	backoffBase        = 500 * time.Millisecond
+	shutdownWait       = 10 * time.Second       // Close waits this long for the call in flight
+	streamReopenBase   = 250 * time.Millisecond // room_wait: pause before the next stream open, doubled each time
+	waitPollInterval   = 2 * time.Second        // room_wait: a read this often once the stream cannot be held
 	callLockTimeout    = MaxWaitTimeout + 2*requestTimeout
 	DefaultWaitTimeout = 60 * time.Second
 	MinWaitTimeout     = time.Second
@@ -52,7 +55,9 @@ const (
 	maxErrorBodyBytes      = 4 << 10
 	maxSSELineBytes        = 1024
 	maxSSELines            = 100000
-	maxStreamOpens         = 4
+	maxStreamOpens         = 4    // room_wait: stream opens before it falls back to reading every waitPollInterval
+	maxSeenMessageIDs      = 4096 // per room: message ids remembered with their seq (replay detection)
+	maxPendingReplays      = 64
 	maxListedConversations = 1024
 	maxPageMessages        = 1000
 	maxSyncPages           = 64

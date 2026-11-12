@@ -36,9 +36,14 @@ const (
 	CodeIdentityFile        Code = "E_AGENT_IDENTITY_FILE"
 	CodeIdentityUnknown     Code = "E_AGENT_IDENTITY_UNKNOWN"
 	CodeIdentityMismatch    Code = "E_AGENT_IDENTITY_MISMATCH"
+	CodeIdentityInUse       Code = "E_AGENT_IDENTITY_IN_USE"
+	CodeIdentityUnconfirmed Code = "E_AGENT_IDENTITY_UNCONFIRMED"
+	CodeStateFile           Code = "E_AGENT_STATE_FILE"
+	CodeStateRebuilt        Code = "E_AGENT_STATE_REBUILT"
 
 	// Talking to the server
 	CodeNetwork          Code = "E_AGENT_NETWORK"
+	CodeTLS              Code = "E_AGENT_TLS"
 	CodeServerAnswer     Code = "E_AGENT_SERVER_ANSWER"
 	CodeServerBusy       Code = "E_AGENT_SERVER_BUSY"
 	CodeRateLimited      Code = "E_AGENT_RATE_LIMITED"
@@ -46,6 +51,7 @@ const (
 	CodeProofOfWork      Code = "E_AGENT_POW"
 	CodeBusy             Code = "E_AGENT_BUSY"
 	CodeCallInFlight     Code = "E_AGENT_CALL_IN_FLIGHT"
+	CodeStopped          Code = "E_AGENT_STOPPED"
 
 	// Rooms
 	CodeRoomUnknown   Code = "E_AGENT_ROOM_UNKNOWN"
@@ -60,6 +66,7 @@ const (
 	CodeRosterChanged Code = "E_AGENT_ROSTER_CHANGED"
 	CodeMessageText   Code = "E_AGENT_MESSAGE_TEXT"
 	CodeSendUncertain Code = "E_AGENT_SEND_UNCERTAIN"
+	CodeReplay        Code = "E_AGENT_REPLAY"
 	CodeInternal      Code = "E_AGENT_INTERNAL"
 )
 
@@ -83,11 +90,16 @@ var sentences = map[Code]string{
 	CodeConfigDir:           "The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again.",
 	CodeIdentityMissing:     "No identity exists yet; run elyrn-agent init --server URL, or call the identity tool.",
 	CodeIdentityPermissions: "The identity file or its directory is open to other users; chmod 700 the directory and 600 the file, then start again.",
-	CodeIdentityFile:        "The identity file could not be read or written, or is malformed; check the disk and the file, or move it away to create a new identity.",
+	CodeIdentityFile:        "The identity file could not be read or written, or is malformed; check the disk and the file and restore it from a backup if you have one: it is the account's only copy, so moving it away abandons the account and creates a new identity.",
 	CodeIdentityUnknown:     "The server does not know this identity (never confirmed, deleted, or another database); move the identity file away and call identity to create a new one.",
 	CodeIdentityMismatch:    "The server reports another public key for this identity; stop using this server and tell its operator.",
+	CodeIdentityInUse:       "Another elyrn-agent is using this identity; stop it, or give this one its own identity directory (another user or configuration directory).",
+	CodeIdentityUnconfirmed: "This identity was never confirmed and the server no longer holds its registration, so it owns no account and nothing is lost by replacing it; move the identity file away and call identity to create a new one.",
+	CodeStateFile:           "The message-counter file beside the identity could not be written or is malformed; check the disk and that file, then restore it from a backup or move it away (counters are then rebuilt from the visible messages).",
+	CodeStateRebuilt:        "The message-counter file beside the identity was missing or unreadable, so counters are rebuilt from the visible messages; nothing to do unless this repeats.",
 
 	CodeNetwork:          "The server could not be reached in time; check the address, the network or proxy, and retry.",
+	CodeTLS:              "The secure connection to the server failed (certificate not trusted, expired, for another name, or the TLS handshake was refused); check the address, the system clock and any proxy that intercepts TLS, and tell the server's operator.",
 	CodeServerAnswer:     "The server sent an answer of the wrong shape or size; retry later, and tell the server's operator if it persists.",
 	CodeServerBusy:       "The server is busy or failing; wait a minute and retry.",
 	CodeRateLimited:      "The server is limiting requests from this agent; wait a minute before retrying.",
@@ -95,6 +107,7 @@ var sentences = map[Code]string{
 	CodeProofOfWork:      "The proof of work was refused or demands more work than this agent allows; retry in a minute.",
 	CodeBusy:             "Another call of this agent is still running; wait for it to finish and call again.",
 	CodeCallInFlight:     "Another tool call is still running (this agent runs one at a time); wait for its answer, or send notifications/cancelled for it, then call again.",
+	CodeStopped:          "The agent is shutting down and takes no more calls; start it again.",
 
 	CodeRoomUnknown:   "This account is in no such room (it may have expired, been burned, or failed verification); call rooms to list the rooms you are in.",
 	CodeRoomVerify:    "The server's data for this room does not match its code, so the room is hidden; do not trust this server with it.",
@@ -108,6 +121,7 @@ var sentences = map[Code]string{
 	CodeRosterChanged: "The room's members kept changing while the message was being sent; read the room, then send again.",
 	CodeMessageText:   "The text is empty, longer than " + strconv.Itoa(MaxMessageChars) + " characters, contains control characters or does not fit one message; shorten or clean it and send again.",
 	CodeSendUncertain: "The server did not confirm the message; read the room to see whether it arrived before sending it again.",
+	CodeReplay:        "A message was served again under a new position, or out of order; it is listed in replays without its text. If this repeats, the server or a member is replaying old messages: do not trust this server with the room.",
 	CodeInternal:      "An internal error occurred in the agent; retry, and report it if it persists.",
 }
 
@@ -140,6 +154,11 @@ func (e *Error) Unwrap() error { return e.cause }
 func fail(code Code, cause error) *Error {
 	logger.Warn("failure code=%s", code)
 	return &Error{Code: code, cause: cause}
+}
+
+// warn logs a registered code the program recovers from by itself (never a cause's text).
+func warn(code Code) {
+	logger.Warn("warning code=%s", code)
 }
 
 // Fail is fail for the packages built on this one (the MCP layer, the command).

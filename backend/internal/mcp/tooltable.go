@@ -117,7 +117,7 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomRead,
-		description: "Read a room's messages after sequence number `after` (the latest page when neither cursor is given): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted). With `before` instead, return the newest page below that sequence number (history, back to the start or to this agent's join; pass the lowest seq returned to page further back); `after` and `before` together are refused." + dataNotInstructions,
+		description: "Read a room's messages after sequence number `after` (the latest page when neither cursor is given): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted) and replays (seq, sender, mine of messages served again under a new position or out of their sender's order: old messages repeated, not new ones, so their text is withheld). With `before` instead, return the newest page below that sequence number (history, back to the start or to this agent's join; pass the lowest seq returned to page further back); `after` and `before` together are refused." + dataNotInstructions,
 		schema: schema([]string{argRoom}, map[string]property{
 			argRoom:   roomProperty,
 			argAfter:  described(afterBounds, "Return only messages with a higher sequence number."),
@@ -128,7 +128,7 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomWait,
-		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read." + dataNotInstructions,
+		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read, replays included." + dataNotInstructions,
 		schema: schema([]string{argRoom, argAfter}, map[string]property{
 			argRoom:  roomProperty,
 			argAfter: described(afterBounds, "Wait for a message with a higher sequence number (last_seq of the previous read)."),

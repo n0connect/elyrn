@@ -83,90 +83,125 @@ func (a *Agent) fetchPage(ctx context.Context, st *roomState, query string) ([]m
 }
 
 // pageWindow is what a served page must fit: seq above after and, when before is positive,
-// below it; counters are judged against ledger (a sender's last counter seen).
+// below it; counters are judged on ledger (counters.go).
 type pageWindow struct {
 	after  int64
 	before int64
-	ledger map[string]int64
+	ledger *ledger
 }
 
-// forwardWindow is a page of new messages: judged against, and raising, the room's ledger.
-func (st *roomState) forwardWindow(after int64) pageWindow {
-	return pageWindow{after: after, ledger: st.peerLastN}
+// forwardWindow is a page of new messages: judged against, and later raising, the room's record.
+func (st *roomState) forwardWindow(after int64, l *ledger) pageWindow {
+	return pageWindow{after: after, ledger: l}
 }
 
-// historyWindow is a page older than everything read so far: its counters are below the ones
-// already seen, so it is judged on its own ledger and never lowers or raises the room's.
-func historyWindow(before int64) pageWindow {
-	return pageWindow{before: before, ledger: make(map[string]int64)}
+// historyWindow is a page older than everything read so far: judged on its own ledger, it
+// measures gaps inside the page only and never changes the room's record.
+func (st *roomState) historyWindow(before int64) pageWindow {
+	return pageWindow{before: before, ledger: newLedger(st.counters, true)}
+}
+
+// opened is one page, verified and decrypted.
+type opened struct {
+	messages []Message
+	replays  []Replay
+	gaps     []Gap
+	last     int64
 }
 
 // openPage verifies and decrypts a page in sequence order, as chat.js sync does: a message of
-// the wrong shape, out of order, outside the window or seen before is dropped; one that fails
-// to open is "broken".
-func (st *roomState) openPage(page []models.MessageDTO, window pageWindow) ([]Message, []Gap, int64) {
-	messages := make([]Message, 0, len(page))
-	var gaps []Gap
-	seen := make(map[uuid.UUID]struct{}, len(page))
-	maxSeq := window.after
+// the wrong shape, out of order, outside the window or repeated within the page is dropped; one
+// that fails to open is "broken"; one whose counter or id says it was served before is a replay
+// and is reported without its text, never delivered as new.
+func (st *roomState) openPage(page []models.MessageDTO, window pageWindow) *opened {
+	out := &opened{messages: make([]Message, 0, len(page)), last: window.after}
+	inPage := make(map[uuid.UUID]struct{}, len(page))
 	for _, raw := range page {
 		id, ok := utils.ParseCanonicalUUIDv4(raw.ID)
-		if _, dup := seen[id]; !ok || dup || raw.Seq <= maxSeq || raw.Seq > maxSafeSeq ||
+		if _, dup := inPage[id]; !ok || dup || raw.Seq <= out.last || raw.Seq > maxSafeSeq ||
 			(window.before > 0 && raw.Seq >= window.before) || len(raw.Ciphertext) > maxCiphertextChars {
 			logger.Warn("a served message was dropped: shape, order or repeat")
 			continue
 		}
-		seen[id] = struct{}{}
-		maxSeq = raw.Seq
-		message, gap := st.openOne(id, raw, window.ledger)
-		messages = append(messages, message)
-		if gap != nil {
-			gaps = append(gaps, *gap)
+		inPage[id] = struct{}{}
+		out.last = raw.Seq
+		message, judged := st.openOne(id, raw, window.ledger)
+		switch {
+		case judged.replay:
+			out.replays = append(out.replays, Replay{Seq: message.Seq, Sender: message.Sender, Mine: message.Mine})
+		default:
+			out.messages = append(out.messages, message)
+			if judged.gap > 0 {
+				out.gaps = append(out.gaps, Gap{Sender: message.Sender, Missing: judged.gap})
+			}
 		}
 	}
-	return messages, gaps, maxSeq
+	if len(out.replays) > 0 {
+		warn(CodeReplay)
+	}
+	return out
 }
 
-// openOne authenticates the sender, checks the server's "mine" flag and tracks counters per
-// sender; a jump in a sender's counter is a gap (chat.js openRoomMessage).
-func (st *roomState) openOne(id uuid.UUID, raw models.MessageDTO, ledger map[string]int64) (Message, *Gap) {
+// openOne authenticates the sender, checks the server's "mine" flag and judges the sender's
+// counter (chat.js openRoomMessage and checkCounter), this account's own messages included.
+func (st *roomState) openOne(id uuid.UUID, raw models.MessageDTO, l *ledger) (Message, verdict) {
 	broken := Message{Seq: raw.Seq, Mine: raw.Mine, Broken: true}
 	plain, err := st.keys.OpenMessage(st.member, id, raw.Ciphertext)
-	if err != nil {
-		return broken, nil
+	if err != nil || plain.Counter > maxSafeSeq {
+		return broken, verdict{}
 	}
 	mine := bytes.Equal(plain.Sender, st.member.Public)
 	if mine != raw.Mine {
-		return broken, nil
+		return broken, verdict{}
 	}
 	message := Message{Seq: raw.Seq, Mine: mine, Text: neutralize(plain.Text),
-		SentAt: time.UnixMilli(plain.SentAt).UTC().Format(time.RFC3339Nano)}
+		SentAt: time.UnixMilli(plain.SentAt).UTC().Format(time.RFC3339Nano), Sender: st.selfName}
 	if mine {
-		st.myMaxN = max(st.myMaxN, plain.Counter)
-		message.Sender = st.selfName
-		return message, nil
+		st.counters.raiseMine(plain.Counter) // counters only rise, whatever the verdict
+	} else {
+		aura, err := e2e.AuraOf(plain.Sender)
+		if err != nil {
+			return broken, verdict{}
+		}
+		message.Sender = aura.Name
 	}
-	aura, err := e2e.AuraOf(plain.Sender)
-	if err != nil {
-		return broken, nil
+	if first, known := st.seen[id]; known && (first.seq != raw.Seq || first.replay) {
+		return message, verdict{replay: true} // moved to a new position, or judged a replay before
 	}
-	message.Sender = aura.Name
-	return message, noteCounter(ledger, plain.Sender, plain.Counter, aura.Name)
+	sender := senderKey(plain.Sender)
+	judged := l.judge(sender, plain.Counter, raw.Seq)
+	if !judged.replay {
+		l.admit(sender, plain.Counter)
+	}
+	st.remember(id, raw.Seq, judged.replay)
+	return message, judged
 }
 
-// noteCounter returns the gap before counter in ledger, if any. The first message seen from a
-// sender is the baseline (older ones may have expired).
-func noteCounter(ledger map[string]int64, sender []byte, counter int64, name string) *Gap {
-	key := string(sender)
-	last, known := ledger[key]
-	if !known && len(ledger) >= maxTrackedSenders {
-		return nil
+// seenMessage is where a message id was first served and whether it was judged a replay: a
+// later read of the same page must neither deliver that replay as history nor accept the id
+// under another seq.
+type seenMessage struct {
+	seq    int64
+	replay bool
+}
+
+// remember records a judged message id for the life of the process, bounded per room.
+func (st *roomState) remember(id uuid.UUID, seq int64, replay bool) {
+	if first, known := st.seen[id]; known {
+		st.seen[id] = seenMessage{seq: seq, replay: first.replay || replay}
+		return
 	}
-	ledger[key] = max(last, counter)
-	if last > 0 && counter > last+1 {
-		return &Gap{Sender: name, Missing: counter - last - 1}
+	if len(st.seen) < maxSeenMessageIDs {
+		st.seen[id] = seenMessage{seq: seq, replay: replay}
 	}
-	return nil
+}
+
+// settleLedger raises the room's record with what a forward sequence saw, up to seq, and
+// persists it when it (or this account's own counter, mineBefore) changed.
+func (a *Agent) settleLedger(st *roomState, l *ledger, seq, mineBefore int64) {
+	if l.snapshot(st.counters, seq) || st.counters.Mine != mineBefore {
+		a.persistCountersAfterRead()
+	}
 }
 
 // read fetches, verifies and decrypts one page and moves the read marker.
@@ -179,14 +214,26 @@ func (a *Agent) read(ctx context.Context, st *roomState, after *int64) (*ReadRes
 	if after != nil {
 		from = *after
 	}
-	messages, gaps, last := st.openPage(page, st.forwardWindow(from))
-	gaps = append(st.pendingGaps, gaps...)
-	st.pendingGaps = nil
-	a.markRead(ctx, st, last)
+	mineBefore := st.counters.Mine
+	l := newLedger(st.counters, false)
+	got := st.openPage(page, st.forwardWindow(from, l))
+	a.settleLedger(st, l, got.last, mineBefore)
+	gaps := append(st.pendingGaps, got.gaps...)
+	replays := append(st.pendingReplays, got.replays...)
+	st.pendingGaps, st.pendingReplays = nil, nil
+	a.markRead(ctx, st, got.last)
+	return newReadResult(st, got.messages, gaps, replays, got.last), nil
+}
+
+// newReadResult never answers null for a list.
+func newReadResult(st *roomState, messages []Message, gaps []Gap, replays []Replay, last int64) *ReadResult {
 	if gaps == nil {
 		gaps = []Gap{}
 	}
-	return &ReadResult{Room: st.id.String(), Messages: messages, Gaps: gaps, LastSeq: last}, nil
+	if replays == nil {
+		replays = []Replay{}
+	}
+	return &ReadResult{Room: st.id.String(), Messages: messages, Gaps: gaps, Replays: replays, LastSeq: last}
 }
 
 // markRead advances the read marker so the listing's unread count stays true; a failure costs
@@ -203,26 +250,33 @@ func (a *Agent) markRead(ctx context.Context, st *roomState, seq int64) {
 	st.readSeq = seq
 }
 
-// syncCounters reads every visible message once before this agent's first send in a room, so
-// its counter continues where it stopped and never repeats. Gaps found wait for the next read.
+// syncCounters reads every visible message once before this agent's first send in a room
+// (one loaded sequence), so its counter continues where it stopped even without the counter
+// file, and never repeats. Gaps and replays found wait for the next read.
 func (a *Agent) syncCounters(ctx context.Context, st *roomState) error {
 	cursor := int64(0)
+	mineBefore := st.counters.Mine
+	l := newLedger(st.counters, false)
 	for page := 0; page < maxSyncPages && !st.countersKnown; page++ {
 		raw, err := a.fetchPage(ctx, st, afterQuery(&cursor))
 		if err != nil {
 			return err
 		}
-		messages, gaps, last := st.openPage(raw, st.forwardWindow(cursor))
-		if len(st.pendingGaps)+len(gaps) <= maxPendingGaps {
-			st.pendingGaps = append(st.pendingGaps, gaps...)
+		got := st.openPage(raw, st.forwardWindow(cursor, l))
+		if len(st.pendingGaps)+len(got.gaps) <= maxPendingGaps {
+			st.pendingGaps = append(st.pendingGaps, got.gaps...)
 		}
-		st.countersKnown = len(messages) == 0
-		cursor = last
+		if len(st.pendingReplays)+len(got.replays) <= maxPendingReplays {
+			st.pendingReplays = append(st.pendingReplays, got.replays...)
+		}
+		st.countersKnown = len(got.messages)+len(got.replays) == 0
+		cursor = got.last
 	}
 	if !st.countersKnown {
 		logger.Warn("counter sync stopped at its page bound")
 		st.countersKnown = true
 	}
+	a.settleLedger(st, l, cursor, mineBefore)
 	return nil
 }
 
@@ -259,11 +313,8 @@ func (a *Agent) ReadBefore(ctx context.Context, id uuid.UUID, before int64) (*Re
 		if err != nil {
 			return err
 		}
-		messages, gaps, last := st.openPage(page, historyWindow(before))
-		if gaps == nil {
-			gaps = []Gap{}
-		}
-		result = &ReadResult{Room: st.id.String(), Messages: messages, Gaps: gaps, LastSeq: last}
+		got := st.openPage(page, st.historyWindow(before))
+		result = newReadResult(st, got.messages, got.gaps, got.replays, got.last)
 		return nil
 	})
 	return result, err

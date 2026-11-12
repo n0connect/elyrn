@@ -31,10 +31,11 @@ type roomState struct {
 	rosterCards []string      // every card as served: the digest covers them all
 	skipped     int           // cards that failed to open: counted, never wrapped for
 
-	countersKnown bool             // every visible message was read once, so myMaxN is final
-	myMaxN        int64            // this account's highest counter in the room
-	peerLastN     map[string]int64 // per sender key: their highest counter seen
-	pendingGaps   []Gap            // found while syncing counters, reported by the next read
+	countersKnown  bool                      // every visible message was read once, so counters.Mine is final
+	counters       *counterRecord            // what this agent remembers of the room (persisted, state.go)
+	seen           map[uuid.UUID]seenMessage // message id → where it was served, and the verdict (bounded)
+	pendingGaps    []Gap                     // found while syncing counters, reported by the next read
+	pendingReplays []Replay                  // likewise
 }
 
 func isCount(value, max int) bool { return value >= 0 && value <= max }
@@ -89,7 +90,7 @@ func (a *Agent) roomFromCode(id uuid.UUID, code *e2e.RoomCode, vault string, ite
 	st := &roomState{
 		id: id, name: roomAura.Name, selfName: self.Name, vault: vault, keys: keys, member: member,
 		maxMembers: code.MaxMembers, expiresAt: time.Unix(code.ExpiresAt(), 0),
-		peerLastN: make(map[string]int64),
+		counters: a.counters.record(id), seen: make(map[uuid.UUID]seenMessage),
 	}
 	return st, st.refreshView(item)
 }
@@ -138,6 +139,9 @@ func (a *Agent) listRooms(ctx context.Context) ([]*roomState, error) {
 		}
 	}
 	a.rooms = next
+	if a.counters.prune(next) {
+		a.persistCountersAfterRead()
+	}
 	return ordered, nil
 }
 
@@ -167,8 +171,16 @@ func (a *Agent) room(ctx context.Context, id uuid.UUID) (*roomState, error) {
 
 // forget drops a room the server no longer serves to this account.
 func (a *Agent) forget(id uuid.UUID) error {
-	delete(a.rooms, id)
+	a.drop(id)
 	return fail(CodeRoomUnknown, nil)
+}
+
+// drop forgets a room this account is no longer in, with its counter record.
+func (a *Agent) drop(id uuid.UUID) {
+	delete(a.rooms, id)
+	if a.counters.drop(id) {
+		a.persistCountersAfterRead()
+	}
 }
 
 // Rooms lists the verified rooms this account is in.
@@ -204,7 +216,7 @@ func (a *Agent) Leave(ctx context.Context, id uuid.UUID) (*Left, error) {
 		}
 		switch status {
 		case http.StatusNoContent:
-			delete(a.rooms, id)
+			a.drop(id)
 			result = &Left{Room: id.String(), Burned: st.owner}
 			return nil
 		case http.StatusNotFound:

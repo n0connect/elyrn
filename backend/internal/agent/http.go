@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
@@ -79,10 +80,26 @@ func (a *Agent) open(ctx context.Context, method, path string, body any, accept 
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return nil, fail(CodeNetwork, err)
+		return nil, fail(transportCode(err), err)
 	}
 	a.takeSession(resp)
 	return resp, nil
+}
+
+// transportCode tells a failed TLS handshake or certificate (not worth retrying, and a matter
+// for the operator) from a server that could not be reached.
+func transportCode(err error) Code {
+	var verifyErr *tls.CertificateVerificationError
+	var authorityErr x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	var invalidErr x509.CertificateInvalidError
+	var alertErr tls.AlertError
+	var headerErr tls.RecordHeaderError
+	if errors.As(err, &verifyErr) || errors.As(err, &authorityErr) || errors.As(err, &hostErr) ||
+		errors.As(err, &invalidErr) || errors.As(err, &alertErr) || errors.As(err, &headerErr) {
+		return CodeTLS
+	}
+	return CodeNetwork
 }
 
 // takeSession keeps the session cookie (sliding expiry re-issues it) and drops a cleared one.
@@ -146,7 +163,7 @@ func (a *Agent) api(ctx context.Context, method, path string, body, out any) (in
 		return 0, err
 	}
 	if ans.status == http.StatusUnauthorized {
-		a.session = nil
+		a.endSession()
 		if err := a.login(ctx); err != nil {
 			return 0, err
 		}
