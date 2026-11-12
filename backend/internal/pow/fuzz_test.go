@@ -71,8 +71,9 @@ const (
 func FuzzTagMutation(f *testing.F) {
 	f.Setenv("POW_DIFFICULTY", "18")
 	ch := issue(f)
-	f.Add(uint8(mutateChallenge), strings.ToUpper(ch.Challenge), int64(0))
-	f.Add(uint8(mutateSalt), ch.Salt[1:]+"0", int64(0))
+	// Seeds are fixed text: the issued challenge and the MAC secret differ in every fuzz process
+	f.Add(uint8(mutateChallenge), strings.Repeat("AB", ChallengeBytes), int64(0))
+	f.Add(uint8(mutateSalt), strings.Repeat("0", 2*SaltBytes), int64(0))
 	f.Add(uint8(mutateTimestamp), "", int64(1))
 	f.Add(uint8(mutateTTL), "", int64(-1))
 	f.Add(uint8(mutateDifficulty), "", int64(1)<<32)

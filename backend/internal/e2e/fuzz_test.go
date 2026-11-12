@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"elyrn/internal/cryptoengine"
 	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
@@ -262,14 +263,18 @@ func FuzzOpenRoomNote(f *testing.F) {
 	})
 }
 
-// FuzzOpenRoomCard: only a card a code holder sealed opens, and it yields that member's key.
+// FuzzOpenRoomCard: a card opens only to one of the room's member keys (deterministic from the
+// accounts, so every fuzz process judges alike), a browser vector card opens to its own key,
+// and a card that keeps a vector card's nonce but changes anything else never opens. Cards
+// sealed in this process (random nonces) are seeds only: any process opens them to their key.
 func FuzzOpenRoomCard(f *testing.F) {
 	v := loadVectorRoom(f)
-	known := map[string][]byte{browserCardA: v.a.member.Public, browserCardB: v.b.member.Public,
-		v.a.member.Card: v.a.member.Public, v.b.member.Card: v.b.member.Public, v.c.member.Card: v.c.member.Public}
-	for card := range known {
+	members := [][]byte{v.a.member.Public, v.b.member.Public, v.c.member.Public}
+	vectors := map[string][]byte{browserCardA: v.a.member.Public, browserCardB: v.b.member.Public}
+	for _, card := range []string{browserCardA, browserCardB, v.a.member.Card, v.b.member.Card, v.c.member.Card} {
 		f.Add(card)
 		f.Add(flip(f, card, 0))
+		f.Add(flip(f, card, roomCardSize-1))
 	}
 	f.Add("")
 	f.Add(browserCardA + "A")
@@ -278,8 +283,22 @@ func FuzzOpenRoomCard(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if want, ok := known[card]; !ok || !bytes.Equal(public, want) {
-			t.Fatalf("an unknown card opened: %q", card)
+		raw, decodeErr := decodeExact(card, roomCardSize)
+		member := false
+		for _, key := range members {
+			member = member || bytes.Equal(public, key)
+		}
+		if decodeErr != nil || !member {
+			t.Fatalf("card %q opened to a key no member holds", card)
+		}
+		for vector, key := range vectors {
+			vectorRaw := mustDecode(t, vector)
+			if card == vector && !bytes.Equal(public, key) {
+				t.Fatalf("vector card %q opened to another key", card)
+			}
+			if card != vector && bytes.Equal(raw[:cryptoengine.GCMNonceSize], vectorRaw[:cryptoengine.GCMNonceSize]) {
+				t.Fatalf("a changed vector card opened: %q", card)
+			}
 		}
 	})
 }
