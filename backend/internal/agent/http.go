@@ -225,12 +225,16 @@ func (a *Agent) public(ctx context.Context, method, path string, body, out any) 
 }
 
 // settleAnswer hands the caller the status of an answer, or the error of an edge refusal
-// (edgeFailure) in place of a status it could misread; out is decoded from a 200 or 201.
+// (edgeFailure) or of a body that does not decode, in place of a status it could misread: a
+// failure never comes with a status. out is decoded from a 200 or 201.
 func settleAnswer(ans *answer, out any) (int, error) {
 	if err := edgeFailure(ans); err != nil {
 		return 0, err
 	}
-	return ans.status, decodeAnswer(ans, out)
+	if err := decodeAnswer(ans, out); err != nil {
+		return 0, err
+	}
+	return ans.status, nil
 }
 
 // api is one authenticated exchange: a 401 means the session expired, so it logs in again and

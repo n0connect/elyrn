@@ -137,12 +137,11 @@ export async function fuzz(seed, iterations, body) {
         try {
             await body(r, i);
         } catch (error) {
+            // A new error: reporters print the stack, which an error fixes at construction, so
+            // editing the original's message would not show; the original stays as the cause
             const where = `[fuzz seed=0x${(start >>> 0).toString(16)} iteration=${i}]`;
-            if (error && typeof error === 'object') {
-                error.message = `${where} ${error.message}`;
-                throw error;
-            }
-            throw new Error(`${where} ${String(error)}`);
+            const detail = error && typeof error === 'object' ? error.message : String(error);
+            throw new Error(`${where} ${detail}`, { cause: error });
         }
     }
 }

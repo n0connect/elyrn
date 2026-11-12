@@ -78,7 +78,11 @@ async function check(r, i, status, type, bytes) {
     const path = `/fuzz-${i}-${r.int(0, 1e9)}`;
     plans.set(path, { status, type, chunks: chunked(r, bytes), declare: r.bool() });
     try {
-        const result = await get('apiCall')(r.pick(['GET', 'POST']), path, r.bool() ? undefined : { k: r.string(r.int(0, 8)) });
+        // Fetch refuses a GET with a body before sending anything (TypeError), so only a POST
+        // carries one, as every caller of apiCall does
+        const method = r.pick(['GET', 'POST']);
+        const body = method === 'POST' && r.bool() ? { k: r.string(r.int(0, 8)) } : undefined;
+        const result = await get('apiCall')(method, path, body);
         if (bytes.length > MAX) {
             assert.deepEqual(plain(result), { ok: false, status: 0, data: null, timedOut: false, tooLarge: true });
             return;
