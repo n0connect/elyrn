@@ -154,6 +154,8 @@ const Chat = (() => {
 
     // ---------- conversations ----------
 
+    // Brings the local list in line with the server's: merges what is listed, drops what is
+    // gone, re-renders, and puts away an invite someone has just redeemed
     async function refreshConversations() {
         const result = await api('GET', '/conversations');
         if (!me) return;
@@ -162,11 +164,36 @@ const Chat = (() => {
             return;
         }
 
+        const listed = await mergeListed(result.data.conversations);
+        if (!listed) return;
+        dropUnlisted(listed.seen);
+        order = listed.order;
+        listLoaded = true;
+        renderList();
+        const active = conversations.get(activeId);
+        if (active && listed.reopen) {
+            open(active.id);
+        } else if (active && active.room) {
+            refreshActiveRoom(active);
+        }
+
+        // Someone redeemed an invite: the code on screen is spent, so put it away
+        // (unless a new one is being made, which nobody can have redeemed yet)
+        if (listed.joined && !inviteRun && document.getElementById('invitePanel').style.display !== 'none') {
+            togglePairPanel(null);
+            showSuccess('someone joined with your invite');
+        }
+    }
+
+    // Takes in the server's listed conversations: new ones are verified and added, known ones
+    // are checked for tampering and their sequence numbers advanced. Returns { seen, order,
+    // joined, reopen }, or null when the session ended while a conversation was being verified.
+    async function mergeListed(items) {
         const seen = new Set();
         const nextOrder = [];
         let joined = false;
         let reopen = false;  // the open room was verified again: rebuild its view
-        for (const item of result.data.conversations) {
+        for (const item of items) {
             const isRoom = Boolean(item && item.room);
             if (!item || !validateConversationId(item.id) || (!isRoom && !isPublicKey(item.peer_public_key)) ||
                 !isSeq(item.last_seq) || !isSeq(item.read_seq) || seen.has(item.id)) {
@@ -195,12 +222,16 @@ const Chat = (() => {
                 continue;
             }
             const state = await newConversationState(item, isRoom);
-            if (!me) return;
+            if (!me) return null;
             if (!state) continue;
             joined = joined || (listLoaded && !isRoom);
             conversations.set(item.id, state);
         }
+        return { seen: seen, order: nextOrder, joined: joined, reopen: reopen };
+    }
 
+    // Forgets every conversation the server no longer lists; leaving the open one says why
+    function dropUnlisted(seen) {
         for (const id of Array.from(conversations.keys())) {
             if (!seen.has(id)) {
                 const gone = conversations.get(id);
@@ -212,22 +243,6 @@ const Chat = (() => {
                     Errors.report(gone.room ? Errors.CODES.W_ROOM_GONE : Errors.CODES.W_CONVERSATION_BURNED);
                 }
             }
-        }
-        order = nextOrder;
-        listLoaded = true;
-        renderList();
-        const active = conversations.get(activeId);
-        if (active && reopen) {
-            open(active.id);
-        } else if (active && active.room) {
-            refreshActiveRoom(active);
-        }
-
-        // Someone redeemed an invite: the code on screen is spent, so put it away
-        // (unless a new one is being made, which nobody can have redeemed yet)
-        if (joined && !inviteRun && document.getElementById('invitePanel').style.display !== 'none') {
-            togglePairPanel(null);
-            showSuccess('someone joined with your invite');
         }
     }
 
@@ -320,6 +335,8 @@ const Chat = (() => {
         return conv.syncChain;
     }
 
+    // Fetches the messages after the last one held, admits them, and shows them if the
+    // conversation is still open
     async function syncNow(conv) {
         const path = conv.loaded
             ? `/conversations/${conv.id}/messages?after=${conv.maxSeq}`
@@ -342,10 +359,24 @@ const Chat = (() => {
         }
         conv.loaded = true;
 
+        const fresh = await admitMessages(conv, result.data.messages);
+        // Once per sync, never per message; kept even if the user moved on meanwhile
+        await saveMark(conv);
+        if (activeId !== conv.id) return;
+
+        appendMessages(fresh);
+        if (conv.room) checkLookalikes(conv);
+        conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
+        await markRead(conv);
+    }
+
+    // Opens each well-formed message not seen before, in sequence order, and judges its counter.
+    // Returns what to show: messages, gap notices, and replay warnings in place of replays.
+    async function admitMessages(conv, messages) {
         const key = conv.room ? null : await conversationKey(conv);
         const fresh = [];
         let replayed = false;
-        for (const raw of result.data.messages) {
+        for (const raw of messages) {
             if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || !isSeq(raw.seq) || raw.seq === 0 ||
                 typeof raw.mine !== 'boolean' || typeof raw.ciphertext !== 'string' ||
                 raw.ciphertext.length > MAX_CIPHERTEXT_CHARS || conv.seqs.has(raw.seq) || raw.seq <= conv.maxSeq ||
@@ -363,14 +394,7 @@ const Chat = (() => {
             if (!message.replayed) fresh.push(message);
         }
         if (replayed) Log.warn(Errors.CODES.W_MESSAGE_REPLAYED);
-        // Once per sync, never per message; kept even if the user moved on meanwhile
-        await saveMark(conv);
-        if (activeId !== conv.id) return;
-
-        appendMessages(fresh);
-        if (conv.room) checkLookalikes(conv);
-        conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
-        await markRead(conv);
+        return fresh;
     }
 
     // Decrypts and authenticates one message: { seq, mine, text, sentAt, sender, counter, from? },

@@ -73,6 +73,7 @@ const Rooms = (() => {
 
     // ---------- roster ----------
 
+    // Fetches the room's member list, verifies it, and makes it the room's roster
     async function loadRoster(api, conv) {
         const room = conv.room;
         const result = await api('GET', `/conversations/${conv.id}/members`);
@@ -80,12 +81,27 @@ const Rooms = (() => {
             result.data.members.length === 0 || result.data.members.length > R.MAX_MEMBERS) {
             throw Object.assign(new Error('roster unavailable'), { status: result.status });
         }
+        const { cards, roster, skipped, storedCard } = await verifyMembers(room, result.data.members);
+        // A card is sealed under a random nonce, so the one derived at login differs in bytes from
+        // the one stored when this account joined. Others address notes to the stored one.
+        room.member = Object.freeze({ privateKey: room.member.privateKey, publicKey: room.member.publicKey, card: storedCard });
+        room.roster = roster;
+        room.rosterCards = cards;
+        room.skipped = skipped;
+        room.members = cards.length;
+        return roster;
+    }
+
+    // Opens every listed card with the room's key and checks the list against this account and
+    // the code's seat limit. Throws when the server misrepresents the room; returns every card
+    // as served, the verified roster, how many cards were skipped, and this account's stored card.
+    async function verifyMembers(room, members) {
         const cards = [];
         const roster = [];
         const seen = new Set();
         let skipped = 0;
         let storedCard = null;
-        for (const entry of result.data.members) {
+        for (const entry of members) {
             if (!entry || typeof entry.card !== 'string' || typeof entry.mine !== 'boolean' || typeof entry.owner !== 'boolean') {
                 throw new Error('malformed roster');
             }
@@ -114,14 +130,7 @@ const Rooms = (() => {
         if (!seen.has(room.member.publicKey) || cards.length > room.maxMembers) {
             throw new Error('roster does not match this room');
         }
-        // A card is sealed under a random nonce, so the one derived at login differs in bytes from
-        // the one stored when this account joined. Others address notes to the stored one.
-        room.member = Object.freeze({ privateKey: room.member.privateKey, publicKey: room.member.publicKey, card: storedCard });
-        room.roster = roster;
-        room.rosterCards = cards;
-        room.skipped = skipped;
-        room.members = cards.length;
-        return roster;
+        return { cards: cards, roster: roster, skipped: skipped, storedCard: storedCard };
     }
 
     function senderOf(room, publicKey) {

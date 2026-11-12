@@ -244,118 +244,133 @@ async function copyAccountNumber() {
     const errorElement = document.getElementById('registerError');
     const continueBtn = document.getElementById('continueBtn');
     const copyBtn = document.getElementById('copyBtn');
-    
+    // Re-enable copy button on error
+    const allowRetry = () => {
+        if (copyBtn) {
+            copyBtn.disabled = false;
+        }
+    };
+
     // Disable copy button immediately to prevent multiple clicks
     if (copyBtn) {
         copyBtn.disabled = true;
     }
     errorElement.textContent = '';
 
-    // Stop the scramble animation
-    stopAccountNumberScramble();
-    
-    // Show masking animation
-    accountNumberElement.classList.remove('generating');
-    accountNumberElement.classList.add('masking');
-    successElement.textContent = Errors.NOTICE.SECURING_IDENTIFIER;
-    
-    // Animate to all asterisks
-    await animateToMask(accountNumberElement);
-    
+    await maskAccountNumber(accountNumberElement, successElement);
+
     // First, get PoW challenge from backend
     successElement.textContent = Errors.NOTICE.PREPARING_CHALLENGE;
 
     try {
-        const issued = await getPowChallenge();
-        if (!issued.challenge) {
-            throw new Error('Failed to get PoW challenge');
-        }
-
-        successElement.textContent = Errors.NOTICE.SECURING_ACCOUNT;
-
-        // Solve the PoW challenge
-        const powSolution = await solvePowChallenge(issued.challenge);
-
-        successElement.textContent = Errors.NOTICE.GENERATING_ACCOUNT_NUMBER;
-
-        // Get Account Number from backend (Phase 1 - no account creation)
-        const response = await fetchWithErrorHandling(`${API_BASE_URL}/register`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                confirm: false,
-                pow: powSolution
-            })
-        });
-
-        // If fetchWithErrorHandling returned null, it means error was handled and redirected
-        if (!response) {
-            // Re-enable copy button on error
-            if (copyBtn) {
-                copyBtn.disabled = false;
-            }
+        const issued = await requestAccountNumber(accountNumberElement, successElement, errorElement);
+        if (!issued) {
+            allowRetry();
             return;
         }
 
-        const data = await response.json();
-        
-        if (!data || !data.success) {
-            // SECURITY: Map API error message to generic user-facing message
-            Errors.inline(errorElement, Errors.fromApi(data?.message, response.status));
-            // Logged once, by the line above
-            accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
-            // Re-enable copy button on error
-            if (copyBtn) {
-                copyBtn.disabled = false;
-            }
-            return;
-        }
-
-        const realAccountNumber = data.account_number;
-        const pendingToken = data.pending_token;
-        
-        if (!realAccountNumber || realAccountNumber.length !== ACCOUNT_NUMBER_LEN || !pendingToken) {
-            // SECURITY: Generic error message
-            Errors.inline(errorElement, Errors.fromApi(null, response.status));
-            // Re-enable copy button on error
-            if (copyBtn) {
-                copyBtn.disabled = false;
-            }
-            return;
-        }
-        
         // Store pending AccountNumber and token for account creation on continue
-        pendingRegistrationAccountNumber = realAccountNumber;
-        pendingRegistrationToken = pendingToken;
-        
-        // Reveal the real AccountNumber with animation
-        await revealText(accountNumberElement, realAccountNumber);
-        
-        accountNumberElement.classList.remove('masking');
-        accountNumberElement.classList.add('revealed');
-        successElement.textContent = Errors.NOTICE.ACCOUNT_NUMBER_READY;
-        
-        // Copy to clipboard
-        try {
-            await copyToClipboard(realAccountNumber);
-            showSuccess('Account number copied to clipboard!');
-        } catch (e) {
-            Errors.report(Errors.CODES.W_ACCOUNT_NUMBER_NOT_COPIED);
-        }
-        
+        pendingRegistrationAccountNumber = issued.accountNumber;
+        pendingRegistrationToken = issued.pendingToken;
+
+        await revealAccountNumber(accountNumberElement, successElement, issued.accountNumber);
+        await copyIssuedAccountNumber(issued.accountNumber);
+
         // Enable continue button
         continueBtn.disabled = false;
-        
+
     } catch (error) {
         // SECURITY: Generic error message; the log keeps only the error's name
         Errors.inline(errorElement, Errors.fromApi(null, 500), null, error);
         accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
-        // Re-enable copy button on error
-        if (copyBtn) {
-            copyBtn.disabled = false;
-        }
+        allowRetry();
+    }
+}
+
+// Stops the scramble and turns it into asterisks while the real number is fetched
+async function maskAccountNumber(accountNumberElement, successElement) {
+    // Stop the scramble animation
+    stopAccountNumberScramble();
+
+    // Show masking animation
+    accountNumberElement.classList.remove('generating');
+    accountNumberElement.classList.add('masking');
+    successElement.textContent = Errors.NOTICE.SECURING_IDENTIFIER;
+
+    // Animate to all asterisks
+    await animateToMask(accountNumberElement);
+}
+
+// Registration phase 1: pays a proof of work and has the server issue an account number and
+// its pending token. Returns { accountNumber, pendingToken }, or null once the failure has been
+// shown; throws when no challenge comes or the answer cannot be read (the caller reports it).
+async function requestAccountNumber(accountNumberElement, successElement, errorElement) {
+    const issued = await getPowChallenge();
+    if (!issued.challenge) {
+        throw new Error('Failed to get PoW challenge');
+    }
+
+    successElement.textContent = Errors.NOTICE.SECURING_ACCOUNT;
+
+    // Solve the PoW challenge
+    const powSolution = await solvePowChallenge(issued.challenge);
+
+    successElement.textContent = Errors.NOTICE.GENERATING_ACCOUNT_NUMBER;
+
+    // Get Account Number from backend (Phase 1 - no account creation)
+    const response = await fetchWithErrorHandling(`${API_BASE_URL}/register`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            confirm: false,
+            pow: powSolution
+        })
+    });
+
+    // If fetchWithErrorHandling returned null, it means error was handled and redirected
+    if (!response) {
+        return null;
+    }
+
+    const data = await response.json();
+
+    if (!data || !data.success) {
+        // SECURITY: Map API error message to generic user-facing message
+        Errors.inline(errorElement, Errors.fromApi(data?.message, response.status));
+        // Logged once, by the line above
+        accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
+        return null;
+    }
+
+    const accountNumber = data.account_number;
+    const pendingToken = data.pending_token;
+
+    if (!accountNumber || accountNumber.length !== ACCOUNT_NUMBER_LEN || !pendingToken) {
+        // SECURITY: Generic error message
+        Errors.inline(errorElement, Errors.fromApi(null, response.status));
+        return null;
+    }
+    return { accountNumber: accountNumber, pendingToken: pendingToken };
+}
+
+// Reveal the real AccountNumber with animation, then say it is ready
+async function revealAccountNumber(accountNumberElement, successElement, accountNumber) {
+    await revealText(accountNumberElement, accountNumber);
+
+    accountNumberElement.classList.remove('masking');
+    accountNumberElement.classList.add('revealed');
+    successElement.textContent = Errors.NOTICE.ACCOUNT_NUMBER_READY;
+}
+
+// Copy to clipboard for the user to save; a refused copy asks them to copy it by hand
+async function copyIssuedAccountNumber(accountNumber) {
+    try {
+        await copyToClipboard(accountNumber);
+        showSuccess('Account number copied to clipboard!');
+    } catch (e) {
+        Errors.report(Errors.CODES.W_ACCOUNT_NUMBER_NOT_COPIED);
     }
 }
 

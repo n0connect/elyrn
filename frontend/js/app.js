@@ -58,24 +58,43 @@ document.addEventListener('DOMContentLoaded', async function() {
     await resumeSession();
 });
 
+// Wires every control once, area by area, in the page's order
 function setupEventListeners() {
-    // Main menu event listeners
+    setupMenuListeners();
+    setupLoginListeners();
+    setupRegisterListeners();
+    setupAccountListeners();
+    setupPairingListeners();
+    setupRoomListeners();
+    setupConversationListeners();
+    setupComposerListeners();
+    setupGlobalListeners();
+}
+
+// A click handler that copies the text shown in sourceId and confirms with notice; accepts
+// (optional) rejects text that is not yet the real value
+function copyShownText(sourceId, notice, accepts) {
+    return async () => {
+        const text = document.getElementById(sourceId).textContent;
+        if (!text || (accepts && !accepts(text))) return;
+        try {
+            await copyToClipboard(text);
+            showSuccess(notice);
+        } catch (e) {
+            Errors.report(Errors.CODES.W_COPY_MANUALLY);
+        }
+    };
+}
+
+// Main menu, the robot entrance, and the brand titles that lead back to the menu
+function setupMenuListeners() {
     document.getElementById('showLoginBtn').addEventListener('click', showLogin);
     document.getElementById('showRegisterFormBtn').addEventListener('click', showRegisterForm);
     document.getElementById('backToMenuFromLogin').addEventListener('click', showMainMenu);
     document.getElementById('showRobotBtn').addEventListener('click', showRobot);
     document.getElementById('backToMenuFromRobot').addEventListener('click', showMainMenu);
     document.getElementById('robotBrandTitle').addEventListener('click', showMainMenu);
-    document.getElementById('copyRobotBtn').addEventListener('click', async () => {
-        const command = document.getElementById('robotCommand').textContent;
-        if (!command) return;
-        try {
-            await copyToClipboard(command);
-            showSuccess('command copied');
-        } catch (e) {
-            Errors.report(Errors.CODES.W_COPY_MANUALLY);
-        }
-    });
+    document.getElementById('copyRobotBtn').addEventListener('click', copyShownText('robotCommand', 'command copied'));
 
     // Brand title click - go back to main menu
     const loginBrandTitle = document.getElementById('loginBrandTitle');
@@ -89,19 +108,25 @@ function setupEventListeners() {
             cancelRegistration();
         });
     }
+}
 
-    // Login page event listeners
+// Login page
+function setupLoginListeners() {
     document.getElementById('loginBtn').addEventListener('click', login);
     document.getElementById('accountNumberInput').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') login();
     });
+}
 
-    // Register page event listeners
+// Register page
+function setupRegisterListeners() {
     document.getElementById('copyBtn').addEventListener('click', copyAccountNumber);
     document.getElementById('continueBtn').addEventListener('click', continueWithAccountNumber);
     document.getElementById('cancelRegistration').addEventListener('click', cancelRegistration);
+}
 
-    // App: header
+// App header: logging out and deleting the identity
+function setupAccountListeners() {
     document.getElementById('logoutBtn').addEventListener('click', logout);
     document.getElementById('deleteIdentityBtn').addEventListener('click', () => {
         Chat.backToList();
@@ -116,51 +141,41 @@ function setupEventListeners() {
     document.getElementById('deleteAccountInput').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') deleteIdentity();
     });
+}
 
-    // App: pairing
+// Invites: making one, copying it, and joining with one (or with a room code)
+function setupPairingListeners() {
     document.getElementById('newInviteBtn').addEventListener('click', () => Chat.createInvite());
     document.getElementById('showJoinBtn').addEventListener('click', () => {
         togglePairPanel('joinPanel');
         document.getElementById('inviteInput').focus();
     });
     document.getElementById('closeJoinBtn').addEventListener('click', () => togglePairPanel(null));
-    document.getElementById('copyInviteBtn').addEventListener('click', async () => {
-        const code = document.getElementById('inviteCode').textContent;
-        if (!code) return;
-        try {
-            await copyToClipboard(code);
-            showSuccess(Errors.NOTICE.INVITE_COPIED);
-        } catch (e) {
-            Errors.report(Errors.CODES.W_COPY_MANUALLY);
-        }
-    });
+    document.getElementById('copyInviteBtn').addEventListener('click', copyShownText('inviteCode', Errors.NOTICE.INVITE_COPIED));
     document.getElementById('joinBtn').addEventListener('click', () => Chat.join());
+}
 
-    // App: rooms
+// Rooms: creating one, copying its code, and the open room's members and code panels
+function setupRoomListeners() {
     document.getElementById('newRoomBtn').addEventListener('click', () => {
         resetRoomPanel();
         togglePairPanel('roomPanel');
     });
     document.getElementById('closeRoomBtn').addEventListener('click', () => resetRoomPanel());
     document.getElementById('createRoomBtn').addEventListener('click', () => Chat.createRoom());
-    document.getElementById('copyRoomBtn').addEventListener('click', async () => {
-        const code = document.getElementById('roomCode').textContent;
-        if (!code || !code.startsWith(ElyrnRoomCrypto.CODE_PREFIX)) return;
-        try {
-            await copyToClipboard(code);
-            showSuccess(Errors.NOTICE.ROOM_CODE_COPIED);
-        } catch (e) {
-            Errors.report(Errors.CODES.W_COPY_MANUALLY);
-        }
-    });
+    document.getElementById('copyRoomBtn').addEventListener('click', copyShownText('roomCode', Errors.NOTICE.ROOM_CODE_COPIED,
+        code => code.startsWith(ElyrnRoomCrypto.CODE_PREFIX)));
     document.getElementById('membersBtn').addEventListener('click', () => Chat.toggleMembers());
     document.getElementById('roomCodeBtn').addEventListener('click', () => Chat.toggleRoomCode());
     document.getElementById('copyRoomCodeBtn').addEventListener('click', () => Chat.copyRoomCode());
+    // The join field takes a room code as well as an invite
     document.getElementById('inviteInput').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') Chat.join();
     });
+}
 
-    // App: conversation
+// The open conversation's header: back, safety number, verification and burning
+function setupConversationListeners() {
     document.getElementById('backToListBtn').addEventListener('click', () => Chat.backToList());
     document.getElementById('verifyBtn').addEventListener('click', () => Chat.showSafety());
     document.getElementById('markVerifiedBtn').addEventListener('click', () => Chat.toggleVerified());
@@ -168,8 +183,10 @@ function setupEventListeners() {
     document.getElementById('burnNoBtn').addEventListener('click', () => Chat.askBurn(false));
     document.getElementById('burnYesBtn').addEventListener('click', () => Chat.burn());
     document.getElementById('sendBtn').addEventListener('click', () => Chat.send());
+}
 
-    // Composer: Enter to send, Shift+Enter for a new line
+// Composer: Enter to send, Shift+Enter for a new line
+function setupComposerListeners() {
     const messageInput = document.getElementById('messageInput');
     messageInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -178,7 +195,10 @@ function setupEventListeners() {
         }
     });
     messageInput.addEventListener('input', updateComposerMeta);
+}
 
+// Keys and page events that apply whatever is on screen
+function setupGlobalListeners() {
     // Escape leaves a conversation, or the robot entrance
     document.addEventListener('keydown', function(e) {
         if (e.key !== 'Escape') return;
