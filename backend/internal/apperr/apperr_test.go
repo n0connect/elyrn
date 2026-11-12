@@ -10,6 +10,7 @@ import (
 
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
+	"elyrn/internal/models"
 	"elyrn/internal/pow"
 	"elyrn/internal/utils"
 )
@@ -48,11 +49,27 @@ func TestRegistryEntriesWellFormed(t *testing.T) {
 		if _, ok := knownLevels[e.level]; !ok {
 			t.Errorf("%s: unknown log level %q", e.id, e.level)
 		}
+		if e.shape != shapeText && e.shape != shapeJSON {
+			t.Errorf("%s: unknown wire shape %d", e.id, int(e.shape))
+		}
 	}
 }
 
 var knownLevels = map[utils.LogLevel]struct{}{
 	utils.LogLevelDEBUG: {}, utils.LogLevelINFO: {}, utils.LogLevelWARN: {}, utils.LogLevelERROR: {},
+}
+
+// jsonWire pins login's failure answers to the exact (status, body) LoginHandler wrote before
+// they moved into the registry; frontend/js/errors.js fromApi maps these messages.
+var jsonWire = map[Code]struct {
+	status int
+	body   string
+}{
+	LoginBodyInvalid:   {400, `{"success":false,"message":"Invalid request"}`},
+	LoginKeyMalformed:  {401, `{"success":false,"message":"Invalid credentials"}`},
+	LoginLookupFailed:  {401, `{"success":false,"message":"Invalid credentials"}`},
+	LoginNoAccount:     {401, `{"success":false,"message":"Invalid credentials"}`},
+	LoginLegacyAccount: {401, `{"success":false,"message":"Invalid credentials"}`},
 }
 
 // TestWireAnswers pins every code to the exact (status, body) the server answered before the
@@ -93,19 +110,40 @@ func TestWireAnswers(t *testing.T) {
 		AccountCollision:      {500, "Internal server error"},
 		Internal:              {500, "Internal server error"},
 	}
-	if len(want) != len(registry) {
-		t.Fatalf("pinned %d answers, registry has %d", len(want), len(registry))
+	if len(want)+len(jsonWire) != len(registry) {
+		t.Fatalf("pinned %d answers, registry has %d", len(want)+len(jsonWire), len(registry))
 	}
 	for code, w := range want {
 		rec := httptest.NewRecorder()
 		Write(rec, "test", code)
 		assertAnswer(t, rec, w.status, w.body)
 	}
+	for code, w := range jsonWire {
+		rec := httptest.NewRecorder()
+		Write(rec, "test", code)
+		assertAnswer(t, rec, w.status, w.body)
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("code %d: Content-Type %q, want application/json", int(code), ct)
+		}
+	}
 }
 
-// TestWriteMatchesHTTPError: the bytes and headers are exactly those of http.Error.
+// TestShapes: exactly the pinned login codes answer in JSON; everything else stays text.
+func TestShapes(t *testing.T) {
+	for code, e := range registry {
+		_, isJSON := jsonWire[code]
+		if isJSON != (e.shape == shapeJSON) {
+			t.Errorf("%s: shape %d, pinned as JSON: %v", e.id, int(e.shape), isJSON)
+		}
+	}
+}
+
+// TestWriteMatchesHTTPError: a text code's bytes and headers are exactly those of http.Error.
 func TestWriteMatchesHTTPError(t *testing.T) {
 	for code, e := range registry {
+		if e.shape != shapeText {
+			continue
+		}
 		got, ref := httptest.NewRecorder(), httptest.NewRecorder()
 		Write(got, "test", code)
 		http.Error(ref, e.body, e.status)
@@ -121,6 +159,32 @@ func TestWriteMatchesHTTPError(t *testing.T) {
 			t.Errorf("%s: %d headers, want %d", e.id, len(got.Header()), len(ref.Header()))
 		}
 	}
+}
+
+// TestWriteMatchesLoginEncoding: a JSON code's bytes and headers are exactly those of the
+// encoder and type LoginHandler used before (and still uses for its success answer).
+func TestWriteMatchesLoginEncoding(t *testing.T) {
+	for code, e := range registry {
+		if e.shape != shapeJSON {
+			continue
+		}
+		got, ref := httptest.NewRecorder(), httptest.NewRecorder()
+		Write(got, "test", code)
+		utils.EncodeJSONResponse(ref, models.LoginResponse{Success: false, Message: e.body}, e.status)
+		if got.Code != ref.Code || got.Body.String() != ref.Body.String() {
+			t.Errorf("%s: got %d %q, want %d %q", e.id, got.Code, got.Body.String(), ref.Code, ref.Body.String())
+		}
+		if len(got.Header()) != len(ref.Header()) || got.Header().Get("Content-Type") != ref.Header().Get("Content-Type") {
+			t.Errorf("%s: headers %v, want %v", e.id, got.Header(), ref.Header())
+		}
+	}
+}
+
+// TestWriteCauseKeepsTheCauseOffTheWire: the cause is logged, the wire carries the code's answer.
+func TestWriteCauseKeepsTheCauseOffTheWire(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteCause(rec, "test", LoginLookupFailed, errors.New("pepper missing"))
+	assertAnswer(t, rec, 401, `{"success":false,"message":"Invalid credentials"}`)
 }
 
 func TestUnregisteredCodeAnswersInternal(t *testing.T) {

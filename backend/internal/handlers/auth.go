@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"elyrn/internal/apperr"
@@ -58,98 +59,107 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// PHASE 1: Generate AccountNumber only (confirm=false)
-	// Returns a pending registration token that must be used to confirm
-	if !req.Confirm {
-		authLogger.Debug("Phase 1: Generating AccountNumber preview (no account creation)")
+	// PHASE 1 (confirm=false) shows a fresh AccountNumber and a pending token; PHASE 2
+	// (confirm=true) redeems the token and creates the account
+	if req.Confirm {
+		confirmRegistration(w, req.PendingToken)
+		return
+	}
+	issueAccountNumber(w)
+}
 
-		// Generate AccountNumber (256-bit CSPRNG, base64url encoded)
-		accountNumber, err := utils.GenerateAccountNumber()
-		if err != nil {
-			apperr.WriteError(w, "GenerateAccountNumber", err)
-			return
-		}
+// issueAccountNumber is registration phase 1: it generates an AccountNumber, keeps only what
+// phase 2 needs (derived auth key and public key) under a pending id, and answers the number
+// once with a signed pending token. No account exists yet.
+func issueAccountNumber(w http.ResponseWriter) {
+	authLogger.Debug("Phase 1: Generating AccountNumber preview (no account creation)")
 
-		// Everything phase 2 needs is derived now, so the AccountNumber itself (which also
-		// seeds the user's E2E identity) leaves server memory with this response
-		pending := auth.PendingIdentity{}
-		if pending.AuthKey, err = identity.DeriveAuthKey(accountNumber); err != nil {
-			apperr.WriteError(w, "DeriveAuthKey", err)
-			return
-		}
-		if pending.PublicKey, err = identity.DerivePublicKey(accountNumber); err != nil {
-			apperr.WriteError(w, "DerivePublicKey", err)
-			return
-		}
-
-		// Compute lookup for collision check (almost impossible)
-		lookup, err := auth.ComputeAccountLookup(pending.AuthKey)
-		if err != nil {
-			apperr.WriteError(w, "ComputeAccountLookup", err)
-			return
-		}
-
-		// Check for collision - regenerate if needed (very unlikely but safe)
-		exists, err := userRepository.ExistsByAccountLookup(lookup)
-		if err != nil {
-			apperr.WriteError(w, "ExistsByAccountLookup", err)
-			return
-		}
-		if exists {
-			// A 256-bit collision: practically impossible, answered as a plain server fault
-			apperr.Write(w, "RegisterHandler", apperr.AccountCollision)
-			return
-		}
-
-		// Generate pending ID and store AccountNumber server-side
-		pendingID, err := auth.GeneratePendingID()
-		if err != nil {
-			apperr.WriteError(w, "GeneratePendingID", err)
-			return
-		}
-
-		// Keep the derived identity (not the AccountNumber) until the user confirms
-		// A full store answers 503 (apperr.PendingStoreFull), anything else 500
-		if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
-			apperr.WriteError(w, "StorePendingRegistration", err)
-			return
-		}
-
-		// Generate pending registration token (contains pending ID, not AccountNumber)
-		pendingToken, err := auth.SignPendingRegistrationToken(pendingID)
-		if err != nil {
-			apperr.WriteError(w, "SignPendingRegistrationToken", err)
-			return
-		}
-
-		responseData := models.RegisterResponse{
-			Success:       true,
-			Message:       "Account number generated - click continue to create account",
-			AccountNumber: accountNumber,
-			PendingToken:  pendingToken,
-			Confirmed:     false,
-		}
-		utils.EncodeJSONResponse(w, responseData, http.StatusOK)
-		authLogger.LogResponse(http.StatusOK, "AccountNumber preview generated with pending token")
+	// Generate AccountNumber (256-bit CSPRNG, base64url encoded)
+	accountNumber, err := utils.GenerateAccountNumber()
+	if err != nil {
+		apperr.WriteError(w, "GenerateAccountNumber", err)
 		return
 	}
 
-	// PHASE 2: Create account (confirm=true)
-	// ZERO-TRUST: the pending token names the identity derived in phase 1; nothing about the
-	// account comes from the request body
+	// Everything phase 2 needs is derived now, so the AccountNumber itself (which also
+	// seeds the user's E2E identity) leaves server memory with this response
+	pending := auth.PendingIdentity{}
+	if pending.AuthKey, err = identity.DeriveAuthKey(accountNumber); err != nil {
+		apperr.WriteError(w, "DeriveAuthKey", err)
+		return
+	}
+	if pending.PublicKey, err = identity.DerivePublicKey(accountNumber); err != nil {
+		apperr.WriteError(w, "DerivePublicKey", err)
+		return
+	}
+
+	// Compute lookup for collision check (almost impossible)
+	lookup, err := auth.ComputeAccountLookup(pending.AuthKey)
+	if err != nil {
+		apperr.WriteError(w, "ComputeAccountLookup", err)
+		return
+	}
+
+	// Check for collision - regenerate if needed (very unlikely but safe)
+	exists, err := userRepository.ExistsByAccountLookup(lookup)
+	if err != nil {
+		apperr.WriteError(w, "ExistsByAccountLookup", err)
+		return
+	}
+	if exists {
+		// A 256-bit collision: practically impossible, answered as a plain server fault
+		apperr.Write(w, "RegisterHandler", apperr.AccountCollision)
+		return
+	}
+
+	// Generate pending ID and store AccountNumber server-side
+	pendingID, err := auth.GeneratePendingID()
+	if err != nil {
+		apperr.WriteError(w, "GeneratePendingID", err)
+		return
+	}
+
+	// Keep the derived identity (not the AccountNumber) until the user confirms
+	// A full store answers 503 (apperr.PendingStoreFull), anything else 500
+	if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
+		apperr.WriteError(w, "StorePendingRegistration", err)
+		return
+	}
+
+	// Generate pending registration token (contains pending ID, not AccountNumber)
+	pendingToken, err := auth.SignPendingRegistrationToken(pendingID)
+	if err != nil {
+		apperr.WriteError(w, "SignPendingRegistrationToken", err)
+		return
+	}
+
+	responseData := models.RegisterResponse{
+		Success:       true,
+		Message:       "Account number generated - click continue to create account",
+		AccountNumber: accountNumber,
+		PendingToken:  pendingToken,
+		Confirmed:     false,
+	}
+	utils.EncodeJSONResponse(w, responseData, http.StatusOK)
+	authLogger.LogResponse(http.StatusOK, "AccountNumber preview generated with pending token")
+}
+
+// confirmRegistration is registration phase 2: it redeems a pending token and creates the
+// account from the identity derived in phase 1, then opens a session.
+func confirmRegistration(w http.ResponseWriter, pendingToken string) {
 	authLogger.Debug("Phase 2: Confirming account creation")
 
-	// SECURITY: Phase 2 PoW was validated above with a fresh, single-use challenge
-	// This prevents Phase 1 PoW replay and ensures fresh proof-of-work for expensive Argon2id
+	// SECURITY: RegisterHandler validated a fresh, single-use phase 2 PoW: no phase 1 replay,
+	// and every Argon2id run below is paid for
 
-	if req.PendingToken == "" {
+	if pendingToken == "" {
 		apperr.Write(w, "RegisterHandler", apperr.PendingTokenRequired)
 		return
 	}
 
 	// The pending registration stays redeemable until the account exists: every failure
 	// below leaves it in place for a retry (with a fresh proof of work) until it expires
-	pendingID, pending, err := auth.VerifyPendingRegistrationToken(req.PendingToken)
+	pendingID, pending, err := auth.VerifyPendingRegistrationToken(pendingToken)
 	if err != nil {
 		// SECURITY: Generic error message to prevent information leakage
 		// Don't distinguish between expired and invalid tokens
@@ -179,48 +189,14 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hash auth key with Argon2id (bounded concurrency: a saturated server says so); stored
-	// only, login does not read it (S-07). ErrBusy answers 503 (apperr.Argon2Busy), else 500
-	accountHash, err := auth.HashAccountNumber(authKey)
+	// ErrBusy (saturated Argon2id) answers 503 (apperr.Argon2Busy), anything else 500
+	user, err := newAccountRecord(lookup, authKey, publicKey)
 	if err != nil {
-		apperr.WriteError(w, "HashAccountNumber", err)
+		apperr.WriteError(w, "newAccountRecord", err)
 		return
 	}
 
-	// Generate internal user UUID (for backward compatibility and JWT subject)
-	internalUUID, err := utils.GenerateInternalID()
-	if err != nil {
-		apperr.WriteError(w, "GenerateInternalID", err)
-		return
-	}
-
-	// Generate encryption key for user
-	userAESKey, err := encryption.GenerateUserAESKey()
-	if err != nil {
-		apperr.WriteError(w, "GenerateUserAESKey", err)
-		return
-	}
-
-	userKeyHex := hex.EncodeToString(userAESKey)
-	encryptedUserKey, err := encryption.EncryptWithMasterKey(userKeyHex)
-	if err != nil {
-		apperr.WriteError(w, "EncryptWithMasterKey", err)
-		return
-	}
-	masterKeyID := encryption.ActiveMasterKeyID()
-
-	// ZERO-TRUST: identity public key is derived server-side from the verified AccountNumber,
-	// never accepted from the client
-	user := models.User{
-		UUID:          internalUUID,
-		AccountLookup: lookup,
-		AccountHash:   accountHash,
-		PublicKey:     publicKey,
-		EncryptedKey:  encryptedUserKey,
-		MasterKeyID:   masterKeyID,
-	}
-
-	if err := userRepository.Create(&user); err != nil {
+	if err := userRepository.Create(user); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			// A concurrent confirmation of the same token created it first
 			auth.CompletePendingRegistration(pendingID)
@@ -234,18 +210,12 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	authLogger.Debug("New identity registered")
 
 	// Immediate login: the session token goes into the HttpOnly cookie and nowhere else
-	token, err := auth.SignToken(internalUUID, user.SessionEpoch)
-	if err != nil {
+	// (without a token the account still exists: the user logs in with the account number)
+	if token, err := auth.SignToken(user.UUID, user.SessionEpoch); err != nil {
 		authLogger.LogError("SignToken", err)
-		// Account created but no session: the user logs in with the account number
-		utils.EncodeJSONResponse(w, models.RegisterResponse{
-			Success:   true,
-			Message:   "Account created successfully",
-			Confirmed: true,
-		}, http.StatusCreated)
-		return
+	} else {
+		auth.SetAuthCookie(w, token)
 	}
-	auth.SetAuthCookie(w, token)
 
 	// SECURITY: Don't return the AccountNumber again (already shown once in phase 1)
 	utils.EncodeJSONResponse(w, models.RegisterResponse{
@@ -254,6 +224,39 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		Confirmed: true,
 	}, http.StatusCreated)
 	authLogger.LogResponse(http.StatusCreated, "Account created successfully")
+}
+
+// newAccountRecord builds the row for a new account: the Argon2id hash of the auth key (stored
+// only, login does not read it: S-07), an internal id and a fresh per-user key wrapped under
+// the active master key. Every failure keeps its cause (ErrBusy among them) for apperr.
+func newAccountRecord(lookup, authKey, publicKey string) (*models.User, error) {
+	accountHash, err := auth.HashAccountNumber(authKey)
+	if err != nil {
+		return nil, fmt.Errorf("HashAccountNumber: %w", err)
+	}
+	// Internal UUID: the JWT subject and the key every other table refers to
+	internalUUID, err := utils.GenerateInternalID()
+	if err != nil {
+		return nil, fmt.Errorf("GenerateInternalID: %w", err)
+	}
+	userAESKey, err := encryption.GenerateUserAESKey()
+	if err != nil {
+		return nil, fmt.Errorf("GenerateUserAESKey: %w", err)
+	}
+	encryptedUserKey, err := encryption.EncryptWithMasterKey(hex.EncodeToString(userAESKey))
+	if err != nil {
+		return nil, fmt.Errorf("EncryptWithMasterKey: %w", err)
+	}
+	// ZERO-TRUST: the identity public key was derived server-side in phase 1 from the
+	// AccountNumber, never accepted from the client
+	return &models.User{
+		UUID:          internalUUID,
+		AccountLookup: lookup,
+		AccountHash:   accountHash,
+		PublicKey:     publicKey,
+		EncryptedKey:  encryptedUserKey,
+		MasterKeyID:   encryption.ActiveMasterKeyID(),
+	}, nil
 }
 
 // requireProofOfWork admits a request only with an issued, unused, unexpired solution at the
@@ -335,25 +338,20 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req models.LoginRequest
 	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		authLogger.LogError("DecodeJSONRequest", err)
-		authLogger.Warn("Invalid JSON request for login")
-		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid request"}, http.StatusBadRequest)
+		apperr.Write(w, "LoginHandler: DecodeJSONRequest", apperr.LoginBodyInvalid)
 		return
 	}
 	// SECURITY: Validate auth key format (exactly 32 bytes, base64url) before any database operations
 	// The client sends HKDF(AccountNumber, "noaddx/auth"); the AccountNumber itself never leaves the browser
 	if !identity.ValidateEncodedKey(req.AuthKey) {
-		authLogger.Warn("Invalid auth key format in login request")
-		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid credentials"}, http.StatusUnauthorized)
+		apperr.Write(w, "LoginHandler: ValidateEncodedKey", apperr.LoginKeyMalformed)
 		return
 	}
 
 	// Compute lookup for database query (only reached if format is valid)
 	lookup, err := auth.ComputeAccountLookup(req.AuthKey)
 	if err != nil {
-		authLogger.LogError("ComputeAccountLookup", err)
-		authLogger.Warn("Login failed: lookup computation error")
-		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid credentials"}, http.StatusUnauthorized)
+		apperr.WriteCause(w, "LoginHandler: ComputeAccountLookup", apperr.LoginLookupFailed, err)
 		return
 	}
 
@@ -381,15 +379,13 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		stored = user.AccountLookup
 	}
 	if !auth.AccountLookupMatches(lookup, stored) {
-		authLogger.Debug("Login failed: no account for this auth key")
-		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid credentials"}, http.StatusUnauthorized)
+		apperr.Write(w, "LoginHandler: AccountLookupMatches", apperr.LoginNoAccount)
 		return
 	}
 
 	// Accounts created before the E2E identity existed cannot chat: treat as invalid
 	if !identity.ValidateEncodedKey(user.PublicKey) {
-		authLogger.Warn("Login failed: account has no identity key (legacy record)")
-		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid credentials"}, http.StatusUnauthorized)
+		apperr.Write(w, "LoginHandler: legacy record", apperr.LoginLegacyAccount)
 		return
 	}
 
