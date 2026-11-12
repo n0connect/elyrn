@@ -68,7 +68,7 @@ func TestToolArguments_AreValidatedBeforeAnythingIsSent(t *testing.T) {
 		{ToolRoomSend, `{"room":` + validRoom + `,"text":"   "}`, agent.CodeMessageText},
 		{ToolRoomSend, `{"room":` + validRoom + `,"text":"` + long + `"}`, agent.CodeMessageText},
 		{ToolRoomSend, `{"room":` + validRoom + `,"text":"bell\u0007"}`, agent.CodeMessageText},
-		{ToolRoomSend, `{"room":` + validRoom + `,"text":"swap‮me"}`, agent.CodeMessageText},
+		{ToolRoomSend, `{"room":` + validRoom + `,"text":"swap` + "\u202e" + `me"}`, agent.CodeMessageText},
 		{ToolRoomRead, `{"room":` + validRoom + `,"after":-1}`, agent.CodeArgument},
 		{ToolRoomRead, `{"room":` + validRoom + `,"after":9007199254740992}`, agent.CodeArgument},
 		{ToolRoomRead, `{"room":` + validRoom + `,"after":1e3}`, agent.CodeArgument},
