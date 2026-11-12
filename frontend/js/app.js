@@ -21,17 +21,42 @@ function isValidFrontendRoute() {
     return false;
 }
 
-// Resume a session: needs both the stored (non-extractable) identity key and a live cookie
+// Resume a session: needs both the stored (non-extractable) identity key and a live cookie.
+// A server that cannot be reached logs nobody out: the identity stays stored and a retry is offered.
 async function resumeSession() {
     const identity = await Keystore.load();
     if (!identity) {
         showMainMenu();
         return;
     }
-    if (!(await enterApp(identity, false))) {
+    const opened = await enterApp(identity, false);
+    if (opened.entry === ENTRY.UNREACHABLE) {
+        showMainMenu();
+        showResumeFailure(Errors.fromResult(opened.result), opened.result);
+    } else if (opened.entry === ENTRY.REFUSED) {
         showMainMenu();
     }
 }
+
+async function retryResume() {
+    const button = document.getElementById('retryResumeBtn');
+    button.disabled = true;
+    clearResumeFailure();
+    try {
+        await resumeSession();
+    } finally {
+        button.disabled = false;
+    }
+}
+
+// Anything thrown and not caught anywhere else: reported under one code. The log keeps only the
+// error's name (Log never takes a message, which could carry what the user typed).
+window.addEventListener('error', event => {
+    Errors.report(Errors.CODES.E_UNEXPECTED, null, event.error);
+});
+window.addEventListener('unhandledrejection', event => {
+    Errors.report(Errors.CODES.E_UNEXPECTED, null, event.reason);
+});
 
 // Initialize event listeners when DOM is ready
 document.addEventListener('DOMContentLoaded', async function() {
@@ -95,6 +120,7 @@ function setupMenuListeners() {
     document.getElementById('backToMenuFromRobot').addEventListener('click', showMainMenu);
     document.getElementById('robotBrandTitle').addEventListener('click', showMainMenu);
     document.getElementById('copyRobotBtn').addEventListener('click', copyShownText('robotCommand', 'command copied'));
+    document.getElementById('retryResumeBtn').addEventListener('click', retryResume);
 
     // Brand title click - go back to main menu
     const loginBrandTitle = document.getElementById('loginBrandTitle');

@@ -81,3 +81,28 @@ test('server answers map to registered codes, never to their own text', () => {
         assert.ok(Object.hasOwn(Errors.REGISTRY, Errors.fromApi(null, status)));
     }
 });
+
+test('a failed request result maps to a registered code: no answer says whether it timed out', () => {
+    const C = Errors.CODES;
+    assert.equal(Errors.fromResult({ ok: false, status: 0, data: null, timedOut: true }), C.E_REQUEST_TIMEOUT);
+    assert.equal(Errors.fromResult({ ok: false, status: 0, data: null, timedOut: false }), C.E_SERVER_UNREACHABLE);
+    // getPowChallenge's shape: a status and no data
+    assert.equal(Errors.fromResult({ status: 0 }), C.E_SERVER_UNREACHABLE);
+    assert.equal(Errors.fromResult({ status: 401, data: { success: false, message: 'Invalid credentials' } }), C.E_API_INVALID_CREDENTIALS);
+    assert.equal(Errors.fromResult({ status: 429, data: null }), C.E_API_TOO_MANY_REQUESTS);
+    assert.equal(Errors.fromResult({ status: 503, data: { message: '<b>leak</b>' } }), C.E_REQUEST_FAILED);
+    for (const status of [0, 400, 401, 403, 404, 429, 500, 503, 418]) {
+        assert.ok(Object.hasOwn(Errors.REGISTRY, Errors.fromResult({ status, data: null })), String(status));
+    }
+});
+
+test('the situation codes exist with the severity they are reported at', () => {
+    for (const code of ['E_REQUEST_TIMEOUT', 'E_SERVER_UNREACHABLE', 'E_ACCOUNT_CREATED_NOT_ENTERED',
+        'E_POW_TIMEOUT', 'E_POW_TOO_HARD', 'E_UNEXPECTED']) {
+        assert.equal(Errors.CODES[code], code);
+        assert.equal(Errors.REGISTRY[code].severity, 'error', code);
+    }
+    for (const code of ['E_SYNC_FAILED', 'W_REQUEST_TIMED_OUT']) {
+        assert.equal(Errors.INTERNAL[code], code);
+    }
+});

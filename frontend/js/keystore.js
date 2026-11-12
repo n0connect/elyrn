@@ -10,6 +10,15 @@
 // bound to the peer key that was verified, and, per conversation, the counter record that
 // exposes replays after a reload (counters.js: highest seq and counters, never text, ids or
 // times). None of this ever reaches the server.
+//
+// Two ways to forget. wipeIdentity() is for what the server decides (a 401, a refused /me): it
+// removes the identity record only, so the counter records and verification marks survive and a
+// server cannot erase replay protection by ending a session once. wipeAll() is the user's own
+// logout or identity deletion: the whole database goes.
+// Those records are keyed by conversation id, and one conversation id is shared by both of its
+// members, so the records left behind belong to the account that wrote them (OWNER, its public
+// key). save() clears them before another account's identity is stored: a different account on
+// this device never inherits, reads or links to the previous account's conversations.
 
 const Keystore = (() => {
     'use strict';
@@ -22,6 +31,8 @@ const Keystore = (() => {
     const VERIFIED_STORE = 'verified';
     const COUNTERS_STORE = 'counters';
     const RECORD = 'identity';
+    // The public key of the account the counter and verified records belong to (kept by wipeIdentity)
+    const OWNER = 'owner';
 
     // A storage that refuses once (private window) refuses every time: log it once, not per sync
     let countersWarned = false;
@@ -46,12 +57,14 @@ const Keystore = (() => {
         });
     }
 
-    async function transact(mode, action, storeName = STORE) {
+    // Runs action(tx) in one transaction over storeNames; resolves to the result of the request
+    // action returns (if any) once the transaction has committed
+    async function run(storeNames, mode, action) {
         const db = await open();
         try {
             return await new Promise((resolve, reject) => {
-                const tx = db.transaction(storeName, mode);
-                const request = action(tx.objectStore(storeName));
+                const tx = db.transaction(storeNames, mode);
+                const request = action(tx);
                 tx.oncomplete = () => resolve(request ? request.result : undefined);
                 tx.onerror = () => reject(tx.error);
                 tx.onabort = () => reject(tx.error);
@@ -61,19 +74,43 @@ const Keystore = (() => {
         }
     }
 
+    function transact(mode, action, storeName = STORE) {
+        return run(storeName, mode, tx => action(tx.objectStore(storeName)));
+    }
+
+    // Stores the identity, and first clears the records of any other account (see OWNER above)
     async function save(identity) {
         try {
-            await transact('readwrite', store => store.put({
-                privateKey: identity.privateKey,
-                publicKey: identity.publicKey,
-                roomsRoot: identity.roomsRoot
-            }, RECORD));
+            await run([STORE, VERIFIED_STORE, COUNTERS_STORE], 'readwrite', tx => claimRecords(tx, identity));
             return true;
         } catch (e) {
             // Private windows may block IndexedDB: identity then lives in memory only
             Log.warn(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return false;
         }
+    }
+
+    // A database from before OWNER existed was always wiped whole on logout, so its records
+    // belong to the identity it holds: that identity's key stands in for the missing owner
+    function claimRecords(tx, identity) {
+        const keys = tx.objectStore(STORE);
+        const owner = keys.get(OWNER);
+        owner.onsuccess = () => {
+            const previous = keys.get(RECORD);
+            previous.onsuccess = () => {
+                const holder = owner.result || (previous.result && previous.result.publicKey);
+                if (holder && holder !== identity.publicKey) {
+                    tx.objectStore(VERIFIED_STORE).clear();
+                    tx.objectStore(COUNTERS_STORE).clear();
+                }
+                keys.put(identity.publicKey, OWNER);
+                keys.put({
+                    privateKey: identity.privateKey,
+                    publicKey: identity.publicKey,
+                    roomsRoot: identity.roomsRoot
+                }, RECORD);
+            };
+        };
     }
 
     async function load() {
@@ -142,7 +179,17 @@ const Keystore = (() => {
         return countersOp('readwrite', store => store.delete(conversationId));
     }
 
-    function wipe() {
+    // A session the server ended: the identity goes, the replay records stay with their owner
+    async function wipeIdentity() {
+        try {
+            await transact('readwrite', store => store.delete(RECORD));
+        } catch (e) {
+            Log.warn(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
+        }
+    }
+
+    // The user's own logout or identity deletion: nothing stays
+    function wipeAll() {
         return new Promise(resolve => {
             if (!window.indexedDB) {
                 resolve();
@@ -153,5 +200,5 @@ const Keystore = (() => {
         });
     }
 
-    return Object.freeze({ save, load, wipe, setVerified, isVerified, loadCounters, saveCounters, forgetCounters });
+    return Object.freeze({ save, load, wipeIdentity, wipeAll, setVerified, isVerified, loadCounters, saveCounters, forgetCounters });
 })();

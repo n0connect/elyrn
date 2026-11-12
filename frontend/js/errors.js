@@ -37,6 +37,14 @@ const Errors = (() => {
         E_API_INTERNAL: e('internal server error — try again in a moment'),
         E_API_UNAVAILABLE: e('service unavailable — try again in a moment'),
         E_REQUEST_FAILED: e('request failed — try again'),
+        // no answer at all (apiCall's status 0): the request timed out, or never reached the server
+        E_REQUEST_TIMEOUT: e('no answer from the server — check your connection and try again'),
+        E_SERVER_UNREACHABLE: e('cannot reach the server — check your connection and try again'),
+        E_UNEXPECTED: e('something unexpected went wrong — reload the page if anything stops working'),
+
+        // proof of work (registration, invites, rooms, friend requests)
+        E_POW_TIMEOUT: e('the security check took too long — try again'),
+        E_POW_TOO_HARD: e('the server asked for too much work — try again later'),
 
         // login
         E_LOGIN_EMPTY: e('please enter account number'),
@@ -54,6 +62,7 @@ const Errors = (() => {
         E_REGISTER_SERVER_BUSY: e('server busy' + REGISTRATION_RETRY),
         E_REGISTER_REFUSED: e('request refused' + REGISTRATION_RETRY),
         E_ACCOUNT_NUMBER_EXPIRED: e('that account number expired before the account was created — discard it and copy a new one'),
+        E_ACCOUNT_CREATED_NOT_ENTERED: e('account created but not opened — save your account number, then log in with it'),
 
         // session and identity
         W_SESSION_ENDED: w('session ended — log in again'),
@@ -124,13 +133,13 @@ const Errors = (() => {
 
     // Failures nobody is shown, only logged
     const INTERNAL = Object.freeze({
-        E_NETWORK_UNREACHABLE: 'E_NETWORK_UNREACHABLE',
         E_CLIPBOARD_FALLBACK_FAILED: 'E_CLIPBOARD_FALLBACK_FAILED',
         W_CLIPBOARD_NOT_CLEARED: 'W_CLIPBOARD_NOT_CLEARED',
         E_SCRAMBLE_ELEMENTS_MISSING: 'E_SCRAMBLE_ELEMENTS_MISSING',
         W_KEYSTORE_UNAVAILABLE: 'W_KEYSTORE_UNAVAILABLE',
         W_COUNTERS_UNAVAILABLE: 'W_COUNTERS_UNAVAILABLE',
-        E_SYNC_FAILED: 'E_SYNC_FAILED'
+        E_SYNC_FAILED: 'E_SYNC_FAILED',
+        W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT'
     });
 
     // Server error texts we recognise (compared lowercased); anything else is E_REQUEST_FAILED
@@ -238,8 +247,17 @@ const Errors = (() => {
         return has(API_STATUSES, status) ? API_STATUSES[status] : CODES.E_REQUEST_FAILED;
     }
 
+    // A failed apiCall result ({ status, data, timedOut }) as a code: no answer (status 0) says
+    // whether it timed out, any other answer is mapped by fromApi
+    function fromResult(result) {
+        if (result.status === 0) {
+            return result.timedOut ? CODES.E_REQUEST_TIMEOUT : CODES.E_SERVER_UNREACHABLE;
+        }
+        return fromApi(result.data ? result.data.message : null, result.status);
+    }
+
     return Object.freeze({
-        CODES, INTERNAL, NOTICE, REGISTRY, report, inline, fromApi, format,
+        CODES, INTERNAL, NOTICE, REGISTRY, report, inline, fromApi, fromResult, format,
         message: (code, params) => resolve(code, params).text
     });
 })();

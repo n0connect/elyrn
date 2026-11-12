@@ -148,10 +148,11 @@ function hasNLeadingZeros(hexString, n) {
 
 // Main message handler for the Web Worker
 const HEX_32_BYTES = /^[0-9a-f]{32}$/;
-const MAX_DIFFICULTY = 32;
-// The budget is 2^BUDGET_MARGIN_BITS times the expected work, never more than MAX_ATTEMPTS
+// The server's own maximum (backend config maxPoWDifficulty; auth.js MAX_POW_DIFFICULTY refuses
+// a harder challenge before it gets here). It also bounds the budget: at most 2^28 attempts.
+const MAX_DIFFICULTY = 24;
+// The budget is 2^BUDGET_MARGIN_BITS times the expected work
 const BUDGET_MARGIN_BITS = 4;
-const MAX_ATTEMPTS = 2 ** 31;
 // A progress message every this many attempts
 const PROGRESS_EVERY = 10000;
 // The only failure text the page is ever sent: it says nothing about why
@@ -166,9 +167,9 @@ function isValidTask(task) {
 }
 
 // Expected work is 2^difficulty hashes; 16x that fails with probability e^-16 (~1e-7).
-// Capped so a bogus difficulty cannot pin the worker forever.
+// isValidTask caps the difficulty, so a bogus one cannot pin the worker forever.
 function attemptBudget(difficulty) {
-    return Math.min(2 ** (difficulty + BUDGET_MARGIN_BITS), MAX_ATTEMPTS);
+    return 2 ** (difficulty + BUDGET_MARGIN_BITS);
 }
 
 self.onmessage = function(e) {

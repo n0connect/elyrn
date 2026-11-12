@@ -23,37 +23,71 @@ const MAX_ROOM_TTL_HOURS = 720;
 // The largest message page this client takes from /me (the agent bounds a served page alike)
 const MAX_MESSAGE_PAGE_LIMIT = 1000;
 
+// The hardest proof of work this page will run: the server's own maximum (backend config
+// maxPoWDifficulty). pow-worker.js refuses anything above it too; a harder challenge is refused here
+// first so the user is told why.
+const MAX_POW_DIFFICULTY = 24;
+// A proof of work still running after this long is abandoned: the server's default challenge
+// lifetime, after which a solution would be refused anyway
+const POW_TIMEOUT_MS = 300000;
+
+// Every proof of work running now: a timer and a stop, so logout and cancel can end them all
+const powRuns = new Set();
+
+// Why a proof of work ended without a solution. code is a registered code to show, or null when
+// it was cancelled (the user logged out or left registration: nobody is told).
+class PowStopped extends Error {
+    constructor(code) {
+        super('proof of work stopped');
+        this.name = 'PowStopped';
+        this.code = code;
+    }
+}
+
 function powWorkerURL() {
     return powWorkerPolicy ? powWorkerPolicy.createScriptURL(POW_WORKER_PATH) : POW_WORKER_PATH;
 }
 
 // Gets a PoW challenge without ever leaving the page, so callers keep what is on screen.
-// Returns { challenge, status }: challenge is null on failure, status 0 means no connection.
+// Returns { challenge, status, timedOut }: challenge is null on failure, status 0 means no answer.
 async function getPowChallenge() {
     const result = await apiCall('GET', '/pow/challenge');
     const challenge = result.ok && result.data && result.data.success ? result.data.challenge : null;
-    return { challenge: challenge || null, status: result.status };
+    return { challenge: challenge || null, status: result.status, timedOut: result.timedOut };
 }
 
-// Solve PoW challenge using Web Worker
+// Solves a PoW challenge in a Web Worker. Rejects with PowStopped when the challenge is harder
+// than MAX_POW_DIFFICULTY, on POW_TIMEOUT_MS, or when cancelProofsOfWork() runs; the worker is
+// terminated whichever way it ends.
 function solvePowChallenge(challenge) {
     return new Promise((resolve, reject) => {
+        // A malformed difficulty goes on to the worker, which refuses it as it refuses any bad task
+        if (Number.isInteger(challenge.difficulty) && challenge.difficulty > MAX_POW_DIFFICULTY) {
+            reject(new PowStopped(Errors.CODES.E_POW_TOO_HARD));
+            return;
+        }
         const worker = new Worker(powWorkerURL());
-
-        worker.postMessage({
-            challenge: challenge.challenge,
-            difficulty: challenge.difficulty,
-            salt: challenge.salt
-        });
+        const run = {
+            timer: setTimeout(() => finish(new PowStopped(Errors.CODES.E_POW_TIMEOUT)), POW_TIMEOUT_MS),
+            stop: () => finish(new PowStopped(null))
+        };
+        powRuns.add(run);
+        // Settles once: the first of solution, failure, timeout or cancel wins
+        function finish(error, solution) {
+            if (!powRuns.delete(run)) return;
+            clearTimeout(run.timer);
+            worker.terminate();
+            if (error) {
+                reject(error);
+            } else {
+                resolve(solution);
+            }
+        }
 
         worker.onmessage = function(e) {
-            // Ignore progress updates, only process success/failure
-            if (e.data.progress) {
-                return;  // Continue computing
-            }
-
+            // Progress updates carry no outcome
             if (e.data.success === true) {
-                resolve({
+                finish(null, {
                     challenge: challenge.challenge,
                     solution: e.data.solution,
                     timestamp: challenge.timestamp,
@@ -61,18 +95,37 @@ function solvePowChallenge(challenge) {
                     difficulty: challenge.difficulty,
                     salt: challenge.salt
                 });
-                worker.terminate();
             } else if (e.data.success === false) {
-                reject(new Error('Processing failed'));
-                worker.terminate();
+                finish(new Error('Processing failed'));
             }
         };
-
         worker.onerror = function(error) {
-            reject(error);
-            worker.terminate();
+            finish(error);
         };
+
+        worker.postMessage({
+            challenge: challenge.challenge,
+            difficulty: challenge.difficulty,
+            salt: challenge.salt
+        });
     });
+}
+
+// Ends every running proof of work (logout, session end, leaving registration); each caller's
+// promise rejects with a cancelled PowStopped, so every lock it holds is released
+function cancelProofsOfWork() {
+    Array.from(powRuns).forEach(run => run.stop());
+}
+
+// The code to show for a failed proof of work, or fallback when it was not the proof of work
+// that failed. A cancelled one gives fallback too: callers check isPowCancelled first when they
+// can still be on screen.
+function powFailureCode(error, fallback) {
+    return error instanceof PowStopped && error.code ? error.code : fallback;
+}
+
+function isPowCancelled(error) {
+    return error instanceof PowStopped && error.code === null;
 }
 
 // ========================================
@@ -105,24 +158,38 @@ function pageLimit(data) {
     return Number.isSafeInteger(limit) && limit >= 1 && limit <= MAX_MESSAGE_PAGE_LIMIT ? limit : 0;
 }
 
+// How an attempt to open the app ended
+const ENTRY = Object.freeze({
+    ENTERED: 'entered',
+    // no answer from /me (status 0) or a server error: nothing was wiped, the caller offers a retry
+    UNREACHABLE: 'unreachable',
+    // the session is gone or the server's answer was refused: the stored identity was removed
+    REFUSED: 'refused'
+});
+
+// Opens the app once /me confirms the session and the identity. Never changes the view on
+// failure: each caller knows what its user still needs on screen. Returns { entry, result }.
 async function enterApp(identity, persist) {
     const check = await apiCall('GET', '/me');
+    if (check.status === 0 || check.status >= 500) {
+        return { entry: ENTRY.UNREACHABLE, result: check };
+    }
     const ttlDays = check.data && Number.isSafeInteger(check.data.message_ttl_days) ? check.data.message_ttl_days : 0;
     const limits = roomLimits(check.data);
     if (!check.ok || !check.data || check.data.public_key !== identity.publicKey || ttlDays < 1 || ttlDays > MAX_MESSAGE_TTL_DAYS || !limits) {
-        await Keystore.wipe();
+        // Server-driven: the replay records stay (Keystore.wipeIdentity)
+        await Keystore.wipeIdentity();
         if (check.ok) {
             Errors.report(Errors.CODES.E_IDENTITY_MISMATCH);
             await apiCall('POST', '/logout');
         }
-        showMainMenu();
-        return false;
+        return { entry: ENTRY.REFUSED, result: check };
     }
     if (persist) {
         await Keystore.save(identity);
     }
     await Chat.start(identity, ttlDays, limits);
-    return true;
+    return { entry: ENTRY.ENTERED, result: check };
 }
 
 async function login() {
@@ -179,36 +246,26 @@ async function login() {
     try {
         // ZERO-KNOWLEDGE: only HKDF(AccountNumber, "noaddx/auth") goes over the wire
         const authKey = await ElyrnCrypto.deriveAuthKey(normalizedAccountNumber);
-        const response = await fetchWithErrorHandling(`${API_BASE_URL}/login`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ auth_key: authKey })
-        });
-
-        // If fetchWithErrorHandling returned null, it means error was handled and redirected
-        if (!response) {
+        const result = await apiCall('POST', '/login', { auth_key: authKey });
+        if (!result.ok || !result.data || !result.data.success) {
+            // SECURITY: the server's own text is never shown (Errors.fromResult maps it)
+            Errors.inline(errorElement, Errors.fromResult(result), null, result);
             return;
         }
 
-        const data = await response.json();
-
-        if (!data) {
-            Errors.inline(errorElement, Errors.fromApi(null, response.status));
+        successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
+        const identity = await deriveSession(normalizedAccountNumber);
+        const opened = await enterApp(identity, true);
+        successElement.textContent = '';
+        if (opened.entry === ENTRY.UNREACHABLE) {
+            // The number stays in the field: pressing login again retries
+            Errors.inline(errorElement, Errors.fromResult(opened.result), null, opened.result);
             return;
         }
-
-        if (data.success) {
-            successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
-            const identity = await deriveSession(normalizedAccountNumber);
-            accountNumberInputElement.value = '';
-            errorElement.textContent = '';
-            successElement.textContent = '';
-            await enterApp(identity, true);
-        } else {
-            // SECURITY: Map API error message to generic user-facing message
-            Errors.inline(errorElement, Errors.fromApi(data.message, response.status));
+        accountNumberInputElement.value = '';
+        errorElement.textContent = '';
+        if (opened.entry === ENTRY.REFUSED) {
+            showMainMenu();
         }
     } catch (error) {
         Errors.inline(errorElement, Errors.CODES.E_REQUEST_FAILED, null, error);
@@ -294,10 +351,12 @@ async function copyAccountNumber() {
         continueBtn.disabled = false;
 
     } catch (error) {
-        // SECURITY: Generic error message; the log keeps only the error's name
-        Errors.inline(errorElement, Errors.fromApi(null, 500), null, error);
-        accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
         allowRetry();
+        // Registration was left while the proof of work ran: nothing to tell
+        if (isPowCancelled(error)) return;
+        // SECURITY: Generic error message; the log keeps only the error's name
+        Errors.inline(errorElement, powFailureCode(error, Errors.fromApi(null, 500)), null, error);
+        accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
     }
 }
 
@@ -317,11 +376,17 @@ async function maskAccountNumber(accountNumberElement, successElement) {
 
 // Registration phase 1: pays a proof of work and has the server issue an account number and
 // its pending token. Returns { accountNumber, pendingToken }, or null once the failure has been
-// shown; throws when no challenge comes or the answer cannot be read (the caller reports it).
+// shown; throws only when the proof of work fails (the caller reports it).
 async function requestAccountNumber(accountNumberElement, successElement, errorElement) {
+    const failed = (code, cause) => {
+        Errors.inline(errorElement, code, null, cause);
+        accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
+        return null;
+    };
+
     const issued = await getPowChallenge();
     if (!issued.challenge) {
-        throw new Error('Failed to get PoW challenge');
+        return failed(Errors.fromResult(issued), issued);
     }
 
     successElement.textContent = Errors.NOTICE.SECURING_ACCOUNT;
@@ -332,39 +397,19 @@ async function requestAccountNumber(accountNumberElement, successElement, errorE
     successElement.textContent = Errors.NOTICE.GENERATING_ACCOUNT_NUMBER;
 
     // Get Account Number from backend (Phase 1 - no account creation)
-    const response = await fetchWithErrorHandling(`${API_BASE_URL}/register`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            confirm: false,
-            pow: powSolution
-        })
-    });
-
-    // If fetchWithErrorHandling returned null, it means error was handled and redirected
-    if (!response) {
-        return null;
+    const result = await apiCall('POST', '/register', { confirm: false, pow: powSolution });
+    if (!result.ok || !result.data || !result.data.success) {
+        // SECURITY: the server's own text is never shown (Errors.fromResult maps it)
+        return failed(Errors.fromResult(result), result);
     }
 
-    const data = await response.json();
+    const accountNumber = result.data.account_number;
+    const pendingToken = result.data.pending_token;
 
-    if (!data || !data.success) {
-        // SECURITY: Map API error message to generic user-facing message
-        Errors.inline(errorElement, Errors.fromApi(data?.message, response.status));
-        // Logged once, by the line above
-        accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
-        return null;
-    }
-
-    const accountNumber = data.account_number;
-    const pendingToken = data.pending_token;
-
-    if (!accountNumber || accountNumber.length !== ACCOUNT_NUMBER_LEN || !pendingToken) {
+    if (typeof accountNumber !== 'string' || accountNumber.length !== ACCOUNT_NUMBER_LEN ||
+        typeof pendingToken !== 'string' || !pendingToken) {
         // SECURITY: Generic error message
-        Errors.inline(errorElement, Errors.fromApi(null, response.status));
-        return null;
+        return failed(Errors.fromApi(null, result.status), result);
     }
     return { accountNumber: accountNumber, pendingToken: pendingToken };
 }
@@ -482,18 +527,36 @@ async function continueWithAccountNumber() {
             failRegistrationStep(result.status);
         }
     } catch (error) {
-        // SECURITY: Generic error message; the log keeps only the error's name
-        failRegistrationStep(0, error);
+        // Registration was left while the proof of work ran: nothing to tell
+        if (isPowCancelled(error)) return;
+        const powCode = powFailureCode(error, null);
+        if (powCode) {
+            document.getElementById('registerSuccess').textContent = '';
+            Errors.inline(errorElement, powCode, null, error);
+        } else {
+            // SECURITY: Generic error message; the log keeps only the error's name
+            failRegistrationStep(0, error);
+        }
     } finally {
         continueBtn.disabled = !pendingRegistrationToken;
     }
 }
 
-// Account created: derive the E2E identity locally from the account number we hold
+// Account created: derive the E2E identity locally from the account number we hold. The number
+// stays on screen (and pending) until the app has opened: if it does not, the account exists
+// anyway and the number is the only way back into it.
 async function finishRegistration() {
     const accountNumber = pendingRegistrationAccountNumber;
-    document.getElementById('registerSuccess').textContent = Errors.NOTICE.DERIVING_KEYS;
+    const successElement = document.getElementById('registerSuccess');
+    successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
     const identity = await deriveSession(accountNumber);
+    const opened = await enterApp(identity, true);
+    successElement.textContent = '';
+    if (opened.entry !== ENTRY.ENTERED) {
+        // Continue retries (the server answers 401, recoverRegistration logs in), or log in by hand
+        Errors.inline(document.getElementById('registerError'), Errors.CODES.E_ACCOUNT_CREATED_NOT_ENTERED, null, opened.result);
+        return;
+    }
 
     // The account number was copied for the user to save; do not leave it in the clipboard
     // (clipboard histories and cross-device sync would keep it). Best effort only: a page
@@ -506,10 +569,7 @@ async function finishRegistration() {
     pendingRegistrationAccountNumber = null;
     pendingRegistrationToken = null;
     document.getElementById('generatedAccountNumber').textContent = '';
-
-    if (await enterApp(identity, true)) {
-        showSuccess('welcome to elyrn.');
-    }
+    showSuccess('welcome to elyrn.');
 }
 
 // A 401 means the server no longer holds this registration. Either an earlier attempt created
@@ -535,7 +595,7 @@ async function recoverRegistration() {
 async function logout() {
     // Forget local key material first, then revoke every server session
     Chat.stop();
-    await Keystore.wipe();
+    await Keystore.wipeAll();
     const result = await apiCall('POST', '/logout');
     showMainMenu();
     document.getElementById('accountNumberInput').value = '';
@@ -575,7 +635,7 @@ async function deleteIdentity() {
             return;
         }
         Chat.stop();
-        await Keystore.wipe();
+        await Keystore.wipeAll();
         showMainMenu();
         showSuccess('identity deleted');
     } catch (error) {
@@ -587,9 +647,10 @@ async function deleteIdentity() {
 
 // Cancel registration - just go back (no account was created yet)
 function cancelRegistration() {
-    // Stop the scramble animation
+    // Stop the scramble animation and any proof of work still running for this registration
     stopAccountNumberScramble();
-    
+    cancelProofsOfWork();
+
     // Clear any pending state
     pendingRegistrationAccountNumber = null;
     pendingRegistrationToken = null;

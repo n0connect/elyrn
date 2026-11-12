@@ -35,11 +35,14 @@ test('only well-formed tasks are worked on', () => {
     const valid = fn('isValidTask');
     const hex = 'ab'.repeat(16);
     assert.equal(valid({ challenge: hex, salt: hex, difficulty: 20 }), true);
+    assert.equal(valid({ challenge: hex, salt: hex, difficulty: 24 }), true);
     for (const task of [
         { challenge: hex.toUpperCase(), salt: hex, difficulty: 20 },
         { challenge: hex.slice(2), salt: hex, difficulty: 20 },
         { challenge: hex, salt: hex + 'zz', difficulty: 20 },
         { challenge: hex, salt: hex, difficulty: 0 },
+        { challenge: hex, salt: hex, difficulty: 25 },
+        { challenge: hex, salt: hex, difficulty: 32 },
         { challenge: hex, salt: hex, difficulty: 33 },
         { challenge: hex, salt: hex, difficulty: 20.5 },
         { challenge: hex, salt: hex, difficulty: '20' },
@@ -47,4 +50,11 @@ test('only well-formed tasks are worked on', () => {
     ]) {
         assert.equal(valid(task), false, JSON.stringify(task));
     }
+});
+
+// The server never issues more than 24 bits (backend config maxPoWDifficulty): a harder task is
+// refused, so the largest budget the worker can ever run is the one for 24 bits
+test('the difficulty cap is the server maximum and bounds the work', () => {
+    assert.equal(fn('MAX_DIFFICULTY'), 24);
+    assert.equal(fn('attemptBudget')(fn('MAX_DIFFICULTY')), 2 ** 28);
 });

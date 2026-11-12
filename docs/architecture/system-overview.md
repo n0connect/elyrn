@@ -74,7 +74,9 @@ AccountNumber (256-bit CSPRNG, base64url, 43 chars)
 ### In-Browser Key Storage (`keystore.js`)
 - The private key is saved to **IndexedDB** as a **non-extractable `CryptoKey`**, next to the non-extractable HKDF key every room key derives from (the rooms root).
 - Even if malicious script or an XSS attempt were executed in the browser context, WebCrypto prohibits reading the raw private key bytes (`extractable: false`).
-- On logout, `Keystore.wipe()` completely deletes the IndexedDB database.
+- On the user's own logout or identity deletion, `Keystore.wipeAll()` deletes the whole IndexedDB database.
+- When the server ends the session (a 401, or a `/me` answer that is refused), `Keystore.wipeIdentity()` removes only the identity record. The per-conversation replay records and verification marks stay, so a server cannot erase replay protection by ending a session once. They belong to the account that wrote them (its public key is kept as their owner); logging in with a different account on the same device clears them first, so one account never inherits or links to another's conversations.
+- If `/me` gets no answer or a server error while a stored session is resumed, nothing is removed and the device is not logged out: the main menu says the server cannot be reached and offers a retry.
 
 ---
 
@@ -257,6 +259,8 @@ After a master key rotation a supervised goroutine (`chat.RunRewrap`) re-encrypt
 ## Errors
 
 Every failure the server answers is registered in `backend/internal/apperr`: a typed code with a stable `E_...` id, its HTTP status, the public sentence and the log level. Handlers and middleware answer with `apperr.Write` (a known cause) or `apperr.WriteError` (an error from a service: sentinel errors map to codes through the one table in `sentinels.go`; anything else is `E_INTERNAL`, with the cause logged server side only). Each failure is logged once, by operation name and code, never with request data. Several causes deliberately share one public answer (for example every session or account miss is `401 Unauthorized`) so a client cannot tell them apart; the registry marks each such merge. The body is the plain-text sentence `http.Error` writes, which the browser maps in `frontend/js/errors.js`; login's codes (`E_LOGIN_*`) are registered with a JSON shape instead and answer `{"success":false,"message":"<sentence>"}` exactly as login always did. `apperr.WriteCause` answers a code and logs the error behind it, for a server fault whose public answer a client contract fixes.
+
+In the browser every API request goes through `apiCall` (`frontend/js/utils.js`), which never leaves the page: login and registration explain a wrong number, a rate limit or a lost connection in place. A request is aborted after `REQUEST_TIMEOUT_MS` (30 s) and reported as no answer (`E_REQUEST_TIMEOUT`), so no button or queued sync waits forever; the live event stream is not an `apiCall` and is never cut by it. Anything thrown and not caught elsewhere is reported once as `E_UNEXPECTED`, logged with the error's name only.
 
 ---
 

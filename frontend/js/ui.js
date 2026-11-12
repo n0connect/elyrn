@@ -104,7 +104,20 @@ function showRobot() {
 }
 
 function showApp() {
+    // Entering the app settles any resume that could not reach the server
+    clearResumeFailure();
     setView('appContainer');
+}
+
+// The main menu after a resume that got no answer: the reason, and a retry
+function showResumeFailure(code, cause) {
+    Errors.inline(document.getElementById('resumeError'), code, null, cause);
+    document.getElementById('retryResumeBtn').style.display = 'inline-block';
+}
+
+function clearResumeFailure() {
+    document.getElementById('resumeError').textContent = '';
+    document.getElementById('retryResumeBtn').style.display = 'none';
 }
 
 function clearChildren(element) {
@@ -498,8 +511,11 @@ function setEarlierControl(shown, busy) {
     button.disabled = Boolean(busy);
 }
 
+// A conversation that loaded and holds nothing; it replaces a load failure shown before
 function renderEmptyConversation(ttlDays, room) {
     const list = document.getElementById('messageList');
+    const failure = list.querySelector('.load-failed');
+    if (failure) failure.remove();
     if (list.children.length === 0) {
         const empty = document.createElement('li');
         empty.className = 'empty-message';
@@ -508,6 +524,24 @@ function renderEmptyConversation(ttlDays, room) {
             : `end-to-end encrypted. messages vanish after ${ttlDays} days. say hello.`;
         list.appendChild(empty);
     }
+}
+
+// In place of the empty-conversation text when nothing could be loaded: the reason and a retry.
+// It carries .empty-message too, so the first messages to arrive remove it (dropEmptyNotice).
+function renderLoadFailure(onRetry) {
+    const list = document.getElementById('messageList');
+    if (list.children.length > 0) return;
+    const item = document.createElement('li');
+    item.className = 'empty-message load-failed';
+    const reason = document.createElement('div');
+    Errors.inline(reason, Errors.CODES.E_MESSAGES_NOT_LOADED);
+    const retry = document.createElement('button');
+    retry.className = 'menu-opt';
+    retry.textContent = 'retry';
+    retry.addEventListener('click', onRetry);
+    item.appendChild(reason);
+    item.appendChild(retry);
+    list.appendChild(item);
 }
 
 function setComposerHint(ttlDays) {

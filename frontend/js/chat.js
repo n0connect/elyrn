@@ -36,6 +36,7 @@ const Chat = (() => {
     let unsent = null;                // a send whose answer never came: { convId, text, id, counter, ciphertext }
     let roomRun = null;               // { stopScramble } while a room is paid for and revealed
     let friendRun = false;            // one friend request (a proof of work) at a time
+    const drafts = new Map();         // id -> composer text typed for it and not sent (memory only, never stored)
     const rejectedRooms = new Set();  // "id vault" pairs that failed verification: warned about once
 
     // ---------- plumbing ----------
@@ -51,7 +52,8 @@ const Chat = (() => {
     function sessionLost() {
         if (!me) return;
         stop();
-        Keystore.wipe();
+        // Server-driven: the identity goes, the replay records stay (Keystore.wipeIdentity)
+        Keystore.wipeIdentity();
         Errors.report(Errors.CODES.W_SESSION_ENDED);
         showLogin();
     }
@@ -126,6 +128,8 @@ const Chat = (() => {
     }
 
     function stop() {
+        // A proof of work still running belongs to this session: end it, which releases its lock
+        cancelProofsOfWork();
         closeEvents();
         clearTimeout(refreshTimer);
         conversations.clear();
@@ -135,6 +139,7 @@ const Chat = (() => {
         listLoaded = false;
         unsent = null;
         rejectedRooms.clear();
+        drafts.clear();
         me = null;
         clearChildren(document.getElementById('conversationList'));
         clearChildren(document.getElementById('messageList'));
@@ -153,7 +158,7 @@ const Chat = (() => {
         togglePairPanel(null);
         document.getElementById('inviteInput').value = '';
         document.getElementById('deleteAccountInput').value = '';
-        document.getElementById('messageInput').value = '';
+        setComposer('');
         document.title = APP_TITLE;
     }
 
@@ -219,7 +224,7 @@ const Chat = (() => {
                 if (isRoom !== Boolean(existing.room) ||
                     (isRoom ? !Rooms.refreshView(existing.room, item) : existing.peerPublicKey !== item.peer_public_key)) {
                     Errors.report(isRoom ? Errors.CODES.E_ROOM_DATA_CHANGED : Errors.CODES.E_PEER_KEY_CHANGED);
-                    conversations.delete(item.id);
+                    forget(item.id);
                     continue;
                 }
                 existing.lastSeq = Math.max(existing.lastSeq, item.last_seq);
@@ -240,10 +245,11 @@ const Chat = (() => {
         for (const id of Array.from(conversations.keys())) {
             if (!seen.has(id)) {
                 const gone = conversations.get(id);
-                conversations.delete(id);
+                forget(id);
                 forgetMark(gone);
                 if (activeId === id) {
                     activeId = null;
+                    setComposer('');
                     showHome();
                     Errors.report(gone.room ? Errors.CODES.W_ROOM_GONE : Errors.CODES.W_CONVERSATION_BURNED);
                 }
@@ -295,6 +301,12 @@ const Chat = (() => {
         return state;
     }
 
+    // Drops a conversation from this session, with the draft typed for it
+    function forget(id) {
+        conversations.delete(id);
+        drafts.delete(id);
+    }
+
     function scheduleRefresh() {
         clearTimeout(refreshTimer);
         refreshTimer = setTimeout(refreshConversations, REFRESH_DEBOUNCE_MS);
@@ -303,8 +315,10 @@ const Chat = (() => {
     async function open(id) {
         const conv = conversations.get(id);
         if (!conv) return;
+        stashDraft();
         activeId = id;
         showChatView(conv.aura, conv.room);
+        setComposer(drafts.get(id) || '');
         conv.seqs = new Set();
         conv.ids = new Set();
         conv.maxSeq = 0;
@@ -324,25 +338,69 @@ const Chat = (() => {
             setComposerHint(me.ttlDays);
             setVerifiedState(conv.verified);
         }
-        await sync(conv);
+        const loaded = await sync(conv);
         if (activeId === id) {
-            renderEmptyConversation(me.ttlDays, conv.room);
-            document.getElementById('messageInput').focus();
+            // Nothing could be loaded: say so, with a retry, never "say hello" over it
+            if (!loaded) renderLoadFailure(() => open(id));
+            composer().focus();
         }
     }
 
     function backToList() {
+        stashDraft();
         activeId = null;
+        setComposer('');
         showHome();
         renderList();
     }
 
+    // ---------- composer (one input, a draft per conversation) ----------
+
+    function composer() {
+        return document.getElementById('messageInput');
+    }
+
+    function setComposer(text) {
+        composer().value = text;
+        updateComposerMeta();
+    }
+
+    // Keeps what is typed for the open conversation until it is opened again
+    function stashDraft() {
+        if (!activeId) return;
+        const text = composer().value;
+        if (text) {
+            drafts.set(activeId, text);
+        } else {
+            drafts.delete(activeId);
+        }
+    }
+
+    // A sent text leaves the composer only where it still is: the same conversation, unchanged.
+    // Typed on after sending, or moved elsewhere, the text stays; a draft equal to it goes.
+    function clearSent(convId, text) {
+        if (activeId === convId && composer().value === text) {
+            setComposer('');
+        }
+        if (drafts.get(convId) === text) {
+            drafts.delete(convId);
+        }
+    }
+
     // ---------- messages ----------
 
-    // Serialised per conversation so SSE pokes and manual opens never interleave. A failed sync
-    // is logged and the chain stays usable: the next poke or open syncs from where this one stopped.
+    // Serialised per conversation so SSE pokes and manual opens never interleave. The chain stays
+    // usable after a failure: the next poke or open syncs from where this one stopped. Resolves to
+    // false when the sync failed (open() then shows a retry when nothing could be loaded).
     function sync(conv) {
-        conv.syncChain = conv.syncChain.then(() => syncNow(conv)).catch(error => Log.error(Errors.INTERNAL.E_SYNC_FAILED, error));
+        conv.syncChain = conv.syncChain.then(() => syncNow(conv)).catch(error => {
+            if (me && activeId === conv.id && conv.loaded) {
+                Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, error);
+            } else {
+                Log.error(Errors.INTERNAL.E_SYNC_FAILED, error);
+            }
+            return false;
+        });
         return conv.syncChain;
     }
 
@@ -353,14 +411,16 @@ const Chat = (() => {
             ? `/conversations/${conv.id}/messages?after=${conv.maxSeq}`
             : `/conversations/${conv.id}/messages`;
         const result = await api('GET', path);
-        if (!me || activeId !== conv.id) return;
+        if (!me || activeId !== conv.id) return true;
         if (result.status === 404) {
             scheduleRefresh();
-            return;
+            return true;
         }
         if (!result.ok || !result.data || !Array.isArray(result.data.messages)) {
-            Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
-            return;
+            // A first load that fails is shown in the conversation itself, by open()
+            if (conv.loaded) Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
+            else Log.error(Errors.INTERNAL.E_SYNC_FAILED, result);
+            return false;
         }
         if (!conv.loaded) {
             // A new loaded sequence starts from what this device remembers (counters.js, rule 2)
@@ -380,13 +440,16 @@ const Chat = (() => {
         }
         // Once per sync, never per message; kept even if the user moved on meanwhile
         await saveMark(conv);
-        if (activeId !== conv.id) return;
+        if (activeId !== conv.id) return true;
 
         appendMessages(page.fresh);
+        // Says hello only to a conversation that loaded and holds nothing (and replaces a retry)
+        renderEmptyConversation(me.ttlDays, conv.room);
         if (first) setEarlierControl(conv.earlier, false);
         if (conv.room) checkLookalikes(conv);
         conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
         await markRead(conv);
+        return true;
     }
 
     // A page that came back full may have more below it; a shorter one is the beginning
@@ -565,7 +628,9 @@ const Chat = (() => {
         const sendBtn = document.getElementById('sendBtn');
         if (!conv || sendBtn.disabled) return;
 
-        const validation = validateMessageText(input.value);
+        // What the composer held when sent: it is cleared later only if it still holds exactly this
+        const typed = input.value;
+        const validation = validateMessageText(typed);
         if (!validation.valid) {
             if (input.value.trim() !== '') Errors.report(validation.error, validation.params);
             return;
@@ -610,8 +675,7 @@ const Chat = (() => {
                 conv.myMaxN = Math.max(conv.myMaxN, attempt.counter);
             }
             if (stored) {
-                input.value = '';
-                updateComposerMeta();
+                clearSent(conv.id, typed);
                 bump(conv.id);
                 await sync(conv);
             } else if (result.status === 429) {
@@ -626,7 +690,7 @@ const Chat = (() => {
             Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, e);
         } finally {
             sendBtn.disabled = false;
-            input.focus();
+            if (activeId) input.focus();
         }
     }
 
@@ -687,8 +751,8 @@ const Chat = (() => {
         try {
             invite = await requestInvite(owner);
         } catch (e) {
-            // The worker refused the challenge or found no solution within its budget
-            if (me === owner) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, e);
+            // The proof of work failed, timed out or was too hard (a cancelled one ended the session)
+            if (me === owner) Errors.report(powFailureCode(e, Errors.CODES.E_INVITE_NOT_CREATED), null, e);
         }
         if (me !== owner) return;  // stop() ended this run and put the panel away
         run.stopScramble();
@@ -854,11 +918,11 @@ const Chat = (() => {
             if (me !== owner || !issued.ok || !issued.data || !issued.data.challenge) return null;
             return solvePowChallenge(issued.data.challenge);
         };
-        let created = { status: 0 };
+        let created;
         try {
             created = await Rooms.create(api, owner.roomsRoot, maxMembers, ttlHours, solve);
         } catch (e) {
-            created = { status: 0 };
+            created = { status: 0, failure: e };
         }
         if (me !== owner) return;  // stop() ended this run and put the panel away
         run.stopScramble();
@@ -867,7 +931,9 @@ const Chat = (() => {
             resetRoomPanel();
             if (created.status === 429) Errors.report(Errors.CODES.W_ROOM_CREATE_RATE_LIMITED);
             else if (created.status === 400) Errors.report(Errors.CODES.E_ROOM_CLOCK_REFUSED);
-            else if (created.status !== 401) Errors.report(Errors.CODES.E_ROOM_NOT_CREATED, null, created);
+            else if (created.status !== 401) {
+                Errors.report(powFailureCode(created.failure, Errors.CODES.E_ROOM_NOT_CREATED), null, created.failure || created);
+            }
             return;
         }
         await revealRoomCode(created.code, ElyrnRoomCrypto.parseRoomCode(created.code).expiresHour * 3600);
@@ -938,7 +1004,7 @@ const Chat = (() => {
                 Errors.report(Errors.CODES.E_FRIEND_REQUEST_NOT_SENT, null, result);
             }
         } catch (e) {
-            if (me === owner) Errors.report(Errors.CODES.E_FRIEND_REQUEST_NOT_SENT, null, e);
+            if (me === owner) Errors.report(powFailureCode(e, Errors.CODES.E_FRIEND_REQUEST_NOT_SENT), null, e);
         } finally {
             friendRun = false;
             if (me === owner) await refreshRoomPanels(conv);
@@ -1009,8 +1075,10 @@ const Chat = (() => {
         if (!id) return;
         const result = await api('DELETE', `/conversations/${id}`);
         if (result.status === 204 || result.status === 404) {
-            conversations.delete(id);
+            forget(id);
             if (conv) forgetMark(conv);
+            // Nothing typed for a burned conversation is kept
+            setComposer('');
             backToList();
             showSuccess(leaving ? 'you left the room' : 'burned');
             scheduleRefresh();
