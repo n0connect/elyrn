@@ -10,6 +10,12 @@ import (
 	"elyrn/internal/utils"
 )
 
+const (
+	headerOrigin = "Origin"
+	// corsPreflightMaxAge is how long, in seconds, a browser may cache a preflight answer
+	corsPreflightMaxAge = "3600"
+)
+
 var (
 	allowedOrigins map[string]struct{}
 	corsLogger     = utils.NewLogger("CORS")
@@ -52,18 +58,18 @@ func isOriginAllowed(origin string) bool {
 func CORSMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		loadAllowedOrigins()
-		origin := r.Header.Get("Origin")
+		origin := r.Header.Get(headerOrigin)
 
 		if origin != "" {
 			if isOriginAllowed(origin) {
 				// Echo origin
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
+				w.Header().Set("Vary", headerOrigin)
 
 				// Whitelist: exactly the methods and headers the API uses
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-				w.Header().Set("Access-Control-Max-Age", "3600")
+				w.Header().Set("Access-Control-Allow-Headers", utils.HeaderContentType)
+				w.Header().Set("Access-Control-Max-Age", corsPreflightMaxAge)
 			} else {
 				// If Preflight then return error
 				// SECURITY: Generic error message to prevent information leakage

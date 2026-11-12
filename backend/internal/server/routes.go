@@ -8,6 +8,7 @@ import (
 	"elyrn/internal/apperr"
 	"elyrn/internal/handlers"
 	"elyrn/internal/middleware"
+	"elyrn/internal/models"
 	"elyrn/internal/utils"
 )
 
@@ -33,18 +34,18 @@ func NewMux() *http.ServeMux {
 		pattern string
 		handler http.HandlerFunc
 	}{
-		{"/api/v2/pow/challenge", public(handlers.PoWChallengeHandler)},
-		{"/api/v2/register", public(handlers.RegisterHandler)},
-		{"/api/v2/login", public(middleware.RateLimitMiddleware(handlers.LoginHandler))},
-		{"/api/v2/logout", public(handlers.LogoutHandler)},
-		{"/api/v2/me", protected(handlers.MeHandler)},
-		{"/api/v2/invites", protected(handlers.CreateInviteHandler)},
-		{"/api/v2/invites/redeem", protected(handlers.RedeemInviteHandler)},
-		{"/api/v2/rooms", protected(handlers.CreateRoomHandler)},
-		{"/api/v2/rooms/join", protected(handlers.JoinRoomHandler)},
-		{"/api/v2/conversations", protected(handlers.ConversationsHandler)},
-		{"/api/v2/conversations/", protected(handlers.ConversationsHandler)},
-		{"/api/v2/events", protected(handlers.EventsHandler)},
+		{models.PathPoWChallenge, public(handlers.PoWChallengeHandler)},
+		{models.PathRegister, public(handlers.RegisterHandler)},
+		{models.PathLogin, public(middleware.RateLimitMiddleware(handlers.LoginHandler))},
+		{models.PathLogout, public(handlers.LogoutHandler)},
+		{models.PathMe, protected(handlers.MeHandler)},
+		{models.PathInvites, protected(handlers.CreateInviteHandler)},
+		{models.PathInvitesRedeem, protected(handlers.RedeemInviteHandler)},
+		{models.PathRooms, protected(handlers.CreateRoomHandler)},
+		{models.PathRoomsJoin, protected(handlers.JoinRoomHandler)},
+		{models.PathConversations, protected(handlers.ConversationsHandler)},
+		{models.PathConversations + "/", protected(handlers.ConversationsHandler)},
+		{models.PathEvents, protected(handlers.EventsHandler)},
 	}
 	for _, route := range routes {
 		serverLogger.Debug("Registering route: %s", route.pattern)

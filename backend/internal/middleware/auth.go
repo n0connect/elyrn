@@ -13,6 +13,9 @@ import (
 	"elyrn/internal/utils"
 )
 
+// sessionRefreshDivisor: a token past 1/sessionRefreshDivisor of its lifetime is re-issued
+const sessionRefreshDivisor = 2
+
 var (
 	authMiddlewareLogger = utils.NewLogger("AUTH_MIDDLEWARE")
 	userRepository       = store.NewUserRepository()
@@ -68,7 +71,7 @@ func JWTMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if time.Since(session.IssuedAt) > config.GetJWTExpiration()/2 {
+		if time.Since(session.IssuedAt) > config.GetJWTExpiration()/sessionRefreshDivisor {
 			if fresh, err := auth.SignToken(user.UUID, user.SessionEpoch); err == nil {
 				auth.SetAuthCookie(w, fresh)
 			} else {

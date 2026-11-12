@@ -10,6 +10,15 @@ import (
 	"elyrn/internal/config"
 )
 
+// HTTP header names and values the server and the agent both send
+const (
+	HeaderContentType  = "Content-Type"
+	HeaderCacheControl = "Cache-Control"
+	CacheNoStore       = "no-store"
+	MIMEJSON           = "application/json"
+	MIMEEventStream    = "text/event-stream"
+)
+
 func maxRequestBodyBytes() (int, error) {
 	maxBytes := config.GetMaxRequestBodyBytes()
 	if maxBytes <= 0 {
@@ -113,7 +122,7 @@ func DecodeJSONRequest(r *http.Request, v interface{}) error {
 
 // EncodeJSONResponse writes a JSON response with the given status code
 func EncodeJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(HeaderContentType, MIMEJSON)
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(data)
 }

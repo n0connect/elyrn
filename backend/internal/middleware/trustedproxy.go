@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -123,13 +124,28 @@ func ClientIP(r *http.Request) string {
 	return ""
 }
 
-// ipv6SubscriberBits is the prefix one IPv6 subscriber controls (RFC 6177 assigns at least a /64)
-const ipv6SubscriberBits = 64
+const (
+	// ipv6SubscriberBits is the prefix one IPv6 subscriber controls (RFC 6177 assigns at least a /64)
+	ipv6SubscriberBits = 64
+	// ipv6AddressBits is the full length of an IPv6 address
+	ipv6AddressBits = 8 * net.IPv6len
+	// torCircuitPrefixBits: tor's circuit addresses share one /64 and differ in the low bits
+	torCircuitPrefixBits = 64
+	// unknownNetwork groups every address that does not parse into one bucket
+	unknownNetwork = "unknown"
+	// clientKeySecretBytes keys HMAC-SHA256 with a full digest's worth of entropy
+	clientKeySecretBytes = cryptoengine.SHA256Size
+	// clientKeyBytes truncates the HMAC to 128 bits: collision-free for any realistic bucket count
+	clientKeyBytes = 16
+)
+
+// ipv6SubscriberSuffix marks a reduced IPv6 address as the subscriber prefix ("/64")
+var ipv6SubscriberSuffix = "/" + strconv.Itoa(ipv6SubscriberBits)
 
 // torCircuitPrefix holds the addresses tor gives onion-service clients
 // (HiddenServiceExportCircuitID haproxy): one per circuit, the circuit ID in the low 32 bits.
 // They reach us only through nginx's onion listener, which accepts the tor container alone.
-var torCircuitPrefix = &net.IPNet{IP: net.ParseIP("fc00:dead:beef:4dad::"), Mask: net.CIDRMask(64, 128)}
+var torCircuitPrefix = &net.IPNet{IP: net.ParseIP("fc00:dead:beef:4dad::"), Mask: net.CIDRMask(torCircuitPrefixBits, ipv6AddressBits)}
 
 // clientNetwork reduces an address to what one client controls: the IPv4 address itself,
 // the IPv6 /64, or a single Tor circuit. Rate limits keyed on full IPv6 addresses are
@@ -137,7 +153,7 @@ var torCircuitPrefix = &net.IPNet{IP: net.ParseIP("fc00:dead:beef:4dad::"), Mask
 func clientNetwork(raw string) string {
 	ip := net.ParseIP(raw)
 	if ip == nil {
-		return "unknown"
+		return unknownNetwork
 	}
 	if v4 := ip.To4(); v4 != nil {
 		return v4.String()
@@ -145,7 +161,7 @@ func clientNetwork(raw string) string {
 	if torCircuitPrefix.Contains(ip) {
 		return ip.String()
 	}
-	return ip.Mask(net.CIDRMask(ipv6SubscriberBits, 128)).String() + "/64"
+	return ip.Mask(net.CIDRMask(ipv6SubscriberBits, ipv6AddressBits)).String() + ipv6SubscriberSuffix
 }
 
 // IsRequestHTTPS returns true if the request is HTTPS, considering trusted proxy headers.
@@ -179,7 +195,7 @@ var (
 // secret draw is remembered, so no key is ever computed without a secret.
 func ClientKey(r *http.Request) (string, error) {
 	clientKeyOnce.Do(func() {
-		clientKeySecret, clientKeyErr = cryptoengine.RandomBytes(32)
+		clientKeySecret, clientKeyErr = cryptoengine.RandomBytes(clientKeySecretBytes)
 	})
 	if clientKeyErr != nil {
 		return "", fmt.Errorf("client key secret: %w", clientKeyErr)
@@ -188,5 +204,5 @@ func ClientKey(r *http.Request) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("client key: %w", err)
 	}
-	return hex.EncodeToString(mac[:16]), nil
+	return hex.EncodeToString(mac[:clientKeyBytes]), nil
 }

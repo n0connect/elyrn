@@ -4,6 +4,32 @@
 
 package models
 
+// The HTTP API's URL contract, one home for the server's routes and the agent client
+const (
+	apiPrefix         = "/api/v2"
+	PathPoWChallenge  = apiPrefix + "/pow/challenge"
+	PathRegister      = apiPrefix + "/register"
+	PathLogin         = apiPrefix + "/login"
+	PathLogout        = apiPrefix + "/logout"
+	PathMe            = apiPrefix + "/me"
+	PathInvites       = apiPrefix + "/invites"
+	PathInvitesRedeem = PathInvites + "/redeem"
+	PathRooms         = apiPrefix + "/rooms"
+	PathRoomsJoin     = PathRooms + "/join"
+	PathConversations = apiPrefix + "/conversations"
+	PathEvents        = apiPrefix + "/events"
+
+	// Sub-resources under PathConversations/{id}
+	SubMessages = "messages"
+	SubRead     = "read"
+	SubMembers  = "members"
+	SubNotes    = "notes"
+
+	// The page cursors the messages route accepts
+	QueryAfter  = "after"
+	QueryBefore = "before"
+)
+
 type LoginRequest struct {
 	AuthKey string `json:"auth_key"` // HKDF(AccountNumber, "noaddx/auth") — never the AccountNumber itself
 }

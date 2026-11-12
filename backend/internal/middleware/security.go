@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"elyrn/internal/config"
+	"elyrn/internal/utils"
 )
 
 // apiCSP makes every API response inert: JSON is data, never a document that loads or runs anything
@@ -18,7 +19,7 @@ const permissionsPolicy = "accelerometer=(), autoplay=(), browsing-topics=(), ca
 func SecurityHeadersMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", apiCSP)
-		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set(utils.HeaderCacheControl, utils.CacheNoStore)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")

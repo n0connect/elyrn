@@ -22,9 +22,26 @@ import (
 )
 
 const (
-	conversationsPath = "/api/v2/conversations"
 	// seq values are non-negative int64: at most 19 decimal digits
 	maxSeqDigits = 19
+
+	// Rate-limit buckets per action: each namespaces a key "<bucket>:<stream tag>", and the
+	// two PoW-gated ones double as the proof-of-work action
+	bucketDelete = "delete"
+	bucketInvite = "invite"
+	bucketRedeem = "redeem"
+	bucketMsg    = "msg"
+	bucketRoom   = "room"
+	bucketJoin   = "join"
+	bucketNote   = "note"
+)
+
+// The path segments after /api/v2/conversations/, by position
+const (
+	segID            = iota // the conversation id
+	segSub                  // the sub-resource
+	segItem                 // the note id under notes
+	maxRouteSegments        // one past the deepest position
 )
 
 // pageQueries whitelists the messages route's query parameters: each names a cursor kind and
@@ -33,15 +50,15 @@ var pageQueries = map[string]struct {
 	kind   chat.CursorKind
 	minSeq int64
 }{
-	"after":  {chat.CursorAfter, 0},
-	"before": {chat.CursorBefore, 1},
+	models.QueryAfter:  {chat.CursorAfter, 0},
+	models.QueryBefore: {chat.CursorBefore, chat.FirstSeq},
 }
 
 var chatService = chat.NewService()
 
 // resolveMe turns the JWT-authenticated user into a chat member or writes the error.
 func resolveMe(w http.ResponseWriter, r *http.Request) (*chat.Member, bool) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(utils.HeaderCacheControl, utils.CacheNoStore)
 	userUUID, ok := auth.GetUserUUID(r.Context())
 	if !ok {
 		apperr.Write(w, "resolveMe", apperr.SessionContextMissing)
@@ -114,7 +131,7 @@ func MeHandler(w http.ResponseWriter, r *http.Request) {
 // deleteAccount erases the caller once the request re-proves the account number (as its auth
 // key): a live session alone, or a request riding on one, cannot erase an identity.
 func deleteAccount(w http.ResponseWriter, r *http.Request, me *chat.Member) {
-	if !allowOrTooMany(w, "delete", me) {
+	if !allowOrTooMany(w, bucketDelete, me) {
 		return
 	}
 	var req models.DeleteAccountRequest
@@ -144,14 +161,14 @@ func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	me, ok := resolveMe(w, r)
-	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, "invite", me) {
+	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, bucketInvite, me) {
 		return
 	}
 	var req models.CreateInviteRequest
 	if !decodeOrReject(w, r, &req, "CreateInviteHandler") {
 		return
 	}
-	if !requireProofOfWork(w, req.PoW, "invite") {
+	if !requireProofOfWork(w, req.PoW, bucketInvite) {
 		return
 	}
 	token, expiresAt, err := chatService.CreateInvite(me)
@@ -169,7 +186,7 @@ func RedeemInviteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	me, ok := resolveMe(w, r)
-	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, "redeem", me) {
+	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, bucketRedeem, me) {
 		return
 	}
 	var req models.RedeemInviteRequest
@@ -195,30 +212,30 @@ type conversationRoute struct {
 // parseConversationRoute whitelists: "", "/{id}", "/{id}/messages", "/{id}/read",
 // "/{id}/members", "/{id}/notes", "/{id}/notes/{note id}".
 func parseConversationRoute(path string) (conversationRoute, bool) {
-	rest := strings.TrimPrefix(path, conversationsPath)
+	rest := strings.TrimPrefix(path, models.PathConversations)
 	if rest == "" {
 		return conversationRoute{}, true
 	}
 	parts := strings.Split(strings.TrimPrefix(rest, "/"), "/")
-	if !strings.HasPrefix(rest, "/") || len(parts) > 3 {
+	if !strings.HasPrefix(rest, "/") || len(parts) > maxRouteSegments {
 		return conversationRoute{}, false
 	}
-	id, ok := utils.ParseCanonicalUUIDv4(parts[0])
+	id, ok := utils.ParseCanonicalUUIDv4(parts[segID])
 	if !ok {
 		return conversationRoute{}, false
 	}
-	if len(parts) == 1 {
+	if len(parts) == segID+1 {
 		return conversationRoute{id: id}, true
 	}
 	switch {
-	case len(parts) == 2 && (parts[1] == "messages" || parts[1] == "read" || parts[1] == "members" || parts[1] == "notes"):
-		return conversationRoute{id: id, sub: parts[1]}, true
-	case len(parts) == 3 && parts[1] == "notes":
-		item, ok := utils.ParseCanonicalUUIDv4(parts[2])
+	case len(parts) == segSub+1 && (parts[segSub] == models.SubMessages || parts[segSub] == models.SubRead || parts[segSub] == models.SubMembers || parts[segSub] == models.SubNotes):
+		return conversationRoute{id: id, sub: parts[segSub]}, true
+	case len(parts) == segItem+1 && parts[segSub] == models.SubNotes:
+		item, ok := utils.ParseCanonicalUUIDv4(parts[segItem])
 		if !ok {
 			return conversationRoute{}, false
 		}
-		return conversationRoute{id: id, sub: "notes", item: item}, true
+		return conversationRoute{id: id, sub: models.SubNotes, item: item}, true
 	default:
 		return conversationRoute{}, false
 	}
@@ -242,19 +259,19 @@ func ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 		listConversations(w, r, me)
 	case id != uuid.Nil && sub == "" && r.Method == http.MethodDelete:
 		burnConversation(w, r, me, id)
-	case sub == "messages" && r.Method == http.MethodGet:
+	case sub == models.SubMessages && r.Method == http.MethodGet:
 		listMessages(w, r, me, id)
-	case sub == "messages" && r.Method == http.MethodPost:
+	case sub == models.SubMessages && r.Method == http.MethodPost:
 		sendMessage(w, r, me, id)
-	case sub == "read" && r.Method == http.MethodPost:
+	case sub == models.SubRead && r.Method == http.MethodPost:
 		markRead(w, r, me, id)
-	case sub == "members" && r.Method == http.MethodGet:
+	case sub == models.SubMembers && r.Method == http.MethodGet:
 		roomMembers(w, r, me, id)
-	case sub == "notes" && route.item == uuid.Nil && r.Method == http.MethodGet:
+	case sub == models.SubNotes && route.item == uuid.Nil && r.Method == http.MethodGet:
 		listNotes(w, r, me, id)
-	case sub == "notes" && route.item == uuid.Nil && r.Method == http.MethodPost:
+	case sub == models.SubNotes && route.item == uuid.Nil && r.Method == http.MethodPost:
 		sendNote(w, r, me, id)
-	case sub == "notes" && route.item != uuid.Nil && r.Method == http.MethodDelete:
+	case sub == models.SubNotes && route.item != uuid.Nil && r.Method == http.MethodDelete:
 		deleteNote(w, r, me, id, route.item)
 	default:
 		apperr.Write(w, "ConversationsHandler", apperr.MethodNotAllowed)
@@ -339,7 +356,7 @@ func listMessages(w http.ResponseWriter, r *http.Request, me *chat.Member, id uu
 }
 
 func sendMessage(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.UUID) {
-	if rejectQuery(w, r) || !allowOrTooMany(w, "msg", me) {
+	if rejectQuery(w, r) || !allowOrTooMany(w, bucketMsg, me) {
 		return
 	}
 	var req models.SendMessageRequest
@@ -380,7 +397,7 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	me, ok := resolveMe(w, r)
-	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, "room", me) {
+	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, bucketRoom, me) {
 		return
 	}
 	var req models.CreateRoomRequest
@@ -394,7 +411,7 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	in.MaxMembers = req.MaxMembers
 	in.ExpiresAt = time.Unix(req.ExpiresAt, 0)
-	if !requireProofOfWork(w, req.PoW, "room") {
+	if !requireProofOfWork(w, req.PoW, bucketRoom) {
 		return
 	}
 	conversation, err := chatService.CreateRoom(me, in)
@@ -414,7 +431,7 @@ func JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	me, ok := resolveMe(w, r)
-	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, "join", me) {
+	if !ok || rejectQuery(w, r) || !allowOrTooMany(w, bucketJoin, me) {
 		return
 	}
 	var req models.JoinRoomRequest
@@ -464,7 +481,7 @@ func listNotes(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.
 }
 
 func sendNote(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.UUID) {
-	if rejectQuery(w, r) || !allowOrTooMany(w, "note", me) {
+	if rejectQuery(w, r) || !allowOrTooMany(w, bucketNote, me) {
 		return
 	}
 	var req models.SendNoteRequest

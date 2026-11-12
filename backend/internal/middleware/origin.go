@@ -32,7 +32,7 @@ func SameOriginWritesMiddleware(next http.HandlerFunc) http.HandlerFunc {
 				apperr.Write(w, "SameOriginWritesMiddleware: fetch metadata", apperr.CrossOrigin)
 				return
 			}
-		} else if origin := r.Header.Get("Origin"); origin != "" && !isOriginAllowed(origin) {
+		} else if origin := r.Header.Get(headerOrigin); origin != "" && !isOriginAllowed(origin) {
 			apperr.Write(w, "SameOriginWritesMiddleware: origin", apperr.CrossOrigin)
 			return
 		}

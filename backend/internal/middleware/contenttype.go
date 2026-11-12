@@ -5,13 +5,15 @@ import (
 	"strings"
 
 	"elyrn/internal/apperr"
+	"elyrn/internal/models"
+	"elyrn/internal/utils"
 )
 
 // emptyBodyAllowed whitelists POST endpoints that may be called without any body.
 // Every other POST/PUT must declare application/json; unknown paths never reach here (mux 404s them).
 var emptyBodyAllowed = map[string]struct{}{
-	"/api/v2/register": {}, // Phase 1 preview (still rejected later without PoW)
-	"/api/v2/logout":   {},
+	models.PathRegister: {}, // Phase 1 preview (still rejected later without PoW)
+	models.PathLogout:   {},
 }
 
 // ContentTypeMiddleware validates Content-Type header for body-carrying methods.
@@ -35,8 +37,8 @@ func ContentTypeMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Whitelist: Only allow "application/json" (parameters such as charset are ignored)
-		baseContentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0])
-		if !strings.EqualFold(baseContentType, "application/json") {
+		baseContentType := strings.TrimSpace(strings.Split(r.Header.Get(utils.HeaderContentType), ";")[0])
+		if !strings.EqualFold(baseContentType, utils.MIMEJSON) {
 			apperr.Write(w, "ContentTypeMiddleware", apperr.UnsupportedMediaType)
 			return
 		}

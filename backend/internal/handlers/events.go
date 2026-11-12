@@ -9,6 +9,7 @@ import (
 	"elyrn/internal/apperr"
 	"elyrn/internal/middleware"
 	"elyrn/internal/realtime"
+	"elyrn/internal/utils"
 )
 
 const (
@@ -20,6 +21,7 @@ const (
 	sseMaxLifetime = 10 * time.Minute
 	// sseMaxIterations bounds the event loop (RULES.md §8.1); lifetime normally ends it first
 	sseMaxIterations = 100000
+	// sseRetryPreamble asks the browser to reconnect after 3000 ms and marks the stream ready
 	sseRetryPreamble = "retry: 3000\n: ready\n\n"
 	ssePing          = ": ping\n\n"
 )
@@ -73,7 +75,7 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 		return rc.Flush() == nil
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set(utils.HeaderContentType, utils.MIMEEventStream)
 	w.Header().Set("X-Accel-Buffering", "no") // nginx: do not buffer the stream
 	w.WriteHeader(http.StatusOK)
 	if !write(sseRetryPreamble) {
