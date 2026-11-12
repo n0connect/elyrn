@@ -92,7 +92,8 @@ hidden too, or once the agent itself left or burned it. Past 1024 records the on
 expire soonest are evicted (`E_AGENT_STATE_EVICTED`). nginx's own `/api/` answers are told apart
 by their `code` field: an edge refusal (`E_EDGE_*`, `E_BODY_TOO_LARGE`) is
 `E_AGENT_SERVER_ROUTE`, never "room gone"; `E_BACKEND_UNAVAILABLE` is a passing
-`E_AGENT_SERVER_BUSY`. A registration interrupted between its two phases keeps its pending token
+`E_AGENT_SERVER_BUSY`, and so is every `5xx`, whatever its body (only a `200` or `201` body is
+ever decoded). A registration interrupted between its two phases keeps its pending token
 in the identity file and is finished by the next call.
 
 ## The browser

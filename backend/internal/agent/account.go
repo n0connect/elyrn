@@ -70,6 +70,9 @@ func (a *Agent) register(ctx context.Context) error {
 	if err := saveIdentity(a.idPath, pending, false); err != nil {
 		return err
 	}
+	// The counter file exists from the identity's first run on, so no later start mistakes its
+	// absence for a lost file (state.go, E_AGENT_STATE_REBUILT)
+	a.persistCountersOrWarn()
 	if err := a.adoptIdentity(phase1.AccountNumber); err != nil {
 		return err
 	}

@@ -233,7 +233,7 @@ func (st *roomState) remember(id uuid.UUID, judged seenMessage) {
 // persists it when it (or this account's own counter, mineBefore) changed.
 func (a *Agent) settleLedger(st *roomState, l *ledger, seq, mineBefore int64) {
 	if l.snapshot(st.counters, seq) || st.counters.Mine != mineBefore {
-		a.persistCountersAfterRead()
+		a.persistCountersOrWarn()
 	}
 }
 

@@ -8,6 +8,8 @@ package agent
 import (
 	"errors"
 	"strconv"
+
+	"elyrn/internal/utils"
 )
 
 // Code is a registered failure code.
@@ -154,15 +156,16 @@ func (e *Error) Error() string { return string(e.Code) + ": " + Sentence(e.Code)
 func (e *Error) Unwrap() error { return e.cause }
 
 // fail builds the error for code and logs the code (never the cause's text: it may hold a
-// path, a room id or server words).
+// path, a room id or server words). fail and warn bound their lines per code (utils flood
+// bound), so a burst of one code never silences another.
 func fail(code Code, cause error) *Error {
-	logger.Warn("failure code=%s", code)
+	logger.At(utils.LogLevelWARN, string(code), "failure code=%s", code)
 	return &Error{Code: code, cause: cause}
 }
 
 // warn logs a registered code the program recovers from by itself (never a cause's text).
 func warn(code Code) {
-	logger.Warn("warning code=%s", code)
+	logger.At(utils.LogLevelWARN, string(code), "warning code=%s", code)
 }
 
 // Fail is fail for the packages built on this one (the MCP layer, the command).

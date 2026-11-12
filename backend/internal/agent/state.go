@@ -22,10 +22,14 @@ import (
 //
 //	{"version":1,"rooms":{"<room id>":{"seq":12,"mine":4,"senders":{"<public key>":7},"expires":1767225600}}}
 //
-// Policy. A missing file is an empty one; for an identity that already existed it is logged
-// as E_AGENT_STATE_REBUILT (an upgrade from a release without the file, or a lost file): this
-// account's counter is then rebuilt from the visible messages before its first send in each
-// room, as before. A file that cannot be read is treated the same way. A file that is present
+// Policy. The file is written, empty, as soon as the identity file is (register), so every
+// identity has one from its first run on and a healthy start logs nothing. A missing file is an
+// empty one; for an identity that already existed it was expected, so it is logged as
+// E_AGENT_STATE_REBUILT (an upgrade from a release without the file, or a lost file) and written
+// again at once, empty, so the warning is not repeated by the next start: this account's
+// counter is then rebuilt from the visible messages before its first send in each room, as
+// before. A file that cannot be read is logged the same way and left alone (it may hold records
+// once the disk recovers), so that warning repeats until it is fixed. A file that is present
 // but malformed, of the wrong version or too large fails closed with E_AGENT_STATE_FILE: the
 // operator restores or removes it. A room's record is written before every send (write-ahead),
 // and after a read that raised it. "expires" is optional (records written before it was kept
@@ -55,7 +59,8 @@ type counterState struct {
 	rooms map[uuid.UUID]*counterRecord
 }
 
-// loadCounterState reads the file at path; existed says whether the identity was already there.
+// loadCounterState reads the file at path; existed says whether the identity was already there
+// (then the file was expected: a missing one is reported and written again, empty).
 func loadCounterState(path string, existed bool) (*counterState, error) {
 	state := &counterState{path: path, rooms: make(map[uuid.UUID]*counterRecord)}
 	raw, err := readPrivate(path, maxStateFileBytes, CodeStateFile)
@@ -68,6 +73,7 @@ func loadCounterState(path string, existed bool) (*counterState, error) {
 	case raw == nil:
 		if existed {
 			warn(CodeStateRebuilt)
+			state.saveOrWarn(nil)
 		}
 		return state, nil
 	}
@@ -212,15 +218,21 @@ func senderKey(public []byte) string {
 	return base64.RawURLEncoding.EncodeToString(public)
 }
 
+// saveOrWarn is save where a failure is only logged: what it records is already in memory, and
+// the next write carries it (a send's write-ahead fails closed there).
+func (s *counterState) saveOrWarn(held map[uuid.UUID]*roomState) {
+	if err := s.save(held); err != nil {
+		warn(CodeStateFile)
+	}
+}
+
 // persistCounters writes the counter file. A send must not go out unless this succeeded
-// (write-ahead); after a read, a failure is only logged: the read already happened, and the
-// next write carries the change.
+// (write-ahead); after a read or a registration, a failure is only logged
+// (persistCountersOrWarn): the read already happened, and the next write carries the change.
 func (a *Agent) persistCounters() error {
 	return a.counters.save(a.rooms)
 }
 
-func (a *Agent) persistCountersAfterRead() {
-	if err := a.persistCounters(); err != nil {
-		warn(CodeStateFile)
-	}
+func (a *Agent) persistCountersOrWarn() {
+	a.counters.saveOrWarn(a.rooms)
 }

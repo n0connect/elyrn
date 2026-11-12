@@ -51,11 +51,19 @@ var (
 	SecondInstance = Code{"E_SECOND_INSTANCE",
 		"another elyrn server already runs on this database; exactly one may run (proofs of work, " +
 			"rate limits and live events live in its memory); stop the other one first"}
-	// InstanceLockLost: the connection that held the single-instance lock is gone.
+	// InstanceLockLost: the connection that held the single-instance lock is gone (the driver
+	// reports it closed), so PostgreSQL has released the lock or will.
 	InstanceLockLost = Code{"E_INSTANCE_LOCK_LOST",
 		"the database connection that held the single-instance lock was lost (the database " +
 			"restarted or the network failed); the server stops and its restart policy starts it " +
 			"again under a fresh lock"}
+	// InstanceLockUnreachable: the lock's connection is still open but the database does not
+	// answer on it; the session (and the lock) is alive, so the server keeps running.
+	InstanceLockUnreachable = Code{"E_INSTANCE_LOCK_UNREACHABLE",
+		"the database stopped answering on the single-instance lock's connection, which is still " +
+			"open, so the lock is still held and the server keeps running (requests answer 503 " +
+			"until the database answers again, and a line says when it does); if this lasts, check " +
+			"that PostgreSQL runs and is not paused, and the network between them"}
 	// SchemaNewer: the database was migrated by a newer binary.
 	SchemaNewer = Code{"E_SCHEMA_NEWER",
 		"this database was migrated by a newer elyrn; an older one could damage it, so it does not " +
@@ -93,7 +101,7 @@ var (
 
 // All lists every code, for the registry's uniqueness checks.
 var All = []Code{ClockJump, JobAbandoned, SelfTest, ConfigInvalid, DBUnreachable, SecondInstance,
-	InstanceLockLost, SchemaNewer, Migrate, KeyCheck, Listen, ShutdownLate, RewrapIncomplete,
+	InstanceLockLost, InstanceLockUnreachable, SchemaNewer, Migrate, KeyCheck, Listen, ShutdownLate, RewrapIncomplete,
 	PepperUnverified}
 
 // Failure is one coded startup or lifecycle failure: the code, the variable or setting it

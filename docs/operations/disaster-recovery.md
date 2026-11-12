@@ -65,11 +65,21 @@ Exactly one backend may run on a database. Proofs of work, pending registrations
 hub and the rate limits live in the backend's memory, so two of them behind one address would
 let a proof of work be spent twice and split everyone's limits. The running backend holds a
 PostgreSQL advisory lock on its own connection for its whole life; a second one exits at start
-with `E_SECOND_INSTANCE`. If that connection is lost (PostgreSQL restarted, the network failed),
-the backend shuts down in order and exits with `E_INSTANCE_LOCK_LOST` rather than take the lock
-again, because another backend may already have taken it in between; its restart policy starts
-it again, and it waits up to 60 s for the database like any start. Two instances that start at
-the same moment also serialise their migrations on a second, transaction-level lock.
+with `E_SECOND_INSTANCE`. If that connection is lost (the driver reports it closed: PostgreSQL
+restarted, the session was terminated, the socket broke), the backend shuts down in order and
+exits with `E_INSTANCE_LOCK_LOST` rather than take the lock again, because another backend may
+already have taken it in between; its restart policy starts it again, and it waits up to 60 s
+for the database like any start. A database that only stops answering (paused, overloaded, cut
+off for a while) has not ended the session and still holds the lock for this backend: the
+backend logs `E_INSTANCE_LOCK_UNREACHABLE` once, keeps running and keeps its in-memory state
+(requests answer `503` meanwhile), and logs again when the database answers. Its check of the
+lock has no deadline, because with the PostgreSQL driver a check that times out closes the
+connection and so releases the lock it was checking. If the network stays cut, the operating
+system gives the connection up (about 15 minutes with Linux defaults, long before PostgreSQL
+drops a silent peer, 2 hours by default) and the backend exits with `E_INSTANCE_LOCK_LOST`; do
+not set PostgreSQL's `tcp_keepalives_*` below that, or a partition of the lock's connection alone
+could free the lock while this backend still runs. Two instances that start at the same moment
+also serialise their migrations on a second, transaction-level lock.
 
 ## Backups: accounts only
 
@@ -144,7 +154,7 @@ Prefer the accounts backup; roll back a full volume only to undo damage to the v
 
 | Failure | What users see | What the system does | Your part |
 |---|---|---|---|
-| PostgreSQL stops or restarts | Every request, login included, answers `503` "service unavailable" (`E_STORE_UNAVAILABLE`), never "invalid credentials", never a logout. Sending says "message not sent". A registration in progress keeps its account number. | The backend keeps running and reconnects by itself; PostgreSQL restarts itself (`restart: unless-stopped`). Connection errors, a server shutting down or out of connections, and every timeout below are all classified as an outage in one place (`backend/internal/database/errors.go`). | Usually nothing; `docker compose logs postgres`. |
+| PostgreSQL stops or restarts | Every request, login included, answers `503` "service unavailable" (`E_STORE_UNAVAILABLE`), never "invalid credentials", never a logout. Sending says "message not sent". A registration in progress keeps its account number. | The backend keeps running and reconnects by itself while PostgreSQL is paused or slow (`E_INSTANCE_LOCK_UNREACHABLE` once); a restart of PostgreSQL ends the single-instance lock's session, so the backend restarts too (`E_INSTANCE_LOCK_LOST`, [above](#single-instance-operation)); PostgreSQL restarts itself (`restart: unless-stopped`). Connection errors, a server shutting down or out of connections, and every timeout below are all classified as an outage in one place (`backend/internal/database/errors.go`). | Usually nothing; `docker compose logs postgres`. |
 | The host reboots | A short outage. | Every service comes back by itself. | Nothing. |
 | The backend restarts or is upgraded | Live updates pause and reconnect (backoff up to 30 s, 8 tries; bringing the tab back to the foreground reconnects too). Sessions survive. | nginx reaches the recreated container at its fixed address (`BACKEND_IP`). In-memory state starts over: issued proofs of work, rate limits, and account numbers shown but not yet confirmed. | Nothing. A user who was between "copy" and "continue" is told the number expired and gets a new one. |
 | An answer is lost while sending | The message arrives once. | The retry resends the same message id and ciphertext; the server refuses the duplicate id (409), which the client takes as delivered. A 409 on a first attempt (no earlier answer was lost) is never taken as delivered: the user is told to send again. | Nothing. |

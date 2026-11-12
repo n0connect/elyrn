@@ -1,13 +1,16 @@
 package agent_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"elyrn/internal/agent"
@@ -168,6 +171,55 @@ func TestCounterFile_Policy(t *testing.T) {
 	}
 	_, err = open(t, path, false)
 	wantCode(t, err, agent.CodeIdentityPermissions, "a counter file open to other users")
+}
+
+// rebuiltWarnings runs fn with the agent's log captured and counts its E_AGENT_STATE_REBUILT
+// lines.
+func rebuiltWarnings(t *testing.T, fn func()) int {
+	t.Helper()
+	t.Setenv("LOG_LEVEL", "warn")
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previous)
+	fn()
+	return strings.Count(buf.String(), string(agent.CodeStateRebuilt))
+}
+
+// startAndClose starts a writable agent on path and closes it.
+func startAndClose(t *testing.T, path string) {
+	t.Helper()
+	a, err := open(t, path, false)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	a.Close()
+}
+
+// The counter file is expected beside every identity, so its absence is reported only when it
+// really went missing, and once: an identity written by a release without the file logs
+// E_AGENT_STATE_REBUILT at its first start, which writes the file (private, valid, empty); the
+// next start logs nothing. A file lost later is reported once more and written again.
+func TestCounterFile_MissingIsReportedOnceAndWritten(t *testing.T) {
+	path := identityAt(t, nil)
+	for round := range 2 {
+		if got := rebuiltWarnings(t, func() { startAndClose(t, path) }); got != 1 {
+			t.Fatalf("round %d: a missing counter file was reported %d times, want once", round, got)
+		}
+		info, err := os.Stat(counterFile(path))
+		if err != nil {
+			t.Fatalf("round %d: the start did not write the counter file: %v", round, err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Fatalf("round %d: the counter file has mode %v, want 0600", round, info.Mode().Perm())
+		}
+		if got := rebuiltWarnings(t, func() { startAndClose(t, path) }); got != 0 {
+			t.Fatalf("round %d: a healthy start logged E_AGENT_STATE_REBUILT %d times", round, got)
+		}
+		if err := os.Remove(counterFile(path)); err != nil {
+			t.Fatalf("remove the counter file: %v", err)
+		}
+	}
 }
 
 // A temporary file an interrupted write left behind (it may hold the AccountNumber) is removed

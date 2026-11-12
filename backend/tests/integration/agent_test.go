@@ -1,8 +1,10 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -744,7 +746,10 @@ func TestAgent_HistoryPagesStayBelowTheirCeiling(t *testing.T) {
 // nginx answers its own /api/ failures as JSON with a registered edge id. An edge 404 (or any
 // edge refusal) is never read as "the room is gone"; an unavailable backend is a passing
 // failure; a JSON body with an unknown id falls back to the status; a known id under another
-// status is a malformed answer. The room and its counter record survive all of it.
+// status below 500 is a malformed answer, while any 5xx is a passing failure whatever its body
+// (an nginx deployed before its error pages stated their status answered a backend cut off
+// mid-answer with 502 or 504 and the 503 id: the drill's database pause). The room and its
+// counter record survive all of it.
 func TestAgent_EdgeAnswersAreNotTheRoomsAnswers(t *testing.T) {
 	mux := setup(t)
 	type reply struct {
@@ -781,6 +786,9 @@ func TestAgent_EdgeAnswersAreNotTheRoomsAnswers(t *testing.T) {
 	}{
 		"an unknown id under 404":     {reply{http.StatusNotFound, `{"success":false,"message":"x","code":"E_SOMETHING_ELSE"}`}, agent.CodeRoomUnknown},
 		"an edge id under its status": {reply{http.StatusNotFound, apperr.EdgeAnswers[0].Body()}, agent.CodeServerAnswer},
+		"the outage id under 502":     {reply{http.StatusBadGateway, apperr.EdgeAnswers[0].Body()}, agent.CodeServerBusy},
+		"the outage id under 504":     {reply{http.StatusGatewayTimeout, apperr.EdgeAnswers[0].Body()}, agent.CodeServerBusy},
+		"a route id under 500":        {reply{http.StatusInternalServerError, apperr.EdgeAnswers[1].Body()}, agent.CodeServerBusy},
 	}
 	for _, edge := range apperr.EdgeAnswers {
 		code, known := want[edge.ID]
@@ -808,5 +816,78 @@ func TestAgent_EdgeAnswersAreNotTheRoomsAnswers(t *testing.T) {
 	again, err := robot.Read(ctx, room, &first.LastSeq)
 	if err != nil || len(again.Messages) != 0 || len(again.Replays) != 1 {
 		t.Fatalf("after the edge answers an old counter was not a replay: %+v, %v", again, err)
+	}
+}
+
+// The drill's database pause: PostgreSQL stops answering under a running server. The server
+// answers 503 E_STORE_UNAVAILABLE, and the agent must say "temporarily unavailable, retry",
+// both on a call with a live session and in a new process whose first step is the login.
+func TestAgent_ADatabaseOutageIsAPassingFailure(t *testing.T) {
+	mux := setup(t)
+	srv := clientServer(t, mux)
+	ctx := context.Background()
+	path := newIdentityPath(t.TempDir(), "robot")
+	robot := newAgent(t, srv.URL, path)
+	agentIdentity(t, robot, true)
+
+	restore := breakDatabase(t)
+	if _, err := robot.Rooms(ctx); agent.CodeOf(err) != agent.CodeServerBusy {
+		t.Fatalf("an authenticated call during the outage: %v, want %s", err, agent.CodeServerBusy)
+	}
+	robot.Close()
+	restarted := newAgent(t, "", path)
+	if _, err := restarted.Rooms(ctx); agent.CodeOf(err) != agent.CodeServerBusy {
+		t.Fatalf("the login of a new process during the outage: %v, want %s", err, agent.CodeServerBusy)
+	}
+
+	restore()
+	if _, err := restarted.Rooms(ctx); err != nil {
+		t.Fatalf("Rooms after the outage: %v", err)
+	}
+}
+
+// agentStartWarnings starts a writable agent on path (no network), closes it, and returns how
+// many E_AGENT_STATE_REBUILT lines it logged.
+func agentStartWarnings(t *testing.T, path string) int {
+	t.Helper()
+	t.Setenv("LOG_LEVEL", "warn")
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	newAgent(t, "", path).Close()
+	log.SetOutput(previous)
+	return strings.Count(buf.String(), string(agent.CodeStateRebuilt))
+}
+
+// A fresh identity has its counter file from the start, so a restart before any message is sent
+// logs nothing; a counter file deleted between runs is reported once and written again.
+func TestAgent_ARestartReportsOnlyALostCounterFile(t *testing.T) {
+	srv := clientServer(t, setup(t))
+	path := newIdentityPath(t.TempDir(), "robot")
+	robot := newAgent(t, srv.URL, path)
+	agentIdentity(t, robot, true)
+	if _, err := robot.Rooms(context.Background()); err != nil {
+		t.Fatalf("Rooms: %v", err)
+	}
+	robot.Close()
+
+	if got := agentStartWarnings(t, path); got != 0 {
+		t.Fatalf("a restart of a fresh identity logged E_AGENT_STATE_REBUILT %d times", got)
+	}
+	if err := os.Remove(agentCounterFile(path)); err != nil {
+		t.Fatalf("remove the counter file: %v", err)
+	}
+	if got := agentStartWarnings(t, path); got != 1 {
+		t.Fatalf("a lost counter file was reported %d times, want once", got)
+	}
+	info, err := os.Stat(agentCounterFile(path))
+	if err != nil {
+		t.Fatalf("the lost counter file was not written again: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("the rewritten counter file has mode %v, want 0600", info.Mode().Perm())
+	}
+	if got := agentStartWarnings(t, path); got != 0 {
+		t.Fatalf("the start after the rewrite logged E_AGENT_STATE_REBUILT %d times", got)
 	}
 }

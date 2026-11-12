@@ -129,8 +129,12 @@ func (a *Agent) roundTrip(ctx context.Context, method, path string, body any) (*
 }
 
 // readAnswer reads a whole answer within its bound. A failure's body is read only for nginx's
-// edge code (edgeFailure) and is never shown.
+// edge code (edgeFailure) and is never shown. An unavailable answer's body is not read at all
+// (unavailable): whatever it holds, it reaches the caller as its bare status.
 func readAnswer(resp *http.Response) (*answer, error) {
+	if unavailable(resp.StatusCode) {
+		return &answer{status: resp.StatusCode}, nil
+	}
 	limit := int64(maxResponseBytes)
 	if !success(resp.StatusCode) {
 		limit = maxErrorBodyBytes
@@ -178,12 +182,12 @@ type edgeBody struct {
 	Code string `json:"code"`
 }
 
-// edgeFailure classifies a failed answer by nginx's edge code: a refusal at the edge is
-// CodeServerRoute, a known id under another status is CodeServerAnswer, and anything else (the
-// backend's own text answers, unknown JSON, an unavailable or rate-limited edge answer) is nil:
-// the caller maps the status.
+// edgeFailure classifies a failed answer below 500 by nginx's edge code: a refusal at the edge
+// is CodeServerRoute, a known id under another status is CodeServerAnswer, and anything else
+// (the backend's own text answers, unknown JSON, a body that is not JSON, a rate-limited edge
+// answer) is nil: the caller maps the status. A 5xx is always nil (unavailable).
 func edgeFailure(ans *answer) error {
-	if success(ans.status) {
+	if success(ans.status) || unavailable(ans.status) {
 		return nil
 	}
 	var body edgeBody
@@ -215,6 +219,17 @@ func success(status int) bool {
 	return status == http.StatusOK || status == http.StatusCreated || status == http.StatusNoContent
 }
 
+// unavailable reports a 5xx: the backend, or a front end in its place, failed or did not answer
+// in time. Such an answer is judged by its status alone, never by its body: the body of a
+// failing server proves nothing (a backend whose answer was cut off becomes nginx's 502 or 504,
+// and an nginx deployed before its error pages stated their status answered those with the 503
+// id E_BACKEND_UNAVAILABLE; a proxy in between may send a page of any size). Every caller reads
+// a 5xx as a passing failure (statusError: CodeServerBusy; a send or a create: answer lost),
+// so the agent says "wait and retry", never "wrong answer".
+func unavailable(status int) bool {
+	return status >= http.StatusInternalServerError
+}
+
 // public is one exchange that needs no session; out is decoded from a 200 or 201.
 func (a *Agent) public(ctx context.Context, method, path string, body, out any) (int, error) {
 	ans, err := a.roundTrip(ctx, method, path, body)
@@ -225,8 +240,10 @@ func (a *Agent) public(ctx context.Context, method, path string, body, out any) 
 }
 
 // settleAnswer hands the caller the status of an answer, or the error of an edge refusal
-// (edgeFailure) or of a body that does not decode, in place of a status it could misread: a
-// failure never comes with a status. out is decoded from a 200 or 201.
+// (edgeFailure) or of a success body that does not decode, in place of a status it could
+// misread: a failure never comes with a status. The status is judged first: out is decoded from
+// a 200 or 201 only, so no other answer's body ever becomes a success value or an error of its
+// shape, and every other status reaches the caller (or edgeFailure) as it was served.
 func settleAnswer(ans *answer, out any) (int, error) {
 	if err := edgeFailure(ans); err != nil {
 		return 0, err

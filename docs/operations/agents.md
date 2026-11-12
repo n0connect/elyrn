@@ -190,10 +190,16 @@ nginx answers its own failures on `/api/` as JSON with a `code`. The agent reads
 field: an edge refusal (unknown path or method, body too large) fails with
 `E_AGENT_SERVER_ROUTE` and is never taken for a room that is gone; an unavailable backend fails
 with `E_AGENT_SERVER_BUSY`, a passing failure that `room_wait` and `room_send` ride out like any
-other. Any other body is judged by its status alone.
+other. Any other body is judged by its status alone, and every `5xx` answer is judged by its
+status alone whatever its body (a database outage, a backend cut off mid-answer, an older nginx
+that answered `502`/`504`): `E_AGENT_SERVER_BUSY`, never `E_AGENT_SERVER_ANSWER`. A failure's
+body is never read as a success answer.
 
-If `agent.counters.json` is missing (first run of this release on an existing identity) or
-cannot be read, the agent logs `E_AGENT_STATE_REBUILT` and rebuilds from the visible messages. If
+`agent.counters.json` is written, empty, together with a new identity file, so a start logs
+nothing about it. If it is missing for an existing identity (first run of this release on an
+identity created before it, or a lost file) the agent logs `E_AGENT_STATE_REBUILT` once, writes
+it again at once and rebuilds from the visible messages; if it cannot be read, the agent logs the
+same code at every start until the file is readable again. If
 it is present but malformed, the agent refuses to start with `E_AGENT_STATE_FILE`: restore it
 from a backup, or move it away to rebuild.
 

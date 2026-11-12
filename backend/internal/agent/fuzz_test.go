@@ -219,6 +219,18 @@ func checkCounterBounds(t *testing.T, rooms map[uuid.UUID]*counterRecord) {
 	}
 }
 
+// FuzzServerAnswer: every status and body the server (or anything in front of it) can send.
+// The invariants, for every status and every body:
+//   - a 5xx is judged by its status alone: readAnswer and settleAnswer never fail on it, whatever
+//     its body (any size, any bytes, any edge id), the status reaches the caller unchanged, and
+//     failedAnswer is exactly CodeServerBusy (a database outage behind an nginx that kept 502 or
+//     504 must read "wait and retry", never "wrong answer");
+//   - no status other than 200 or 201 ever has its body decoded into out: out stays untouched,
+//     so a failure's body never becomes a success value, and below 500 the only failures that
+//     replace the status are the edge refusals (CodeServerRoute, a known edge id under another
+//     status: CodeServerAnswer) and a failure body over maxErrorBodyBytes (CodeServerAnswer);
+//   - nginx's own refusals below 500 never reach a caller as the backend's status: above all,
+//     never as 404 "room gone".
 func FuzzServerAnswer(f *testing.F) {
 	for _, seed := range []struct {
 		status int
@@ -227,9 +239,14 @@ func FuzzServerAnswer(f *testing.F) {
 		{http.StatusNotFound, `{"success":false,"message":"x","code":"` + edgeNotFound + `"}`},
 		{http.StatusInternalServerError, `{"code":"` + edgeNotFound + `"}`},
 		{http.StatusServiceUnavailable, `{"code":"` + edgeBackendUnavailable + `"}`},
+		{http.StatusBadGateway, `{"success":false,"message":"Service unavailable","code":"` + edgeBackendUnavailable + `"}`},
+		{http.StatusGatewayTimeout, `{"success":true}`},
+		{http.StatusServiceUnavailable, "Service unavailable\n"},
+		{http.StatusBadGateway, strings.Repeat("x", maxErrorBodyBytes+1)},
 		{http.StatusRequestEntityTooLarge, `{"code":"` + edgeBodyTooLarge + `"}`},
 		{http.StatusMethodNotAllowed, `{"CODE":"` + edgeMethodNotAllowed + `"}`},
 		{http.StatusNotFound, `{"code":"E_NOT_FOUND","message":"room gone"}`},
+		{http.StatusUnauthorized, `{"success":true}`},
 		{http.StatusOK, `{"success":true}`},
 		{http.StatusOK, `{"success":true} {}`},
 		{http.StatusCreated, `[`},
@@ -245,11 +262,15 @@ func FuzzServerAnswer(f *testing.F) {
 		if !success(status) {
 			limit = maxErrorBodyBytes
 		}
-		if len(body) > limit {
+		switch {
+		case unavailable(status):
+			if err != nil || ans.status != status || len(ans.body) != 0 {
+				t.Fatalf("a %d answer of %d bytes was judged by its body: %v", status, len(body), err)
+			}
+		case len(body) > limit:
 			wantFailure(t, err, CodeServerAnswer)
 			return
-		}
-		if err != nil || ans.status != status || !bytes.Equal(ans.body, body) {
+		case err != nil || ans.status != status || !bytes.Equal(ans.body, body):
 			t.Fatalf("a bounded answer (status %d, %d bytes) was not read as served: %v", status, len(body), err)
 		}
 		var out struct {
@@ -264,14 +285,22 @@ func FuzzServerAnswer(f *testing.F) {
 		} else if got != status {
 			t.Fatalf("status %d handed over as %d", status, got)
 		}
-		// nginx's own refusals (a route, or a known id under another status) never reach a
-		// caller as the backend's status: above all, never as 404 "room gone"
+		if status != http.StatusOK && status != http.StatusCreated && out.Success {
+			t.Fatalf("the body of a %d answer was decoded as a success value", status)
+		}
+		if unavailable(status) {
+			if err != nil {
+				t.Fatalf("a %d answer failed as %s instead of reaching the caller as its status", status, CodeOf(err))
+			}
+			wantFailure(t, failedAnswer(ans), CodeServerBusy)
+			return
+		}
 		var edge edgeBody
 		if known, ok := edgeAnswers[edgeCode(body, &edge)]; ok && err == nil && !success(status) && (known.route || known.status != status) {
 			t.Fatalf("the edge id %s under status %d was handed to the caller as a status", edge.Code, status)
 		}
 		if !success(status) {
-			wantFailure(t, failedAnswer(ans), CodeServerRoute, CodeServerAnswer, CodeRateLimited, CodeServerBusy, CodeUnexpectedStatus)
+			wantFailure(t, failedAnswer(ans), CodeServerRoute, CodeServerAnswer, CodeRateLimited, CodeUnexpectedStatus)
 		}
 	})
 }

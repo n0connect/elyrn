@@ -145,7 +145,7 @@ func (a *Agent) listRooms(ctx context.Context) ([]*roomState, error) {
 	}
 	a.rooms = next
 	if a.counters.pruneExpired(time.Now()) {
-		a.persistCountersAfterRead()
+		a.persistCountersOrWarn()
 	}
 	return ordered, nil
 }
@@ -200,7 +200,7 @@ func (a *Agent) forget(id uuid.UUID) error {
 func (a *Agent) drop(id uuid.UUID) {
 	delete(a.rooms, id)
 	if a.counters.drop(id) {
-		a.persistCountersAfterRead()
+		a.persistCountersOrWarn()
 	}
 }
 
