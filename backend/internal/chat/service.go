@@ -69,12 +69,19 @@ type Service struct {
 
 // NewService creates a new chat Service instance
 func NewService() *Service {
-	return &Service{
-		users:  store.NewUserRepository(),
-		chats:  store.NewChatRepository(),
-		keys:   store.NewKeyRepository(),
-		logger: utils.NewLogger("CHAT_SERVICE"),
-	}
+	return newService(store.NewUserRepository(), store.NewChatRepository(), store.NewKeyRepository())
+}
+
+// NewBackgroundService is the service of the server's background work (the startup key check,
+// re-wrapping, retention): its repositories go through database.BackgroundDB, whose deadlines do
+// not follow the HTTP write timeout (retention's bulk statements run under LongTransaction, with
+// their own longer deadline either way).
+func NewBackgroundService() *Service {
+	return newService(store.NewBackgroundUserRepository(), store.NewBackgroundChatRepository(), store.NewBackgroundKeyRepository())
+}
+
+func newService(users store.UserRepository, chats store.ChatRepository, keys store.KeyRepository) *Service {
+	return &Service{users: users, chats: chats, keys: keys, logger: utils.NewLogger("CHAT_SERVICE")}
 }
 
 func memberFromUser(user *models.User) (*Member, error) {

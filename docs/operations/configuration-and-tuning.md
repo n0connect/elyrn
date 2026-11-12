@@ -89,6 +89,30 @@ At startup the backend checks these keys against the database before it serves a
 | `HSTS_MAX_AGE` | int | *unset* | HSTS `max-age` in seconds on HTTPS API answers in production (0-63072000; a malformed value is refused, it no longer reads as 0). |
 | `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD` | bool | `false` | `true`/`false` (`1`/`0`, `yes`/`no`); anything else is refused. |
 
+#### Request deadlines follow `SERVER_WRITE_TIMEOUT_SEC`
+
+`SERVER_WRITE_TIMEOUT_SEC` (default 15) is how long the backend may take to write an answer,
+counted from the end of the request's headers; an answer written later is dropped with the
+connection (behind nginx the client then sees a `502`/`503` from nginx instead of the
+backend's own). So that a request stalled on the database still gets its `503`
+(`E_STORE_UNAVAILABLE`) in time, the backend derives a request's database deadlines from it once
+at start, without any setting of their own:
+
+| Deadline | Rule | Default config (15 s) |
+|---|---|---|
+| One statement, including the wait for a pooled connection | min(15 s, write timeout - 3 s), at least 11 s | 12 s |
+| One transaction | min(35 s, write timeout - 3 s), at least 11 s | 12 s |
+
+The 3 s are what a request keeps for the work before its first statement and for writing the
+`503`. The floor of 11 s keeps the backend's deadline above PostgreSQL's own `statement_timeout`
+(10 s), so in normal operation the database cancels a slow statement first. Every value from 1
+to 300 stays valid: below 14 s the deadlines stay at the floor and the backend logs a warning at
+start, because there a stalled request can still outlive the write deadline. From 18 s (statement)
+and 38 s (transaction) the deadlines reach their constants and stop growing. Background work
+(the startup key check, re-wrapping, retention) keeps 15 s and 35 s whatever this setting is, and
+retention's bulk deletes and the migration keep their own longer limits (1 and 5 minutes). The
+event stream is not affected: it sets its own write deadline for every event.
+
 ---
 
 ### Startup validation: every variable and its rule

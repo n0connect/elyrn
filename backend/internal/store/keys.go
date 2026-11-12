@@ -4,7 +4,6 @@ import (
 	"errors"
 	"time"
 
-	"elyrn/internal/database"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
 
@@ -46,18 +45,25 @@ type KeyRepository interface {
 // a date and nothing else, no secret and no identifier)
 const retentionMarkName = "retention-clock"
 
-type keyRepository struct{}
+type keyRepository struct {
+	handle
+}
 
-// NewKeyRepository creates a new KeyRepository instance
+// NewKeyRepository creates a KeyRepository for request paths (database.DB)
 func NewKeyRepository() KeyRepository {
-	return &keyRepository{}
+	return &keyRepository{requestHandle}
+}
+
+// NewBackgroundKeyRepository creates a KeyRepository for background work (database.BackgroundDB)
+func NewBackgroundKeyRepository() KeyRepository {
+	return &keyRepository{backgroundHandle}
 }
 
 func (r *keyRepository) MasterKeyIDsInUse() (map[string]struct{}, error) {
 	inUse := make(map[string]struct{})
 	for _, model := range []interface{}{&models.User{}, &models.ConversationMember{}, &models.Invite{}} {
 		var ids []string
-		if err := database.DB.Model(model).Distinct().Pluck(colMasterKeyID, &ids).Error; err != nil {
+		if err := r.db().Model(model).Distinct().Pluck(colMasterKeyID, &ids).Error; err != nil {
 			keyRepoLogger.LogError("KeyRepository.MasterKeyIDsInUse", err)
 			return nil, err
 		}
@@ -70,7 +76,7 @@ func (r *keyRepository) MasterKeyIDsInUse() (map[string]struct{}, error) {
 
 func (r *keyRepository) HasUsers() (bool, error) {
 	var ids []uint
-	if err := database.DB.Model(&models.User{}).Limit(1).Pluck(colID, &ids).Error; err != nil {
+	if err := r.db().Model(&models.User{}).Limit(1).Pluck(colID, &ids).Error; err != nil {
 		keyRepoLogger.LogError("KeyRepository.HasUsers", err)
 		return false, err
 	}
@@ -80,7 +86,7 @@ func (r *keyRepository) HasUsers() (bool, error) {
 // MaxUserID returns the highest account id (0 without accounts): the pepper floor
 func (r *keyRepository) MaxUserID() (uint, error) {
 	var maxID uint
-	if err := database.DB.Model(&models.User{}).Select("COALESCE(MAX(id), 0)").Scan(&maxID).Error; err != nil {
+	if err := r.db().Model(&models.User{}).Select("COALESCE(MAX(id), 0)").Scan(&maxID).Error; err != nil {
 		keyRepoLogger.LogError("KeyRepository.MaxUserID", err)
 		return 0, err
 	}
@@ -89,7 +95,7 @@ func (r *keyRepository) MaxUserID() (uint, error) {
 
 func (r *keyRepository) UsersUnderKey(keyID string, afterID uint, limit int) ([]models.User, error) {
 	var users []models.User
-	err := database.DB.Where(whereKeyAfterID, keyID, afterID).Order(colID).Limit(limit).Find(&users).Error
+	err := r.db().Where(whereKeyAfterID, keyID, afterID).Order(colID).Limit(limit).Find(&users).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.UsersUnderKey", err)
 	}
@@ -98,7 +104,7 @@ func (r *keyRepository) UsersUnderKey(keyID string, afterID uint, limit int) ([]
 
 func (r *keyRepository) MembersUnderKey(keyID string, after models.ConversationMember, limit int) ([]models.ConversationMember, error) {
 	var members []models.ConversationMember
-	err := database.DB.Where("master_key_id = ? AND (conversation_id, member_tag) > (?, ?)", keyID, after.ConversationID, after.MemberTag).
+	err := r.db().Where("master_key_id = ? AND (conversation_id, member_tag) > (?, ?)", keyID, after.ConversationID, after.MemberTag).
 		Order("conversation_id, member_tag").Limit(limit).Find(&members).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.MembersUnderKey", err)
@@ -108,15 +114,15 @@ func (r *keyRepository) MembersUnderKey(keyID string, after models.ConversationM
 
 func (r *keyRepository) InvitesUnderKey(keyID string, after uuid.UUID, limit int) ([]models.Invite, error) {
 	var invites []models.Invite
-	err := database.DB.Where(whereKeyAfterID, keyID, after).Order(colID).Limit(limit).Find(&invites).Error
+	err := r.db().Where(whereKeyAfterID, keyID, after).Order(colID).Limit(limit).Find(&invites).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.InvitesUnderKey", err)
 	}
 	return invites, err
 }
 
-func rewrap(model interface{}, column, fromKeyID, toKeyID, enc, where string, args ...interface{}) error {
-	err := database.DB.Model(model).Where(where+" AND master_key_id = ?", append(args, fromKeyID)...).
+func (r *keyRepository) rewrap(model interface{}, column, fromKeyID, toKeyID, enc, where string, args ...interface{}) error {
+	err := r.db().Model(model).Where(where+" AND master_key_id = ?", append(args, fromKeyID)...).
 		UpdateColumns(map[string]interface{}{column: enc, colMasterKeyID: toKeyID}).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.rewrap", err)
@@ -125,21 +131,21 @@ func rewrap(model interface{}, column, fromKeyID, toKeyID, enc, where string, ar
 }
 
 func (r *keyRepository) RewrapUser(id uint, fromKeyID, toKeyID, enc string) error {
-	return rewrap(&models.User{}, "encrypted_key", fromKeyID, toKeyID, enc, whereID, id)
+	return r.rewrap(&models.User{}, "encrypted_key", fromKeyID, toKeyID, enc, whereID, id)
 }
 
 func (r *keyRepository) RewrapMember(member *models.ConversationMember, fromKeyID, toKeyID, enc string) error {
-	return rewrap(&models.ConversationMember{}, "member_ref_enc", fromKeyID, toKeyID, enc,
+	return r.rewrap(&models.ConversationMember{}, "member_ref_enc", fromKeyID, toKeyID, enc,
 		whereMember, member.ConversationID, member.MemberTag)
 }
 
 func (r *keyRepository) RewrapInvite(id uuid.UUID, fromKeyID, toKeyID, enc string) error {
-	return rewrap(&models.Invite{}, "creator_ref_enc", fromKeyID, toKeyID, enc, whereID, id)
+	return r.rewrap(&models.Invite{}, "creator_ref_enc", fromKeyID, toKeyID, enc, whereID, id)
 }
 
 func (r *keyRepository) KeyCheck(name string) (string, bool, error) {
 	var check models.KeyCheck
-	err := database.DB.Where("name = ?", name).First(&check).Error
+	err := r.db().Where("name = ?", name).First(&check).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", false, nil
 	}
@@ -152,7 +158,7 @@ func (r *keyRepository) KeyCheck(name string) (string, bool, error) {
 
 // PinKeyCheck stores a commitment once; an existing one is never overwritten
 func (r *keyRepository) PinKeyCheck(name, value string) error {
-	err := database.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.KeyCheck{Name: name, Value: value}).Error
+	err := r.db().Clauses(clause.OnConflict{DoNothing: true}).Create(&models.KeyCheck{Name: name, Value: value}).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.PinKeyCheck", err)
 	}
@@ -174,7 +180,7 @@ func (r *keyRepository) RetentionMark() (time.Time, bool, error) {
 
 // SaveRetentionMark stores (or replaces) the retention mark
 func (r *keyRepository) SaveRetentionMark(at time.Time) error {
-	err := database.DB.Clauses(clause.OnConflict{
+	err := r.db().Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "name"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value"}),
 	}).Create(&models.KeyCheck{Name: retentionMarkName, Value: at.UTC().Format(time.RFC3339Nano)}).Error

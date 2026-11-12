@@ -95,7 +95,7 @@ func start(lockLost func(*opcode.Failure)) *database.InstanceLock {
 	}
 	// Fail closed on keys that cannot open this database (a regenerated .env, a master key
 	// dropped too early): starting anyway would answer every account with errors
-	if err := chat.NewService().VerifyKeys(); err != nil {
+	if err := chat.NewBackgroundService().VerifyKeys(); err != nil {
 		fail(opcode.As(err, opcode.DBUnreachable))
 	}
 	return lock
@@ -104,25 +104,15 @@ func start(lockLost func(*opcode.Failure)) *database.InstanceLock {
 // serve starts the supervised background jobs and the HTTP server; a listener that fails
 // cancels ctx with E_LISTEN.
 func serve(ctx context.Context, stop context.CancelCauseFunc) *http.Server {
-	chatService := chat.NewService()
+	chatService := chat.NewBackgroundService()
 	utils.SafeGoSupervised(ctx, "pow-cleanup", pow.RunCleanup)
 	utils.SafeGoSupervised(ctx, "pending-cleanup", auth.RunPendingCleanup)
 	utils.SafeGoSupervised(ctx, "retention", chatService.RunRetention)
 	utils.SafeGoSupervised(ctx, "rewrap", chatService.RunRewrap)
 
-	srv := &http.Server{
-		Addr:              ":" + config.GetBackendPort(),
-		Handler:           server.NewMux(),
-		ReadHeaderTimeout: config.GetServerReadHeaderTimeout(),
-		ReadTimeout:       config.GetServerReadTimeout(),
-		WriteTimeout:      config.GetServerWriteTimeout(),
-		IdleTimeout:       config.GetServerIdleTimeout(),
-		MaxHeaderBytes:    config.GetServerMaxHeaderBytes(),
-		// Long-lived SSE streams end as soon as shutdown begins
-		BaseContext: func(net.Listener) context.Context { return ctx },
-		// net/http's own error lines go through the logger, peer addresses removed
-		ErrorLog: utils.NewLogger("HTTP_SERVER").StdLogger(),
-	}
+	srv := server.NewHTTPServer(server.NewMux())
+	// Long-lived SSE streams end as soon as shutdown begins
+	srv.BaseContext = func(net.Listener) context.Context { return ctx }
 	go func() {
 		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			detail := "the listener failed"

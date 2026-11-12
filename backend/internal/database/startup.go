@@ -50,7 +50,8 @@ func Start() *opcode.Failure {
 	return Migrate(DB)
 }
 
-// Connect builds the pool (DB) and proves one connection within the startup wait.
+// Connect builds the pool with its two handles (DB, BackgroundDB) and proves one connection
+// within the startup wait.
 func Connect() *opcode.Failure {
 	dbLogger.Info("Initializing database connection...")
 	db, err := Open(ConnectionURL())
@@ -60,7 +61,11 @@ func Connect() *opcode.Failure {
 	if f := waitForDatabase(db); f != nil {
 		return f
 	}
-	DB = db
+	background, err := openBackground(db)
+	if err != nil {
+		return opcode.Fail(opcode.DBUnreachable, "", failureDetail(err))
+	}
+	DB, BackgroundDB = db, background
 	dbLogger.Info("Connected to PostgreSQL")
 	return nil
 }

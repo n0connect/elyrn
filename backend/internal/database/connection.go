@@ -17,8 +17,13 @@ import (
 
 var dbLogger = utils.NewLogger("DATABASE")
 
+// DB serves requests: its client deadlines follow the HTTP write timeout (requestDeadlines).
+// BackgroundDB is the same pool under the full client deadlines, for background work that no
+// HTTP answer waits for (the startup key check, re-wrapping, the retention mark). Work that
+// needs longer still runs under LongTransaction, whose own deadline neither default touches.
 var (
-	DB *gorm.DB
+	DB           *gorm.DB
+	BackgroundDB *gorm.DB
 )
 
 // gormLogLevel keeps SQL (and the pseudonyms/lookups bound into it) out of logs
@@ -60,6 +65,51 @@ const (
 	transactionDeadline = idleInTransactionSessionTimeout + clientMargin
 )
 
+// Request deadlines. A request stalled on the database must still get its registered 503 out
+// before net/http's write deadline (SERVER_WRITE_TIMEOUT_SEC, counted from the end of the
+// request's headers): an answer written after it is dropped with the connection, so the client
+// sees a cut connection (nginx: a 502) instead of E_STORE_UNAVAILABLE. So a request's statement
+// deadline (GORM's DefaultContextTimeout, which also covers the wait for a pooled connection)
+// and its transaction deadline are min(their constant above, write timeout - writeMargin),
+// computed once at startup from the validated write timeout. They never go below
+// requestDeadlineFloor, which keeps the client deadline above the server's statement_timeout
+// (in normal operation PostgreSQL's own cancellation still fires first, as above). Every write
+// timeout the validator admits (1-300 s) stays valid: one below requestDeadlineFloor +
+// writeMargin is not refused but clamped (requestDeadlines reports it, and startup logs it),
+// and there a request stalled on the database can still outlive the write deadline. A
+// transaction deadline below idle_in_transaction_session_timeout is safe: when it fires the
+// driver closes the connection, which ends the session and its locks at once.
+const (
+	// writeMargin is what a request keeps between its database deadline and the write deadline:
+	// the work before its first statement and the writing of the 503
+	writeMargin = 3 * time.Second
+	// requestDeadlineFloor keeps the client deadline above statement_timeout
+	requestDeadlineFloor = statementTimeout + time.Second
+)
+
+// clientDeadlines are the two GORM defaults of one handle.
+type clientDeadlines struct {
+	statement   time.Duration
+	transaction time.Duration
+}
+
+// backgroundDeadlines are the full constants (BackgroundDB).
+var backgroundDeadlines = clientDeadlines{statement: statementDeadline, transaction: transactionDeadline}
+
+// requestDeadlines derives DB's deadlines from the write timeout (0: none, the constants
+// apply); clamped reports a write timeout too short to leave requestDeadlineFloor.
+func requestDeadlines(writeTimeout time.Duration) (deadlines clientDeadlines, clamped bool) {
+	if writeTimeout <= 0 {
+		return backgroundDeadlines, false
+	}
+	budget := writeTimeout - writeMargin
+	deadlines = clientDeadlines{
+		statement:   max(min(statementDeadline, budget), requestDeadlineFloor),
+		transaction: max(min(transactionDeadline, budget), requestDeadlineFloor),
+	}
+	return deadlines, budget < requestDeadlineFloor
+}
+
 // RetentionStatementTimeout bounds one retention statement: a bulk delete after a long pause may
 // take longer than a request's statement, so retention runs under LongTransaction with this.
 const RetentionStatementTimeout = time.Minute
@@ -91,17 +141,16 @@ func ConnectionURL() string {
 	return u.String()
 }
 
-// Open builds the GORM handle every repository uses: driver errors classified (dialector), every
-// statement and transaction under its client-side deadline, and the bounded pool. It does not
-// connect yet; Init proves the connection.
+// Open builds the request handle (DB): driver errors classified (dialector), every statement
+// and transaction under its request deadline (requestDeadlines of the configured write
+// timeout), and the bounded pool. It does not connect yet; Init proves the connection.
 func Open(dsn string) (*gorm.DB, error) {
-	db, err := gorm.Open(dialector{postgres.Open(dsn).(*postgres.Dialector)}, &gorm.Config{
-		Logger:                    logger.Default.LogMode(gormLogLevel()),
-		TranslateError:            true, // Surfaces unique violations as gorm.ErrDuplicatedKey, outages as ErrUnavailable
-		DisableAutomaticPing:      true,
-		DefaultContextTimeout:     statementDeadline,
-		DefaultTransactionTimeout: transactionDeadline,
-	})
+	deadlines, clamped := requestDeadlines(config.GetServerWriteTimeout())
+	if clamped {
+		dbLogger.Warn("SERVER_WRITE_TIMEOUT_SEC is below %d s: a request's database deadline stays at %d s, so a request stalled on the database may lose its 503 answer",
+			seconds(requestDeadlineFloor+writeMargin), seconds(requestDeadlineFloor))
+	}
+	db, err := openHandle(postgres.Open(dsn), deadlines)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +162,26 @@ func Open(dsn string) (*gorm.DB, error) {
 	sqlDB.SetMaxIdleConns(maxIdleConns)
 	sqlDB.SetConnMaxLifetime(connMaxLifetime)
 	return db, nil
+}
+
+// openBackground builds BackgroundDB over the pool of the request handle db (no second pool).
+func openBackground(db *gorm.DB) (*gorm.DB, error) {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	return openHandle(postgres.New(postgres.Config{Conn: sqlDB}), backgroundDeadlines)
+}
+
+// openHandle is the one GORM configuration of both handles; only the deadlines differ.
+func openHandle(driver gorm.Dialector, deadlines clientDeadlines) (*gorm.DB, error) {
+	return gorm.Open(dialector{driver.(*postgres.Dialector)}, &gorm.Config{
+		Logger:                    logger.Default.LogMode(gormLogLevel()),
+		TranslateError:            true, // Surfaces unique violations as gorm.ErrDuplicatedKey, outages as ErrUnavailable
+		DisableAutomaticPing:      true,
+		DefaultContextTimeout:     deadlines.statement,
+		DefaultTransactionTimeout: deadlines.transaction,
+	})
 }
 
 // LongTransaction runs fn in one transaction whose statements may each take up to limit: the

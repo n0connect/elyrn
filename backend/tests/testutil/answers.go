@@ -4,6 +4,7 @@
 package testutil
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"sync"
 
@@ -39,7 +40,11 @@ func registeredAnswers() []answer {
 }
 
 func (a answer) matches(rec *httptest.ResponseRecorder) bool {
-	return a.status == rec.Code && a.body == rec.Body.String() && a.contentType == rec.Header().Get(utils.HeaderContentType)
+	return a.matchesWire(rec.Code, rec.Body.String(), rec.Header().Get(utils.HeaderContentType))
+}
+
+func (a answer) matchesWire(status int, body, contentType string) bool {
+	return a.status == status && a.body == body && a.contentType == contentType
 }
 
 // RegisteredAnswer reports the first registered code whose answer rec holds exactly (status,
@@ -56,9 +61,21 @@ func RegisteredAnswer(rec *httptest.ResponseRecorder) (apperr.Code, bool) {
 
 // IsAnswer reports whether rec holds exactly the answer apperr registers for code.
 func IsAnswer(rec *httptest.ResponseRecorder, code apperr.Code) bool {
+	return isRegistered(code, func(a answer) bool { return a.matches(rec) })
+}
+
+// IsWireAnswer is IsAnswer for an answer read off a real connection: resp's status and content
+// type, and body read in full.
+func IsWireAnswer(resp *http.Response, body []byte, code apperr.Code) bool {
+	return isRegistered(code, func(a answer) bool {
+		return a.matchesWire(resp.StatusCode, string(body), resp.Header.Get(utils.HeaderContentType))
+	})
+}
+
+func isRegistered(code apperr.Code, matches func(answer) bool) bool {
 	for _, a := range registeredAnswers() {
 		if a.code == code {
-			return a.matches(rec)
+			return matches(a)
 		}
 	}
 	return false

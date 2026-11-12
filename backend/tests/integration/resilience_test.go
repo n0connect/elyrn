@@ -1,17 +1,25 @@
 package integration
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"sync"
 	"testing"
 	"time"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
+	"elyrn/internal/config"
 	"elyrn/internal/database"
 	"elyrn/internal/models"
+	"elyrn/internal/server"
 	"elyrn/internal/store"
+	"elyrn/tests/testutil"
 
 	"github.com/google/uuid"
 )
@@ -36,6 +44,102 @@ func breakDatabase(t *testing.T) func() {
 	}
 	t.Cleanup(restore)
 	return restore
+}
+
+// stallWriteTimeout is the shipped SERVER_WRITE_TIMEOUT_SEC (.env.example), so the stall test
+// proves the default configuration; stallClientTimeout bounds the test's own request.
+const (
+	stallWriteTimeout  = "15"
+	stallClientTimeout = time.Minute
+)
+
+// stallDatabase points the request handle (database.DB) at a fresh pool behind a stalling proxy
+// in front of the real PostgreSQL, built by database.Open from the configuration as production's
+// is; the healthy handle comes back when the test ends.
+func stallDatabase(t *testing.T) *testutil.StallingProxy {
+	t.Helper()
+	proxy := testutil.StartStallingProxy(t, net.JoinHostPort(config.GetDBHost(), config.GetDBPort()))
+	t.Setenv("DB_HOST", "127.0.0.1")
+	t.Setenv("DB_PORT", proxy.Port())
+	stalled, err := database.Open(database.ConnectionURL())
+	if err != nil {
+		t.Fatalf("open the pool behind the proxy: %v", err)
+	}
+	healthy := database.DB
+	database.DB = stalled
+	t.Cleanup(func() {
+		database.DB = healthy
+		if pool, err := stalled.DB(); err == nil {
+			_ = pool.Close()
+		}
+	})
+	return proxy
+}
+
+// serveForReal serves mux from a real http.Server with the production configuration
+// (server.NewHTTPServer: the configured write timeout above all), from one client address.
+func serveForReal(t *testing.T, mux http.Handler) string {
+	t.Helper()
+	addr := newClient(t, mux).ip
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := server.NewHTTPServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = addr
+		mux.ServeHTTP(w, r)
+	}))
+	go func() { _ = srv.Serve(listener) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return "http://" + listener.Addr().String()
+}
+
+// postLogin sends one login over the network and reads the whole answer.
+func postLogin(t *testing.T, base, authKey string) (*http.Response, []byte, error) {
+	t.Helper()
+	raw, err := json.Marshal(models.LoginRequest{AuthKey: authKey})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	client := &http.Client{Timeout: stallClientTimeout}
+	resp, err := client.Post(base+models.PathLogin, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	return resp, body, err
+}
+
+// The drill: PostgreSQL stops answering (paused) under a running server. A request stalled on
+// it must still get its registered 503 E_STORE_UNAVAILABLE written, in full, before net/http's
+// write deadline: the database deadline of a request follows SERVER_WRITE_TIMEOUT_SEC. Before,
+// both were 15 s, the 503 was written too late, and the client saw a cut connection (behind
+// nginx, a 502).
+func TestStalledDatabase_TheRequestStillGetsIts503(t *testing.T) {
+	mux := setup(t)
+	alice := register(t, mux)
+	t.Setenv("SERVER_WRITE_TIMEOUT_SEC", stallWriteTimeout)
+	proxy := stallDatabase(t)
+	base := serveForReal(t, mux)
+
+	if resp, _, err := postLogin(t, base, alice.authKey); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("login through the proxy before the stall: %v", err)
+	}
+	proxy.Stall()
+	defer proxy.Resume()
+	started := time.Now()
+	resp, body, err := postLogin(t, base, alice.authKey)
+	took := time.Since(started)
+	if err != nil {
+		t.Fatalf("the stalled request got no complete answer after %s (the connection was cut): %v", took, err)
+	}
+	if !testutil.IsWireAnswer(resp, body, apperr.StoreUnavailable) {
+		t.Fatalf("the stalled request got %d %q, want the registered E_STORE_UNAVAILABLE answer", resp.StatusCode, body)
+	}
+	if took >= config.GetServerWriteTimeout() {
+		t.Fatalf("the 503 took %s, not within the write timeout %s", took, config.GetServerWriteTimeout())
+	}
 }
 
 // A database outage is not a wrong account number: telling the user "invalid credentials"

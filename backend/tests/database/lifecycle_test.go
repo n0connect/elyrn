@@ -183,101 +183,6 @@ func (l *lockedLog) count(id string) int {
 	return strings.Count(l.buf.String(), id)
 }
 
-// stallingProxy forwards TCP connections to PostgreSQL and can stop delivering in both
-// directions without closing anything: what a paused or overloaded database looks like from
-// the server (the kernel still accepts the bytes, nobody answers them). The session, its lock
-// and PostgreSQL itself stay real.
-type stallingProxy struct {
-	listener net.Listener
-	target   string
-	gate     sync.RWMutex // held for writing while stalled
-	mu       sync.Mutex
-	stalled  bool
-	conns    []net.Conn
-}
-
-func startStallingProxy(t *testing.T, target string) *stallingProxy {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	p := &stallingProxy{listener: listener, target: target}
-	go p.serve()
-	t.Cleanup(p.close)
-	return p
-}
-
-func (p *stallingProxy) port() string {
-	return strconv.Itoa(p.listener.Addr().(*net.TCPAddr).Port)
-}
-
-func (p *stallingProxy) serve() {
-	for {
-		client, err := p.listener.Accept()
-		if err != nil {
-			return
-		}
-		server, err := net.Dial("tcp", p.target)
-		if err != nil {
-			_ = client.Close()
-			continue
-		}
-		p.mu.Lock()
-		p.conns = append(p.conns, client, server)
-		p.mu.Unlock()
-		go p.pipe(client, server)
-		go p.pipe(server, client)
-	}
-}
-
-// pipe copies src to dst chunk by chunk; while stalled, a chunk read is held, not delivered.
-func (p *stallingProxy) pipe(src, dst net.Conn) {
-	defer func() { _ = src.Close(); _ = dst.Close() }()
-	buf := make([]byte, 32<<10)
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			p.gate.RLock()
-			_, werr := dst.Write(buf[:n])
-			p.gate.RUnlock()
-			if werr != nil {
-				return
-			}
-		}
-		if err != nil {
-			return
-		}
-	}
-}
-
-func (p *stallingProxy) stall() {
-	p.gate.Lock()
-	p.mu.Lock()
-	p.stalled = true
-	p.mu.Unlock()
-}
-
-func (p *stallingProxy) resume() {
-	p.mu.Lock()
-	stalled := p.stalled
-	p.stalled = false
-	p.mu.Unlock()
-	if stalled {
-		p.gate.Unlock()
-	}
-}
-
-func (p *stallingProxy) close() {
-	p.resume()
-	_ = p.listener.Close()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, c := range p.conns {
-		_ = c.Close()
-	}
-}
-
 // instanceLockHeld reports, through the pool (not the stalled path), whether some session holds
 // the single-instance lock.
 func instanceLockHeld(t *testing.T) bool {
@@ -299,9 +204,9 @@ func instanceLockHeld(t *testing.T) bool {
 // a session that really ends (E_INSTANCE_LOCK_LOST).
 func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 	startDatabase(t)
-	proxy := startStallingProxy(t, net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT")))
+	proxy := testutil.StartStallingProxy(t, net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT")))
 	t.Setenv("DB_HOST", "127.0.0.1")
-	t.Setenv("DB_PORT", proxy.port())
+	t.Setenv("DB_PORT", proxy.Port())
 	logs := &lockedLog{}
 	previous := log.Writer()
 	log.SetOutput(logs)
@@ -314,7 +219,7 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 	}
 	defer lock.Release()
 
-	proxy.stall()
+	proxy.Stall()
 	select {
 	case f := <-lost:
 		t.Fatalf("an unanswering database was reported as a lost lock: %s", f.Code.ID)
@@ -327,7 +232,7 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 		t.Fatalf("the outage was reported %d times, want once", got)
 	}
 
-	proxy.resume()
+	proxy.Resume()
 	select {
 	case f := <-lost:
 		t.Fatalf("the lock was reported lost after the database answered again: %s", f.Code.ID)

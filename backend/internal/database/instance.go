@@ -54,7 +54,7 @@ const (
 	// instanceLockCheck is how often the lock's connection is pinged
 	instanceLockCheck = 10 * time.Second
 	// instanceLockSlow is how long a ping may go unanswered before the database is reported
-	// unreachable (a request's statement gives up after as long)
+	// unreachable (background work's statement deadline)
 	instanceLockSlow = statementDeadline
 )
 

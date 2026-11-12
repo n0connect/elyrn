@@ -98,25 +98,31 @@ const (
 )
 
 type chatRepository struct {
+	handle
 	tx *gorm.DB // nil outside a transaction
 }
 
-// NewChatRepository creates a new ChatRepository instance
+// NewChatRepository creates a ChatRepository for request paths (database.DB)
 func NewChatRepository() ChatRepository {
-	return &chatRepository{}
+	return &chatRepository{handle: requestHandle}
 }
 
-// db resolves the connection lazily: repositories are built before database.Init runs
+// NewBackgroundChatRepository creates a ChatRepository for background work (database.BackgroundDB)
+func NewBackgroundChatRepository() ChatRepository {
+	return &chatRepository{handle: backgroundHandle}
+}
+
+// db is the open transaction, or the repository's handle (resolved at each call)
 func (r *chatRepository) db() *gorm.DB {
 	if r.tx != nil {
 		return r.tx
 	}
-	return database.DB
+	return r.handle.db()
 }
 
 func (r *chatRepository) Transaction(fn func(tx ChatRepository) error) error {
 	return r.db().Transaction(func(tx *gorm.DB) error {
-		return fn(&chatRepository{tx: tx})
+		return fn(&chatRepository{handle: r.handle, tx: tx})
 	})
 }
 
@@ -299,7 +305,7 @@ func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) error {
 		if err := tx.Where(whereID, conversationID).Delete(&models.Room{}).Error; err != nil {
 			return err
 		}
-		if _, err := (&chatRepository{tx: tx}).LockConversation(conversationID); err != nil {
+		if _, err := (&chatRepository{handle: r.handle, tx: tx}).LockConversation(conversationID); err != nil {
 			return err
 		}
 		if err := tx.Where(whereConversation, conversationID).Delete(&models.Message{}).Error; err != nil {
