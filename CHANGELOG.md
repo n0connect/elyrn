@@ -7,6 +7,13 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **Replay and reorder after a reload.** The client kept seen message ids and sender counters in
+  memory only, so after a reload a malicious server could serve an old authentic message again
+  as new, reorder messages, or withhold a device's own last messages so its next send reused a
+  counter. Each device now remembers, per conversation, the highest seq it processed and each
+  sender's highest counter (IndexedDB; no text, ids or times): a message with a used counter is
+  shown as "replayed or reordered by the server" instead of its text, and a counter is never
+  reused. Detection stays per device; a device's first open of a conversation is not covered.
 - **Lookalike room members.** A room message from someone else was labelled with the sender's
   name alone, which carries 12 bits: anyone holding the room code could grind an account offline
   (about 4,096 tries) until its member key bore a member's name, join, and write as them. Every

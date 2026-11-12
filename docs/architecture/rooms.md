@@ -137,7 +137,7 @@ It covers the roster as the server served it to the sender. The server recompute
 
 ### Receiving
 
-A client accepts a message only if every check passes, in this order: the size is one of the allowed classes and `n` is in range; the card opens under `K_card`; both X25519 computations succeed; one wrap opens; the commitment matches; the body opens and its payload has exactly the three fields. Anything else is shown as *unreadable*. Gaps in a sender's counter are flagged per sender, as in one-to-one conversations.
+A client accepts a message only if every check passes, in this order: the size is one of the allowed classes and `n` is in range; the card opens under `K_card`; both X25519 computations succeed; one wrap opens; the commitment matches; the body opens and its payload has exactly the three fields. Anything else is shown as *unreadable*. Counters are checked per sender, by the same rule as in one-to-one conversations (`frontend/js/counters.js`): a gap is flagged, and a counter at or below the sender's last one, within one load or (for a message with a seq above the one this device remembers) across reloads, is shown as a replayed or reordered message instead of its text. The record is per device; a device's first open of the room, another device's view, and a replay placed at or below the remembered seq are not covered ([threat model](../security/threat-model.md)).
 
 ---
 
