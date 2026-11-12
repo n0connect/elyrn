@@ -152,7 +152,10 @@ function setupDoorListeners() {
     document.getElementById('doorHumanBtn').addEventListener('click', () => showDoorVerdict(RobotDoor.LINES.HONEST, []));
     document.getElementById('doorAnswerBtn').addEventListener('click', answerDoorChallenge);
     document.getElementById('doorAnswerInput').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') answerDoorChallenge();
+        // The Enter is consumed here, so it cannot reach whatever is focused once the check settles
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        answerDoorChallenge();
     });
     ['verdictBrandTitle', 'challengeBrandTitle', 'robotBrandTitle'].forEach(id => {
         document.getElementById(id).addEventListener('click', showMainMenu);

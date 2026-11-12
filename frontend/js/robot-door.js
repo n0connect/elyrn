@@ -157,7 +157,7 @@ const RobotDoor = (() => {
         if (!m) return [];
         return [
             `points: ${m.points}`,
-            m.detour === null ? 'detour: round trip' : `detour: ${m.detour.toFixed(DETOUR_DECIMALS)}×`,
+            m.detour === null ? 'detour: round trip' : `detour: ${m.detour.toFixed(DETOUR_DECIMALS)}x`,
             `hesitation: ${m.hesitationMs} ms`
         ];
     }

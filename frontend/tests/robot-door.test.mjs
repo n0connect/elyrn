@@ -115,7 +115,7 @@ test('measurements on known trails', () => {
     assert.equal(m.straightPx, 5);
     assert.equal(m.detour, 1.4);
     assert.equal(m.hesitationMs, 412);
-    assert.deepEqual([...D.measurementLines(m)], ['points: 3', 'detour: 1.4×', 'hesitation: 412 ms']);
+    assert.deepEqual([...D.measurementLines(m)], ['points: 3', 'detour: 1.4x', 'hesitation: 412 ms']);
 
     // A straight line: detour exactly 1
     const straight = D.measure(trail(10, line).map(p => ({ ...p, t: p.t - CLICK_AT })), 0);

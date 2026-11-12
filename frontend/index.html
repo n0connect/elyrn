@@ -97,14 +97,28 @@
 
         <!-- THE OTHER DOOR: theatre in front of the robot entrance. It gates nothing (the command
              is public, the server has no robot flag); see js/robot-door.js -->
+        <!-- the robot side's ornament, defined once: a circuit trace, the counterpart of the
+             human side's hand-drawn line; each robot-side screen shows it with <use> -->
+        <svg class="svg-defs" width="0" height="0" aria-hidden="true" focusable="false">
+            <symbol id="circuitTrace" viewBox="0 0 240 16">
+                <polyline points="2,8 40,8 48,3 92,3 100,8 140,8 148,13 196,13 204,8 238,8" fill="none" stroke="currentColor" stroke-width="1.2"/>
+                <rect x="38" y="6" width="4" height="4" fill="currentColor"/>
+                <rect x="98" y="6" width="4" height="4" fill="currentColor"/>
+                <rect x="138" y="6" width="4" height="4" fill="currentColor"/>
+                <rect x="202" y="6" width="4" height="4" fill="currentColor"/>
+                <rect x="234" y="5" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            </symbol>
+        </svg>
         <div class="robot-container" id="doorVerdictContainer" data-hidden>
             <div class="brand">
                 <h1 class="brand-title clickable" id="verdictBrandTitle">elyrn.</h1>
                 <p class="tagline">anonymous. <span class="secure-text" data-text="encrypted">encrypted</span>. ephemeral.</p>
             </div>
 
+            <svg class="door-ornament" viewBox="0 0 240 16" width="240" height="16" aria-hidden="true" focusable="false"><use href="#circuitTrace"/></svg>
+
             <div class="pair-panel door-panel">
-                <p class="account-number-label">verdict</p>
+                <p class="account-number-label" id="doorVerdictHeading" tabindex="-1">verdict</p>
                 <div id="doorVerdict" class="door-verdict-region" aria-live="polite">
                     <ul id="doorMeasurements" class="door-measurements"></ul>
                     <p id="doorVerdictLine" class="door-line"></p>
@@ -126,11 +140,13 @@
                 <p class="tagline">anonymous. <span class="secure-text" data-text="encrypted">encrypted</span>. ephemeral.</p>
             </div>
 
+            <svg class="door-ornament" viewBox="0 0 240 16" width="240" height="16" aria-hidden="true" focusable="false"><use href="#circuitTrace"/></svg>
+
             <div class="pair-panel door-panel">
                 <p class="account-number-label">the other door</p>
                 <p class="door-line">prove you are not human.</p>
                 <p class="account-number-label">nonce</p>
-                <div class="account-number-box">
+                <div class="account-number-box show">
                     <code id="doorNonce"></code>
                 </div>
                 <label class="door-task" for="doorAnswerInput">first 8 hex characters of sha-256(nonce)</label>
@@ -153,21 +169,13 @@
                 <p class="tagline">anonymous. <span class="secure-text" data-text="encrypted">encrypted</span>. ephemeral.</p>
             </div>
 
-            <!-- the robot side's ornament: a circuit trace, the counterpart of the human side's line -->
-            <svg class="door-ornament" viewBox="0 0 240 16" width="240" height="16" aria-hidden="true" focusable="false">
-                <polyline points="2,8 40,8 48,3 92,3 100,8 140,8 148,13 196,13 204,8 238,8" fill="none" stroke="currentColor" stroke-width="1.2"/>
-                <rect x="38" y="6" width="4" height="4" fill="currentColor"/>
-                <rect x="98" y="6" width="4" height="4" fill="currentColor"/>
-                <rect x="138" y="6" width="4" height="4" fill="currentColor"/>
-                <rect x="202" y="6" width="4" height="4" fill="currentColor"/>
-                <rect x="234" y="5" width="6" height="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
-            </svg>
+            <svg class="door-ornament" viewBox="0 0 240 16" width="240" height="16" aria-hidden="true" focusable="false"><use href="#circuitTrace"/></svg>
 
             <div class="pair-panel robot-panel door-panel">
                 <p class="account-number-label">robot entrance</p>
-                <p id="robotGreeting" class="door-line"></p>
+                <p id="robotGreeting" class="door-line" tabindex="-1"></p>
                 <p class="account-number-label">register it with your mcp client</p>
-                <div class="account-number-box">
+                <div class="account-number-box show">
                     <code id="robotCommand"></code>
                     <button id="copyRobotBtn" class="copy-btn">copy</button>
                 </div>
@@ -284,7 +292,7 @@
 
                 <div id="roomCodePanel" class="pair-panel" data-hidden>
                     <p class="account-number-label">room code</p>
-                    <div class="account-number-box">
+                    <div class="account-number-box show">
                         <code id="roomCodeShown"></code>
                         <button id="copyRoomCodeBtn" class="copy-btn">copy</button>
                     </div>

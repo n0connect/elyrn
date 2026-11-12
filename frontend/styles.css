@@ -1454,3 +1454,63 @@ body.robot-side {
 .robot-side .text-btn:hover {
     background: rgba(255, 255, 255, 0.12);
 }
+
+/* The circuit trace's <symbol> lives in a zero-size svg that takes no room */
+.svg-defs {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+}
+
+/* Headings that take focus when a door screen opens (tabindex="-1"): no ring around text */
+#doorVerdictHeading:focus,
+#robotGreeting:focus {
+    outline: none;
+}
+
+/* Code boxes on black: white text in a white 2px frame (account-number-animation.css gives the
+   box an undefined --bg-secondary and the revealed code dark shadows) */
+.robot-side .account-number-box code {
+    color: var(--fg);
+    background: transparent;
+    border: 2px solid var(--fg);
+    box-shadow: none;
+}
+
+/* The copy button reads as a button on black: a 2px frame that fills white on hover */
+.robot-side .copy-btn {
+    border: 2px solid var(--fg);
+}
+
+.robot-side .copy-btn:hover:not(:disabled) {
+    background: var(--fg);
+    color: var(--bg);
+}
+
+/* Toasts keep their place (top right, as on the white side) but take the robot side's colours:
+   black, white text, a frame in the toast's own colour */
+.robot-side .notification,
+.robot-side .notification.success,
+.robot-side .notification.error,
+.robot-side .notification.warning {
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: none;
+}
+
+.robot-side .notification.success {
+    border-color: #5fd37a;
+}
+
+.robot-side .notification.error {
+    border-color: var(--danger);
+}
+
+.robot-side .notification.warning {
+    border-color: #ffd34d;
+}
+
+.robot-side .notification .close-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+}

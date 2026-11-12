@@ -99,7 +99,9 @@ function showDoorVerdict(line, measurements) {
         list.appendChild(item);
     });
     document.getElementById('doorVerdictLine').textContent = line;
-    document.getElementById('humanDoorBtn').focus();
+    // Focus lands on the heading, never on an action: the keystroke that opened this screen
+    // (Enter in the challenge) must not go on to press the button it lands on
+    document.getElementById('doorVerdictHeading').focus();
 }
 
 // Measurements are forgotten as soon as the verdict screen is left
@@ -179,7 +181,9 @@ function showRobot(mode) {
     document.getElementById('robotGreeting').textContent = RobotDoor.greeting(mode);
     document.getElementById('robotCommand').textContent =
         buildAgentCommand(window.location.origin) || buildAgentCommand(AGENT_SERVER_EXAMPLE);
-    document.getElementById('copyRobotBtn').focus();
+    // Focus lands on the greeting, not the copy button: entering never copies anything, the
+    // clipboard is written only when copy itself is pressed
+    document.getElementById('robotGreeting').focus();
 }
 
 function showApp() {
