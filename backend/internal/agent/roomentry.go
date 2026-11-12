@@ -56,7 +56,7 @@ func (a *Agent) createOnce(ctx context.Context, code *e2e.RoomCode) (*roomState,
 	var resp models.ConversationResponse
 	status, err := a.api(ctx, http.MethodPost, pathRooms, models.CreateRoomRequest{
 		ID: keys.ID.String(), Lookup: keys.Lookup, MaxMembers: code.MaxMembers,
-		ExpiresAt: int64(code.ExpiresHour) * hourSeconds, Card: member.Card, Vault: vault, PoW: solution,
+		ExpiresAt: code.ExpiresAt(), Card: member.Card, Vault: vault, PoW: solution,
 	}, &resp)
 	switch {
 	case err != nil:
@@ -82,16 +82,20 @@ func (a *Agent) JoinRoom(ctx context.Context, codeText string) (*RoomJoined, err
 			return fail(CodeRoomCode, err)
 		}
 		defer zeroBytes(code.Secret)
-		if int64(code.ExpiresHour)*hourSeconds <= time.Now().Unix() {
+		if code.ExpiresAt() <= time.Now().Unix() {
 			return fail(CodeRoomExpired, nil)
 		}
 		keys, member, vault, err := a.seat(code)
 		if err != nil {
 			return err
 		}
+		// A known room under other limits is a doctored code: the server refuses it too
+		if st, ok := a.rooms[keys.ID]; ok && (st.maxMembers != code.MaxMembers || st.expiresAt.Unix() != code.ExpiresAt()) {
+			return fail(CodeRoomCode, nil)
+		}
 		var resp models.ConversationResponse
-		status, err := a.api(ctx, http.MethodPost, pathRoomsJoin,
-			models.JoinRoomRequest{ID: keys.ID.String(), Lookup: keys.Lookup, Card: member.Card, Vault: vault}, &resp)
+		status, err := a.api(ctx, http.MethodPost, pathRoomsJoin, models.JoinRoomRequest{ID: keys.ID.String(), Lookup: keys.Lookup,
+			Card: member.Card, Vault: vault, MaxMembers: code.MaxMembers, ExpiresAt: code.ExpiresAt()}, &resp)
 		switch {
 		case err != nil:
 			return err

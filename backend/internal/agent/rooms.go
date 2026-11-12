@@ -62,7 +62,7 @@ func (a *Agent) adopt(item *models.ConversationDTO) (*roomState, error) {
 		return nil, fail(CodeRoomVerify, err)
 	}
 	defer zeroBytes(code.Secret)
-	if code.MaxMembers != view.MaxMembers || int64(code.ExpiresHour)*hourSeconds != view.ExpiresAt {
+	if code.MaxMembers != view.MaxMembers || code.ExpiresAt() != view.ExpiresAt {
 		return nil, fail(CodeRoomVerify, nil)
 	}
 	return a.roomFromCode(id, code, view.Vault, item)
@@ -88,7 +88,7 @@ func (a *Agent) roomFromCode(id uuid.UUID, code *e2e.RoomCode, vault string, ite
 	}
 	st := &roomState{
 		id: id, name: roomAura.Name, selfName: self.Name, vault: vault, keys: keys, member: member,
-		maxMembers: code.MaxMembers, expiresAt: time.Unix(int64(code.ExpiresHour)*hourSeconds, 0),
+		maxMembers: code.MaxMembers, expiresAt: time.Unix(code.ExpiresAt(), 0),
 		peerLastN: make(map[string]int64),
 	}
 	return st, st.refreshView(item)
