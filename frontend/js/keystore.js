@@ -7,17 +7,24 @@
 // non-extractable CryptoKey, not even by script running on this page.
 // The AccountNumber itself is never stored anywhere.
 // It also remembers which conversations the user verified (safety number compared),
-// bound to the peer key that was verified. None of this ever reaches the server.
+// bound to the peer key that was verified, and, per conversation, the counter record that
+// exposes replays after a reload (counters.js: highest seq and counters, never text, ids or
+// times). None of this ever reaches the server.
 
 const Keystore = (() => {
     'use strict';
 
     // Stored name, kept across the rename to elyrn: changing it would orphan every saved key.
     const DB_NAME = 'noaddx';
-    const DB_VERSION = 2;
+    // 3 adds COUNTERS_STORE; an upgrade only creates missing stores, so saved keys survive it
+    const DB_VERSION = 3;
     const STORE = 'keys';
     const VERIFIED_STORE = 'verified';
+    const COUNTERS_STORE = 'counters';
     const RECORD = 'identity';
+
+    // A storage that refuses once (private window) refuses every time: log it once, not per sync
+    let countersWarned = false;
 
     function open() {
         return new Promise((resolve, reject) => {
@@ -28,7 +35,7 @@ const Keystore = (() => {
             const request = indexedDB.open(DB_NAME, DB_VERSION);
             request.onupgradeneeded = () => {
                 const db = request.result;
-                for (const name of [STORE, VERIFIED_STORE]) {
+                for (const name of [STORE, VERIFIED_STORE, COUNTERS_STORE]) {
                     if (!db.objectStoreNames.contains(name)) {
                         db.createObjectStore(name);
                     }
@@ -103,6 +110,38 @@ const Keystore = (() => {
         }
     }
 
+    // Without storage the record lives in memory only (chat.js), as before it was persisted.
+    // Resolves to the stored value (undefined when none), or null when storage failed.
+    async function countersOp(mode, action) {
+        try {
+            const value = await transact(mode, action, COUNTERS_STORE);
+            return mode === 'readonly' ? value : true;
+        } catch (e) {
+            if (!countersWarned) {
+                countersWarned = true;
+                Log.warn(Errors.INTERNAL.W_COUNTERS_UNAVAILABLE, e);
+            }
+            return null;
+        }
+    }
+
+    function loadCounters(conversationId) {
+        return countersOp('readonly', store => store.get(conversationId));
+    }
+
+    function saveCounters(conversationId, record) {
+        return countersOp('readwrite', store => store.put({
+            seq: record.seq,
+            mine: record.mine,
+            senders: record.senders.map(entry => [entry[0], entry[1]])
+        }, conversationId));
+    }
+
+    // Burned, left or gone: nothing about the conversation stays behind
+    function forgetCounters(conversationId) {
+        return countersOp('readwrite', store => store.delete(conversationId));
+    }
+
     function wipe() {
         return new Promise(resolve => {
             if (!window.indexedDB) {
@@ -114,5 +153,5 @@ const Keystore = (() => {
         });
     }
 
-    return Object.freeze({ save, load, wipe, setVerified, isVerified });
+    return Object.freeze({ save, load, wipe, setVerified, isVerified, loadCounters, saveCounters, forgetCounters });
 })();

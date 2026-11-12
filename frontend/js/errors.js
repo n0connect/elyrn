@@ -81,6 +81,8 @@ const Errors = (() => {
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_LIVE_UPDATES_PAUSED: w('live updates paused — reload to resume'),
         W_COPY_MANUALLY: w('copy it manually'),
+        // Shown in place of a message whose sender counter was already used (counters.js)
+        W_MESSAGE_REPLAYED: w('⚠ a message from {who} was replayed or reordered by the server'),
 
         // invites
         W_POW_RATE_LIMITED: w('too many attempts — wait a minute'),
@@ -127,6 +129,7 @@ const Errors = (() => {
         W_CLIPBOARD_NOT_CLEARED: 'W_CLIPBOARD_NOT_CLEARED',
         E_SCRAMBLE_ELEMENTS_MISSING: 'E_SCRAMBLE_ELEMENTS_MISSING',
         W_KEYSTORE_UNAVAILABLE: 'W_KEYSTORE_UNAVAILABLE',
+        W_COUNTERS_UNAVAILABLE: 'W_COUNTERS_UNAVAILABLE',
         E_SYNC_FAILED: 'E_SYNC_FAILED'
     });
 

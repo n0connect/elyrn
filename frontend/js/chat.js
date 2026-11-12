@@ -3,8 +3,9 @@
 // ========================================
 // The server is treated as an untrusted relay: every response is shape-checked,
 // every message is authenticated by AES-GCM + AAD, peer keys from invites are
-// verified against the fingerprint embedded in the invite code, and gaps in the
-// peer's encrypted message counter expose messages the server withheld.
+// verified against the fingerprint embedded in the invite code, and each sender's
+// encrypted message counter exposes messages the server withheld, replayed or reordered,
+// across reloads too (counters.js; the record this device keeps lives in Keystore).
 // Rooms (rooms.js) are conversations too: a room conversation carries `room` and no peer key.
 
 const Chat = (() => {
@@ -204,6 +205,7 @@ const Chat = (() => {
             if (!seen.has(id)) {
                 const gone = conversations.get(id);
                 conversations.delete(id);
+                forgetMark(gone);
                 if (activeId === id) {
                     activeId = null;
                     showHome();
@@ -237,8 +239,10 @@ const Chat = (() => {
             room: null,
             aura: null,
             verified: false,
-            myMaxN: 0,
-            peerLastN: 0,
+            myMaxN: 0,                  // this device's highest counter here: never spent twice
+            ledger: Counters.ledger(Counters.EMPTY),  // senders' counters in the loaded sequence
+            mark: Counters.EMPTY,       // the last record saved: kept in memory when storage fails
+            markLoad: Promise.resolve(Counters.EMPTY),  // the record read when last opened
             lastSeq: item.last_seq,
             readSeq: item.read_seq,
             maxSeq: 0,
@@ -265,7 +269,6 @@ const Chat = (() => {
             return null;
         }
         state.aura = await Rooms.aura(item.id);
-        state.peerLastN = new Map();  // per sender: their counter in this room
         return state;
     }
 
@@ -282,9 +285,10 @@ const Chat = (() => {
         conv.seqs = new Set();
         conv.ids = new Set();
         conv.maxSeq = 0;
-        // myMaxN is kept: within a session this device's counter only ever grows
-        conv.peerLastN = conv.room ? new Map() : 0;
+        // myMaxN is kept: this device's counter only ever grows
         conv.loaded = false;
+        // Read now, before any await, so every sync and send of this open waits for the same record
+        conv.markLoad = loadMark(conv);
         if (conv.room) {
             renderRoomHeader(conv.room);
             setRoomComposerHint(conv.room.expiresAt, me.ttlDays);
@@ -330,10 +334,17 @@ const Chat = (() => {
             Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
             return;
         }
+        if (!conv.loaded) {
+            // A new loaded sequence starts from what this device remembers (counters.js, rule 2)
+            const record = await conv.markLoad;
+            conv.ledger = Counters.ledger(record);
+            conv.myMaxN = Math.max(conv.myMaxN, record.mine);
+        }
         conv.loaded = true;
 
         const key = conv.room ? null : await conversationKey(conv);
         const fresh = [];
+        let replayed = false;
         for (const raw of result.data.messages) {
             if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || !isSeq(raw.seq) || raw.seq === 0 ||
                 typeof raw.mine !== 'boolean' || typeof raw.ciphertext !== 'string' ||
@@ -342,36 +353,18 @@ const Chat = (() => {
                 // Unknown shape, or a message id seen before (a server re-serving an old ciphertext)
                 continue;
             }
-            let message;
-            try {
-                if (conv.room) {
-                    message = await openRoomMessage(conv, raw, fresh);
-                    conv.seqs.add(raw.seq);
-                    conv.ids.add(raw.id);
-                    conv.maxSeq = raw.seq;
-                    fresh.push(message);
-                    continue;
-                }
-                const sender = raw.mine ? me.publicKey : conv.peerPublicKey;
-                const plain = await ElyrnCrypto.decryptMessage(key, conv.id, raw.id, sender, raw.ciphertext);
-                message = { seq: raw.seq, mine: raw.mine, text: plain.text, sentAt: plain.sentAt };
-                if (raw.mine) {
-                    conv.myMaxN = Math.max(conv.myMaxN, plain.counter);
-                } else {
-                    // The first visible peer message is the baseline (older ones may have expired)
-                    if (conv.peerLastN > 0 && plain.counter > conv.peerLastN + 1) {
-                        fresh.push({ gap: plain.counter - conv.peerLastN - 1 });
-                    }
-                    conv.peerLastN = Math.max(conv.peerLastN, plain.counter);
-                }
-            } catch (e) {
-                message = { seq: raw.seq, mine: raw.mine, broken: true };
-            }
+            const message = await openMessage(conv, key, raw);
             conv.seqs.add(raw.seq);
             conv.ids.add(raw.id);
             conv.maxSeq = raw.seq;
-            fresh.push(message);
+            if (!message.broken) {
+                replayed = checkCounter(conv, message, fresh) || replayed;
+            }
+            if (!message.replayed) fresh.push(message);
         }
+        if (replayed) Log.warn(Errors.CODES.W_MESSAGE_REPLAYED);
+        // Once per sync, never per message; kept even if the user moved on meanwhile
+        await saveMark(conv);
         if (activeId !== conv.id) return;
 
         appendMessages(fresh);
@@ -380,34 +373,85 @@ const Chat = (() => {
         await markRead(conv);
     }
 
-    // Verifies a room message's sender and counter; gaps are tracked per sender
-    async function openRoomMessage(conv, raw, fresh) {
-        let plain;
+    // Decrypts and authenticates one message: { seq, mine, text, sentAt, sender, counter, from? },
+    // or { seq, mine, broken } when anything fails (shown as unreadable)
+    async function openMessage(conv, key, raw) {
         try {
-            plain = await Rooms.open(conv, raw);
+            return conv.room ? await openRoomMessage(conv, raw) : await openPairMessage(conv, key, raw);
         } catch (e) {
             return { seq: raw.seq, mine: raw.mine, broken: true };
         }
+    }
+
+    // The sender is bound into the AAD: a flipped `mine` names the wrong key and fails to open
+    async function openPairMessage(conv, key, raw) {
+        const sender = raw.mine ? me.publicKey : conv.peerPublicKey;
+        const plain = await ElyrnCrypto.decryptMessage(key, conv.id, raw.id, sender, raw.ciphertext);
+        return { seq: raw.seq, mine: raw.mine, text: plain.text, sentAt: plain.sentAt, sender: sender, counter: plain.counter };
+    }
+
+    // Verifies a room message's sender against the server's `mine` and names who sent it
+    async function openRoomMessage(conv, raw) {
+        const plain = await Rooms.open(conv, raw);
         const mine = plain.sender === conv.room.member.publicKey;
         if (mine !== raw.mine) {
-            return { seq: raw.seq, mine: raw.mine, broken: true };
+            throw new Error('the server misattributes a message');
         }
-        if (mine) {
-            conv.myMaxN = Math.max(conv.myMaxN, plain.counter);
-            return { seq: raw.seq, mine: true, text: plain.text, sentAt: plain.sentAt };
-        }
+        const message = { seq: raw.seq, mine: mine, text: plain.text, sentAt: plain.sentAt, sender: plain.sender, counter: plain.counter };
+        if (mine) return message;
         const entry = Rooms.senderOf(conv.room, plain.sender);
         const aura = entry ? entry.aura : await ElyrnCrypto.aura(plain.sender);
         if (!entry) {
             // Off the roster, yet a lookalike all the same: its name is compared too
             conv.room.outsiders.set(plain.sender, { publicKey: plain.sender, aura: aura });
         }
-        const last = conv.peerLastN.get(plain.sender) || 0;
-        if (last > 0 && plain.counter > last + 1) {
-            fresh.push({ gap: plain.counter - last - 1, from: aura });
+        return Object.assign(message, { from: aura, left: !entry });
+    }
+
+    // Judges an authenticated message's counter (counters.js), the same way for pairs and rooms.
+    // A replay is marked so the caller shows a warning in its place; a gap is pushed before it.
+    // Returns whether it was a replay.
+    function checkCounter(conv, message, fresh) {
+        const verdict = Counters.judge(conv.ledger, message.sender, message.counter, message.seq);
+        if (verdict.replay) {
+            message.replayed = true;
+            fresh.push({ replay: true, mine: message.mine, from: message.from });
+            return true;
         }
-        conv.peerLastN.set(plain.sender, Math.max(last, plain.counter));
-        return { seq: raw.seq, mine: false, text: plain.text, sentAt: plain.sentAt, from: aura, sender: plain.sender, left: !entry };
+        Counters.admit(conv.ledger, message.sender, message.counter);
+        if (message.mine) {
+            conv.myMaxN = Math.max(conv.myMaxN, message.counter);
+        } else if (verdict.gap > 0) {
+            fresh.push({ gap: verdict.gap, from: message.from });
+        }
+        return false;
+    }
+
+    // ---------- the counter record (Keystore) ----------
+
+    // What this device remembers of a conversation; the in-memory copy stands in when storage fails
+    async function loadMark(conv) {
+        return Counters.merge(Counters.parse(await Keystore.loadCounters(conv.id)), conv.mark);
+    }
+
+    // Records only grow (each field is a high-water mark), so the one read at open is merged in:
+    // a save made before the first sync of a reload can never lower what was stored
+    async function saveMark(conv) {
+        if (!me || conversations.get(conv.id) !== conv) return;
+        const record = Counters.merge(await conv.markLoad, Counters.snapshot(conv.ledger, conv.maxSeq, conv.myMaxN));
+        if (Counters.same(record, conv.mark)) return;
+        conv.mark = record;
+        await Keystore.saveCounters(conv.id, record);
+    }
+
+    // A save outside a sync (a send whose answer was lost), queued in order with the syncs
+    function persistMark(conv) {
+        conv.syncChain = conv.syncChain.then(() => saveMark(conv));
+    }
+
+    // Queued behind the conversation's syncs so a save in flight cannot land after the removal
+    function forgetMark(conv) {
+        conv.syncChain = conv.syncChain.then(() => Keystore.forgetCounters(conv.id));
     }
 
     async function markRead(conv) {
@@ -444,6 +488,9 @@ const Chat = (() => {
             const text = validation.sanitized;
             let attempt = unsent && unsent.convId === conv.id && unsent.text === text ? unsent : null;
             if (!attempt) {
+                // After a reload the server may withhold this device's last messages: the stored
+                // counter still counts, so none is ever spent twice
+                conv.myMaxN = Math.max(conv.myMaxN, (await conv.markLoad).mine);
                 const id = ElyrnCrypto.newMessageId();
                 attempt = { convId: conv.id, text: text, id: id, counter: conv.myMaxN + 1, ciphertext: null };
                 attempt.ciphertext = await sealAttempt(conv, attempt);
@@ -459,10 +506,13 @@ const Chat = (() => {
             // Only a lost answer leaves the outcome open; any other answer settles it
             unsent = !stored && (result.status === 0 || result.status >= 500) ? attempt : null;
 
-            if (stored) {
-                // The counter never repeats, even if the server withholds this message from the
-                // next sync: the peer then sees the gap instead of a reused counter
+            if (stored || unsent) {
+                // A counter the server may hold is spent: it never repeats, even if the server
+                // withholds this message from the next sync (the peer then sees a gap, not a
+                // reused counter). A retry of the same attempt keeps its id and counter.
                 conv.myMaxN = Math.max(conv.myMaxN, attempt.counter);
+            }
+            if (stored) {
                 input.value = '';
                 updateComposerMeta();
                 bump(conv.id);
@@ -474,6 +524,7 @@ const Chat = (() => {
             } else if (result.status !== 401) {
                 Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, result);
             }
+            if (unsent) persistMark(conv);
         } catch (e) {
             Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, e);
         } finally {
@@ -852,6 +903,7 @@ const Chat = (() => {
         const result = await api('DELETE', `/conversations/${id}`);
         if (result.status === 204 || result.status === 404) {
             conversations.delete(id);
+            if (conv) forgetMark(conv);
             backToList();
             showSuccess(leaving ? 'you left the room' : 'burned');
             scheduleRefresh();

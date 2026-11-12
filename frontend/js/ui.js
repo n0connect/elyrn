@@ -358,17 +358,41 @@ function renderSafetyNumber(groups) {
     });
 }
 
+// Who a counter warning is about: a room sender by name and code, else the peer, or this device
+const PEER_LABEL = 'them';
+const SELF_LABEL = 'you';
+
+function senderLabel(from, mine) {
+    if (mine) return SELF_LABEL;
+    return from ? from.name + auraCode(from) : PEER_LABEL;
+}
+
 // A gap in a sender's counter: the server withheld, delayed or deleted their messages
 // from: the room sender's aura (absent one-to-one)
 function createGapElement(missing, from) {
     const item = document.createElement('li');
     item.className = 'msg-gap';
-    const who = from ? from.name + auraCode(from) : 'them';
+    const who = senderLabel(from, false);
     // The count comes from the sender's own counter; cap what we repeat back
     item.textContent = missing === 1
         ? `⚠ 1 message from ${who} never arrived`
         : missing <= 999 ? `⚠ ${missing} messages from ${who} never arrived` : `⚠ messages from ${who} never arrived`;
     return item;
+}
+
+// A counter the sender already used: an old message served again or out of order. Its text is
+// not shown, so a replay can never pass as something said now.
+function createReplayElement(from, mine) {
+    const item = document.createElement('li');
+    item.className = 'msg-gap msg-replay';
+    item.textContent = Errors.message(Errors.CODES.W_MESSAGE_REPLAYED, { who: senderLabel(from, mine) });
+    return item;
+}
+
+function createMessageListItem(message) {
+    if (message.gap) return createGapElement(message.gap, message.from);
+    if (message.replay) return createReplayElement(message.from, message.mine);
+    return createMessageElement(message);
 }
 
 function createMessageElement(message) {
@@ -412,8 +436,7 @@ function appendMessages(messages) {
     if (empty && messages.length > 0) {
         empty.remove();
     }
-    messages.forEach(message => list.appendChild(
-        message.gap ? createGapElement(message.gap, message.from) : createMessageElement(message)));
+    messages.forEach(message => list.appendChild(createMessageListItem(message)));
     if (pinned || messages.some(m => m.mine)) {
         list.scrollTop = list.scrollHeight;
     }
