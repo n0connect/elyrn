@@ -520,16 +520,38 @@ func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
 
-// Under a login flood the server queues Argon2id work and answers 503 when the queue is
-// full, rather than allocating memory without bound; a 503 never reveals account state.
-func TestLogin_ServiceUnavailableWhenArgon2IsSaturated(t *testing.T) {
+// Login runs no Argon2id (S-02): with every Argon2id slot held, a registered account still
+// logs in and an unknown key still gets the ordinary 401, so a flood of Argon2id work
+// (registration phase 2) cannot lock anyone out of an existing account.
+func TestLogin_IgnoresArgon2Saturation(t *testing.T) {
 	mux := setup(t)
 	alice := register(t, mux)
 
 	release := auth.HoldArgon2SlotsForTesting()
 	defer release()
-	for name, key := range map[string]string{"real account": alice.authKey, "unknown account": testutil.NewAuthKey(t)} {
-		rr := newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: key})
-		expectStatus(t, rr, http.StatusServiceUnavailable, "login while saturated: "+name)
+	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: alice.authKey}),
+		http.StatusOK, "login while Argon2id is saturated: registered account")
+	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: testutil.NewAuthKey(t)}),
+		http.StatusUnauthorized, "login while Argon2id is saturated: unknown key")
+}
+
+// The stored Argon2id hash is not a login factor: the keyed lookup proves the key. A damaged
+// hash column must not lock the account out, and must not let any other key in.
+func TestLogin_DoesNotReadTheStoredHash(t *testing.T) {
+	mux := setup(t)
+	alice := register(t, mux)
+
+	lookup, err := auth.ComputeAccountLookup(alice.authKey)
+	if err != nil {
+		t.Fatalf("ComputeAccountLookup: %v", err)
 	}
+	result := database.DB.Model(&models.User{}).Where("account_lookup = ?", lookup).Update("account_hash", "argon2id$corrupted")
+	if result.Error != nil || result.RowsAffected != 1 {
+		t.Fatalf("corrupting the stored hash: rows %d, err %v", result.RowsAffected, result.Error)
+	}
+
+	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: alice.authKey}),
+		http.StatusOK, "login with a corrupted stored hash")
+	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: testutil.NewAuthKey(t)}),
+		http.StatusUnauthorized, "another key with a corrupted stored hash")
 }

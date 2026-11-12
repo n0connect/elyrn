@@ -179,8 +179,8 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hash auth key with Argon2id (bounded concurrency: a saturated server says so)
-	// ErrBusy answers 503 (apperr.Argon2Busy), anything else 500
+	// Hash auth key with Argon2id (bounded concurrency: a saturated server says so); stored
+	// only, login does not read it (S-07). ErrBusy answers 503 (apperr.Argon2Busy), else 500
 	accountHash, err := auth.HashAccountNumber(authKey)
 	if err != nil {
 		apperr.WriteError(w, "HashAccountNumber", err)
@@ -370,26 +370,18 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		apperr.Write(w, "FindByAccountLookup", apperr.StoreUnavailable)
 		return
 	}
-	if err != nil {
-		authLogger.Debug("Login failed: no account for this auth key")
-		// SECURITY: Spend a full Argon2id verification anyway so that response time does
-		// not reveal whether an account exists (no user-enumeration timing side channel);
-		// a saturated server answers 503 for known and unknown accounts alike
-		if errors.Is(auth.EqualizeVerificationTiming(req.AuthKey), auth.ErrBusy) {
-			apperr.Write(w, "EqualizeVerificationTiming", apperr.Argon2Busy)
-			return
-		}
-		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid credentials"}, http.StatusUnauthorized)
-		return
-	}
 
-	// Verify auth key hash
-	if err := auth.VerifyAccountNumberHash(user.AccountHash, req.AuthKey); err != nil {
-		if errors.Is(err, auth.ErrBusy) {
-			apperr.Write(w, "VerifyAccountNumberHash", apperr.Argon2Busy)
-			return
-		}
-		authLogger.Warn("Login failed: auth key hash verification failed")
+	// SECURITY: the key is proven by the keyed lookup alone, compared in constant time. No
+	// Argon2id and no decoy hash: the auth key is 256 bits of HKDF output, so there is no
+	// low-entropy secret to slow down, and "an account exists for this key" is learnable only
+	// by holding the key. Both paths still do the same work: one HMAC, one query, one compare
+	// against a fixed-length value (the stored lookup, or a stand-in when no row matched).
+	stored := ""
+	if user != nil {
+		stored = user.AccountLookup
+	}
+	if !auth.AccountLookupMatches(lookup, stored) {
+		authLogger.Debug("Login failed: no account for this auth key")
 		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid credentials"}, http.StatusUnauthorized)
 		return
 	}

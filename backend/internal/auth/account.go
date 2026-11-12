@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +15,8 @@ import (
 
 var accountLogger = utils.NewLogger("ACCOUNT")
 
-// Argon2id allocates ARGON2_MEMORY_KIB per call (64 MiB by default), so unbounded
+// Argon2id runs only in registration phase 2 (login proves the key by the keyed lookup).
+// It allocates ARGON2_MEMORY_KIB per call (64 MiB by default), so unbounded
 // concurrency is a memory-exhaustion attack. At most ARGON2_MAX_CONCURRENT calls run at
 // once; a caller waits up to Argon2WaitTimeout for a slot and otherwise gets ErrBusy.
 const Argon2WaitTimeout = 3 * time.Second
@@ -51,14 +51,6 @@ type argon2Params struct {
 	hashLength uint32
 }
 
-// decoyHash is a genuine Argon2id hash of a random secret nobody knows. Logins for unknown
-// accounts verify against it so they cost exactly what a real verification costs.
-var (
-	decoyHashOnce sync.Once
-	decoyHash     string
-	decoyHashErr  error
-)
-
 func getArgon2Params() (argon2Params, error) {
 	memory := config.GetArgon2MemoryKiB()
 	timeCost := config.GetArgon2Time()
@@ -77,6 +69,25 @@ func getArgon2Params() (argon2Params, error) {
 		saltLength: uint32(saltLen),
 		hashLength: uint32(hashLen),
 	}, nil
+}
+
+// accountLookupHexLen is the length of every lookup ComputeAccountLookup returns: the hex of
+// one HMAC-SHA256 output.
+const accountLookupHexLen = 2 * 32
+
+// absentAccountLookup stands in for the stored lookup when no account matched, so a login for
+// an unknown key runs the same comparison on the same length as one for a known key. It is
+// not hex, so no computed lookup can ever equal it.
+var absentAccountLookup = strings.Repeat("x", accountLookupHexLen)
+
+// AccountLookupMatches proves knowledge of the auth key: the lookup computed from the
+// presented key equals the account's stored one, compared in constant time. A nil-account
+// caller passes "" and is compared against absentAccountLookup instead (always false).
+func AccountLookupMatches(computed, stored string) bool {
+	if stored == "" {
+		stored = absentAccountLookup
+	}
+	return cryptoengine.ConstantTimeEqual([]byte(computed), []byte(stored))
 }
 
 // ComputeAccountLookup computes HMAC-SHA256(pepper, accountNumber) for fast database lookup
@@ -135,93 +146,4 @@ func HashAccountNumber(accountNumber string) (string, error) {
 
 	accountLogger.Debug("HashAccountNumber: hashed account number (masked)")
 	return encoded, nil
-}
-
-// parseParam reads one "<name>=<canonical decimal>" field within [min, max].
-func parseParam(field, name string, min, max uint64) (uint32, error) {
-	digits := strings.TrimPrefix(field, name+"=")
-	if digits == field || digits == "" {
-		return 0, fmt.Errorf("invalid %s parameter", name)
-	}
-	value, err := strconv.ParseUint(digits, 10, 32)
-	if err != nil || strconv.FormatUint(value, 10) != digits || value < min || value > max {
-		return 0, fmt.Errorf("invalid %s parameter", name)
-	}
-	return uint32(value), nil
-}
-
-// VerifyAccountNumberHash verifies an auth key against a stored Argon2id hash
-// ("argon2id$m=<KiB>$t=<n>$p=<n>$<salt hex>$<hash hex>"). Every parameter is range-checked
-// before Argon2 runs, so a corrupted record can neither crash nor exhaust the server.
-func VerifyAccountNumberHash(encodedHash, accountNumber string) error {
-	parts := strings.Split(encodedHash, "$")
-	if len(parts) != 6 || parts[0] != "argon2id" {
-		return fmt.Errorf("invalid hash format: expected 6 parts starting with 'argon2id'")
-	}
-	memory, err := parseParam(parts[1], "m", config.MinArgon2MemoryKiB, config.MaxArgon2MemoryKiB)
-	if err != nil {
-		return err
-	}
-	timeCost, err := parseParam(parts[2], "t", config.MinArgon2Time, config.MaxArgon2Time)
-	if err != nil {
-		return err
-	}
-	parallelism, err := parseParam(parts[3], "p", config.MinArgon2Parallelism, config.MaxArgon2Parallelism)
-	if err != nil {
-		return err
-	}
-
-	salt, err := hex.DecodeString(parts[4])
-	if err != nil || len(salt) < config.MinArgon2SaltBytes || len(salt) > config.MaxArgon2SaltBytes {
-		return fmt.Errorf("invalid salt")
-	}
-	expectedHash, err := hex.DecodeString(parts[5])
-	if err != nil || len(expectedHash) < config.MinArgon2HashBytes || len(expectedHash) > config.MaxArgon2HashBytes {
-		return fmt.Errorf("invalid hash")
-	}
-
-	computedHash, err := withArgon2Slot(func() ([]byte, error) {
-		return cryptoengine.Argon2idKey([]byte(accountNumber), salt, timeCost, memory, parallelism, uint32(len(expectedHash)))
-	})
-	if errors.Is(err, ErrBusy) {
-		return err
-	}
-	if err != nil {
-		return fmt.Errorf("argon2id failed: %w", err)
-	}
-
-	// Constant-time comparison
-	if !cryptoengine.ConstantTimeEqual(computedHash, expectedHash) {
-		return errors.New("account number hash mismatch")
-	}
-	return nil
-}
-
-func getDecoyHash() (string, error) {
-	decoyHashOnce.Do(func() {
-		secret, err := cryptoengine.RandomBytes(32)
-		if err != nil {
-			decoyHashErr = err
-			return
-		}
-		decoyHash, decoyHashErr = HashAccountNumber(hex.EncodeToString(secret))
-	})
-	return decoyHash, decoyHashErr
-}
-
-// EqualizeVerificationTiming runs a full Argon2id verification against the decoy hash,
-// so a login for a non-existent account takes as long as one for a real account
-// (no user-enumeration timing side channel). The verification result is meaningless by
-// design; only ErrBusy is reported, so a saturated server answers unknown and known
-// accounts the same way.
-func EqualizeVerificationTiming(authKey string) error {
-	hash, err := getDecoyHash()
-	if err != nil {
-		accountLogger.LogError("EqualizeVerificationTiming", err)
-		return nil
-	}
-	if err := VerifyAccountNumberHash(hash, authKey); errors.Is(err, ErrBusy) {
-		return ErrBusy
-	}
-	return nil
 }

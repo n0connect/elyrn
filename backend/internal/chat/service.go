@@ -637,7 +637,7 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 		if row == nil {
 			return ErrNotFound
 		}
-		if !cryptoengine.ConstantTimeEqual([]byte(lookup), []byte(row.AccountLookup)) {
+		if !auth.AccountLookupMatches(lookup, row.AccountLookup) {
 			return ErrForbidden
 		}
 		ids, err := openIndex(me, row.ConvIndexEnc)
