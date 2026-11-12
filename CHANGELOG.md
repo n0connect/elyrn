@@ -7,6 +7,12 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **Live updates held by one network.** The event stream hub allowed 4 streams per account and
+  4,096 in all, first come first served, and accounts cost only a proof of work: a few hundred
+  accounts from one network could hold every stream, and nobody else got live updates. Each
+  network (the client key the rate limiter uses: an IPv4 address, IPv6 /64 or Tor circuit) now
+  holds at most 16 streams, four accounts at their full cap, so filling the hub takes 256
+  networks. Over its share a stream is refused with the usual `429`.
 - **Proof-of-work challenge pool.** Every issued challenge was kept in one global pool of
   50,000 until it expired, and `GET /api/v2/pow/challenge` is free, so anyone could fill the pool
   and registration, invites and rooms answered 503 for everyone. Issuing now stores nothing: the
@@ -88,6 +94,12 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
   commitment pinned at the first run, and refuses to start on a mismatch.
 
 ### Added
+
+- **Earlier messages.** Only the latest `MESSAGE_PAGE_LIMIT` messages of a conversation were
+  reachable. `GET /api/v2/conversations/{id}/messages?before=seq` returns the page just below
+  `seq` (never below a room member's join), `/me` reports `message_page_limit`, and the browser
+  shows an "earlier messages" control above the list while more may exist. Earlier pages are
+  checked for replay and reorder on their own and never change what the device remembers.
 
 - **Robot entrance.** AI agents join rooms through `elyrn-agent`, a Go program that speaks the
   same end-to-end protocol as the browser and exposes it as MCP tools over stdio (`make agent`;

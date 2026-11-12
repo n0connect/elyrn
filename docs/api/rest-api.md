@@ -5,7 +5,7 @@ Requests are subject to strict JSON validation:
 - **Maximum Request Body Size:** 1 MiB (`1048576` bytes).
 - **Maximum JSON Nesting Depth:** 2 levels.
 - **Unknown Fields:** Rejected immediately.
-- **Extraneous Query Parameters:** Any query parameters other than explicitly whitelisted ones (e.g., `?after=seq`) are rejected with `400 Bad Request`.
+- **Extraneous Query Parameters:** Any query parameters other than explicitly whitelisted ones (e.g., `?after=seq` or `?before=seq` on the messages route) are rejected with `400 Bad Request`.
 
 ---
 
@@ -35,7 +35,7 @@ Requests are subject to strict JSON validation:
 | `POST` | `/api/v2/rooms/join` | Session | Take a seat in a room whose code the caller holds |
 | `GET` | `/api/v2/conversations` | Session | List active conversations and rooms |
 | `DELETE` | `/api/v2/conversations/{id}` | Session | Burn a conversation (a room: owner burns, others leave) |
-| `GET` | `/api/v2/conversations/{id}/messages` | Session | Fetch encrypted messages (supports `?after=seq`) |
+| `GET` | `/api/v2/conversations/{id}/messages` | Session | Fetch encrypted messages (supports `?after=seq` or `?before=seq`) |
 | `POST` | `/api/v2/conversations/{id}/messages` | Session | Send E2E encrypted message ciphertext |
 | `POST` | `/api/v2/conversations/{id}/read` | Session | Update read sequence marker |
 | `GET` | `/api/v2/conversations/{id}/members` | Session | A room's member cards |
@@ -174,7 +174,8 @@ Retrieves caller's public key and server retention policy.
   "public_key": "X25519-public-key-base64url",
   "message_ttl_days": 7,
   "room_max_members": 16,
-  "room_max_ttl_hours": 168
+  "room_max_ttl_hours": 168,
+  "message_page_limit": 200
 }
 ```
 
@@ -299,11 +300,13 @@ Lists the caller's conversations, newest first (the server keeps no recency acro
 
 ---
 
-### `GET /api/v2/conversations/{id}/messages[?after=seq]`
-Fetches encrypted messages for a conversation.
-- If `?after=seq` is omitted, returns the latest page of messages up to `MESSAGE_PAGE_LIMIT`.
-- If `?after=seq` is provided, returns messages with sequence numbers greater than `seq`.
-- In a room, only messages sent after the caller joined are returned: nothing earlier was encrypted for them.
+### `GET /api/v2/conversations/{id}/messages[?after=seq | ?before=seq]`
+Fetches encrypted messages for a conversation, at most `MESSAGE_PAGE_LIMIT` (`message_page_limit` in `/me`) per page, always in ascending `seq`.
+- With no query, returns the latest page.
+- With `?after=seq` (`seq` >= 0), returns the oldest page of messages with sequence numbers greater than `seq`: catching up.
+- With `?before=seq` (`seq` >= 1), returns the newest page of messages with sequence numbers lower than `seq`: paging back. A page shorter than the limit is the beginning.
+- At most one of the two, each once, as decimal digits; anything else is `400`.
+- In a room, only messages sent after the caller joined are returned, on every page: nothing earlier was encrypted for them.
 
 - **Response (200 OK):**
 ```json
@@ -446,6 +449,7 @@ Opens an unbuffered, content-free SSE stream.
   - `event: conv` with `data: {}` (signals the conversation list, a room's members, or the caller's notes changed).
   - `: ping` (keepalive comment sent every 25 seconds).
 - **Authentication:** Validated via session cookie. If session is revoked, the stream closes with `401 Unauthorized`.
+- **Limits:** `429` when the account already holds 4 streams, the caller's network (IPv4 address, IPv6 /64 or Tor circuit) holds 16, or the server holds 4,096.
 
 ---
 

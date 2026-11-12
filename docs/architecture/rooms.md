@@ -159,7 +159,7 @@ A client accepts a message only if every check passes, in this order: the size i
 | Operation | Rule |
 |---|---|
 | Create | Costs a proof of work (as invites do). The client sends the derived id, `L`, the limit, the hour-aligned expiry (1 hour to `ROOM_MAX_TTL_HOURS` ahead), its card and its vault. |
-| Join | The room must exist, be unexpired, have a free seat, and `HMAC(L)` must match in constant time; otherwise `404`, without saying which. A full room answers `409`. Joining again with the same account refreshes the vault and is harmless. The member can read messages sent after it joined (`joined_seq`); leaving and joining again starts from the new join. |
+| Join | The room must exist, be unexpired, have a free seat, and `HMAC(L)` must match in constant time; otherwise `404`, without saying which. A full room answers `409`. Joining again with the same account refreshes the vault and is harmless. The member can read messages sent after it joined (`joined_seq`), and paging back (`?before=seq`) stops there too; leaving and joining again starts from the new join. |
 | Send | As in one-to-one conversations, plus the structure check and the roster digest check (`412`). |
 | Leave | Any member except the owner leaves: their membership goes, their messages stay readable to the others. |
 | Burn | The owner burns the room for everyone, as in one-to-one conversations. |
