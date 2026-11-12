@@ -1,5 +1,5 @@
 // ========================================
-// NOADDX ROOM CRYPTO (WebCrypto only — no third-party code)
+// ELYRN ROOM CRYPTO (WebCrypto only — no third-party code)
 // ========================================
 // Mirrors backend/internal/e2e/room.go byte for byte (docs/architecture/rooms.md).
 //
@@ -8,14 +8,18 @@
 // message = header || wraps || body; each member unwraps the message key with
 //           X25519(eph, R) || X25519(sender, R), which also authenticates the sender
 
-const NoaddxRoomCrypto = (() => {
+const ElyrnRoomCrypto = (() => {
     'use strict';
 
-    const C = NoaddxCrypto;
+    const C = ElyrnCrypto;
     const subtle = globalThis.crypto && globalThis.crypto.subtle;
     const encoder = new TextEncoder();
 
-    const CODE_PREFIX = 'noaddx#';
+    // Room codes are emitted with CODE_PREFIX; codes made before the rename carry the legacy one
+    // and are still accepted.
+    const CODE_PREFIX = 'elyrn#';
+    const LEGACY_CODE_PREFIX = 'noaddx#';
+    const CODE_PREFIXES = Object.freeze([CODE_PREFIX, LEGACY_CODE_PREFIX]);
     const SECRET_BYTES = 32;
     const CODE_BYTES = SECRET_BYTES + 1 + 4;
     const MIN_MEMBERS = 2;
@@ -40,6 +44,7 @@ const NoaddxRoomCrypto = (() => {
     // Bounds the rejection sampling of one shuffle index (RULES.md §8.1)
     const MAX_SHUFFLE_DRAWS = 64;
 
+    // "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
     const SALT = encoder.encode('noaddx.v1');
     const INFO_ID = encoder.encode('noaddx/room/id');
     const INFO_LOOKUP = encoder.encode('noaddx/room/lookup');
@@ -168,11 +173,11 @@ const NoaddxRoomCrypto = (() => {
     }
 
     function parseRoomCode(text) {
-        const trimmed = String(text || '').trim();
-        if (!trimmed.startsWith(CODE_PREFIX)) {
+        const body = C.codeBody(String(text || '').trim(), CODE_PREFIXES);
+        if (body === null) {
             throw new Error('not a room code');
         }
-        return parseCodeBytes(C.b64urlDecode(trimmed.slice(CODE_PREFIX.length), CODE_BYTES));
+        return parseCodeBytes(C.b64urlDecode(body, CODE_BYTES));
     }
 
     function expiryHourFor(ttlHours, nowMs) {
@@ -511,6 +516,7 @@ const NoaddxRoomCrypto = (() => {
 
     return Object.freeze({
         CODE_PREFIX,
+        CODE_PREFIXES,
         CODE_CHARS: CODE_PREFIX.length + Math.ceil(CODE_BYTES * 4 / 3),
         MIN_MEMBERS,
         MAX_MEMBERS,

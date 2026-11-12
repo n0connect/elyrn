@@ -77,7 +77,7 @@ function clearChildren(element) {
 
 // ---------- scramble ----------
 // Visual only: the noise is Math.random and never key material, and the real value is
-// written only after it has arrived. A fixed prefix (the invite's "noaddx:") stays readable.
+// written only after it has arrived. A fixed prefix (the invite's "elyrn:") stays readable.
 
 const SCRAMBLE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
 
@@ -211,7 +211,7 @@ function showInviteGenerating() {
     document.getElementById('inviteHint').style.display = 'none';
     document.getElementById('inviteStatus').style.display = 'block';
     showPairPanel('invitePanel');
-    return startScramble(codeElement, NoaddxCrypto.INVITE_BODY_CHARS, NoaddxCrypto.INVITE_PREFIX);
+    return startScramble(codeElement, ElyrnCrypto.INVITE_BODY_CHARS, ElyrnCrypto.INVITE_PREFIX);
 }
 
 // Masks the noise, then reveals the real code (the account number's sequence)
@@ -219,8 +219,8 @@ async function revealInvite(code, expiresAtSeconds) {
     const codeElement = document.getElementById('inviteCode');
     codeElement.classList.remove('generating');
     codeElement.classList.add('masking');
-    await animateToMask(codeElement, NoaddxCrypto.INVITE_PREFIX);
-    await revealText(codeElement, code, NoaddxCrypto.INVITE_PREFIX);
+    await animateToMask(codeElement, ElyrnCrypto.INVITE_PREFIX);
+    await revealText(codeElement, code, ElyrnCrypto.INVITE_PREFIX);
     codeElement.classList.remove('masking');
     codeElement.classList.add('revealed');
     document.getElementById('inviteExpiry').textContent = formatExpiry(expiresAtSeconds);
@@ -493,7 +493,7 @@ function setBurnConfirm(room) {
 function setRoomLimits(maxMembers, ttlChoices) {
     const members = document.getElementById('roomMembersSelect');
     clearChildren(members);
-    for (let n = NoaddxRoomCrypto.MIN_MEMBERS; n <= maxMembers; n++) {
+    for (let n = ElyrnRoomCrypto.MIN_MEMBERS; n <= maxMembers; n++) {
         const option = document.createElement('option');
         option.value = String(n);
         option.textContent = `${n} people`;
@@ -524,15 +524,15 @@ function showRoomGenerating() {
     document.getElementById('roomHint').style.display = 'none';
     document.getElementById('roomStatus').style.display = 'block';
     showPairPanel('roomPanel');
-    return startScramble(codeElement, NoaddxRoomCrypto.CODE_CHARS - NoaddxRoomCrypto.CODE_PREFIX.length, NoaddxRoomCrypto.CODE_PREFIX);
+    return startScramble(codeElement, ElyrnRoomCrypto.CODE_CHARS - ElyrnRoomCrypto.CODE_PREFIX.length, ElyrnRoomCrypto.CODE_PREFIX);
 }
 
 async function revealRoomCode(code, expiresAtSeconds) {
     const codeElement = document.getElementById('roomCode');
     codeElement.classList.remove('generating');
     codeElement.classList.add('masking');
-    await animateToMask(codeElement, NoaddxRoomCrypto.CODE_PREFIX);
-    await revealText(codeElement, code, NoaddxRoomCrypto.CODE_PREFIX);
+    await animateToMask(codeElement, ElyrnRoomCrypto.CODE_PREFIX);
+    await revealText(codeElement, code, ElyrnRoomCrypto.CODE_PREFIX);
     codeElement.classList.remove('masking');
     codeElement.classList.add('revealed');
     document.getElementById('roomExpiry').textContent = formatTimeLeft(expiresAtSeconds * 1000);

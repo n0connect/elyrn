@@ -57,7 +57,7 @@ const Chat = (() => {
 
     function isPublicKey(value) {
         try {
-            NoaddxCrypto.b64urlDecode(value, 32);
+            ElyrnCrypto.b64urlDecode(value, 32);
             return true;
         } catch (e) {
             return false;
@@ -66,7 +66,7 @@ const Chat = (() => {
 
     function conversationKey(conv) {
         if (!conv.key) {
-            conv.key = NoaddxCrypto.conversationKey(me.privateKey, conv.peerPublicKey, conv.id);
+            conv.key = ElyrnCrypto.conversationKey(me.privateKey, conv.peerPublicKey, conv.id);
         }
         return conv.key;
     }
@@ -76,7 +76,7 @@ const Chat = (() => {
         conversations.forEach(conv => {
             if (conv.id !== activeId && conv.lastSeq > conv.readSeq) unread++;
         });
-        document.title = unread > 0 ? `(${unread}) noaddx.` : 'noaddx.';
+        document.title = unread > 0 ? `(${unread}) elyrn.` : 'elyrn.';
     }
 
     // The server keeps no cross-conversation recency, so ordering is decided here:
@@ -106,7 +106,7 @@ const Chat = (() => {
             privateKey: identity.privateKey,
             publicKey: identity.publicKey,
             roomsRoot: identity.roomsRoot,
-            aura: await NoaddxCrypto.aura(identity.publicKey),
+            aura: await ElyrnCrypto.aura(identity.publicKey),
             ttlDays: ttlDays,
             limits: limits
         };
@@ -148,7 +148,7 @@ const Chat = (() => {
         document.getElementById('inviteInput').value = '';
         document.getElementById('deleteAccountInput').value = '';
         document.getElementById('messageInput').value = '';
-        document.title = 'noaddx.';
+        document.title = 'elyrn.';
     }
 
     // ---------- conversations ----------
@@ -250,7 +250,7 @@ const Chat = (() => {
         };
         if (!isRoom) {
             state.peerPublicKey = item.peer_public_key;
-            state.aura = await NoaddxCrypto.aura(item.peer_public_key);
+            state.aura = await ElyrnCrypto.aura(item.peer_public_key);
             state.verified = await Keystore.isVerified(item.id, item.peer_public_key);
             return state;
         }
@@ -334,7 +334,7 @@ const Chat = (() => {
         const key = conv.room ? null : await conversationKey(conv);
         const fresh = [];
         for (const raw of result.data.messages) {
-            if (!raw || !NoaddxCrypto.isUuidV4(raw.id) || !isSeq(raw.seq) || raw.seq === 0 ||
+            if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || !isSeq(raw.seq) || raw.seq === 0 ||
                 typeof raw.mine !== 'boolean' || typeof raw.ciphertext !== 'string' ||
                 raw.ciphertext.length > MAX_CIPHERTEXT_CHARS || conv.seqs.has(raw.seq) || raw.seq <= conv.maxSeq ||
                 conv.ids.has(raw.id)) {
@@ -352,7 +352,7 @@ const Chat = (() => {
                     continue;
                 }
                 const sender = raw.mine ? me.publicKey : conv.peerPublicKey;
-                const plain = await NoaddxCrypto.decryptMessage(key, conv.id, raw.id, sender, raw.ciphertext);
+                const plain = await ElyrnCrypto.decryptMessage(key, conv.id, raw.id, sender, raw.ciphertext);
                 message = { seq: raw.seq, mine: raw.mine, text: plain.text, sentAt: plain.sentAt };
                 if (raw.mine) {
                     conv.myMaxN = Math.max(conv.myMaxN, plain.counter);
@@ -395,7 +395,7 @@ const Chat = (() => {
             return { seq: raw.seq, mine: true, text: plain.text, sentAt: plain.sentAt };
         }
         const entry = Rooms.senderOf(conv.room, plain.sender);
-        const aura = entry ? entry.aura : await NoaddxCrypto.aura(plain.sender);
+        const aura = entry ? entry.aura : await ElyrnCrypto.aura(plain.sender);
         const last = conv.peerLastN.get(plain.sender) || 0;
         if (last > 0 && plain.counter > last + 1) {
             fresh.push({ gap: plain.counter - last - 1, from: aura.name });
@@ -438,7 +438,7 @@ const Chat = (() => {
             const text = validation.sanitized;
             let attempt = unsent && unsent.convId === conv.id && unsent.text === text ? unsent : null;
             if (!attempt) {
-                const id = NoaddxCrypto.newMessageId();
+                const id = ElyrnCrypto.newMessageId();
                 attempt = { convId: conv.id, text: text, id: id, counter: conv.myMaxN + 1, ciphertext: null };
                 attempt.ciphertext = await sealAttempt(conv, attempt);
             }
@@ -481,7 +481,7 @@ const Chat = (() => {
             return Rooms.seal(conv, attempt.id, attempt.text, attempt.counter);
         }
         return conversationKey(conv).then(key =>
-            NoaddxCrypto.encryptMessage(key, conv.id, attempt.id, me.publicKey, attempt.text, Date.now(), attempt.counter));
+            ElyrnCrypto.encryptMessage(key, conv.id, attempt.id, me.publicKey, attempt.text, Date.now(), attempt.counter));
     }
 
     // ---------- pairing ----------
@@ -511,7 +511,7 @@ const Chat = (() => {
         }
         try {
             return {
-                code: await NoaddxCrypto.buildInviteCode(result.data.token, owner.publicKey),
+                code: await ElyrnCrypto.buildInviteCode(result.data.token, owner.publicKey),
                 expiresAt: result.data.expires_at
             };
         } catch (e) {
@@ -575,7 +575,7 @@ const Chat = (() => {
     // Redeems an invite and checks the peer key against its fingerprint. Returns the new
     // conversation id, or null once the reason has been shown.
     async function redeemInvite(invite) {
-        if (await NoaddxCrypto.fingerprintMatches(invite, me.publicKey)) {
+        if (await ElyrnCrypto.fingerprintMatches(invite, me.publicKey)) {
             showWarning('that is your own invite — send it to someone else');
             return null;
         }
@@ -594,7 +594,7 @@ const Chat = (() => {
             return null;
         }
         // The server chose which key we got; the invite code says which key we should get
-        if (!(await NoaddxCrypto.fingerprintMatches(invite, conv.peer_public_key))) {
+        if (!(await ElyrnCrypto.fingerprintMatches(invite, conv.peer_public_key))) {
             await api('DELETE', `/conversations/${conv.id}`);
             showError('verification FAILED: the server substituted the peer key. conversation burned.');
             return null;
@@ -692,7 +692,7 @@ const Chat = (() => {
             else if (created.status !== 401) showError('could not create room');
             return;
         }
-        await revealRoomCode(created.code, NoaddxRoomCrypto.parseRoomCode(created.code).expiresHour * 3600);
+        await revealRoomCode(created.code, ElyrnRoomCrypto.parseRoomCode(created.code).expiresHour * 3600);
         if (me !== owner) {
             document.getElementById('roomCode').textContent = '';
             return;
@@ -812,7 +812,7 @@ const Chat = (() => {
             panel.style.display = 'none';
             return;
         }
-        renderSafetyNumber(await NoaddxCrypto.safetyNumber(me.publicKey, conv.peerPublicKey));
+        renderSafetyNumber(await ElyrnCrypto.safetyNumber(me.publicKey, conv.peerPublicKey));
         panel.style.display = 'block';
     }
 

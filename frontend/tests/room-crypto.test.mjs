@@ -7,8 +7,8 @@ import vm from 'node:vm';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa });
-const C = vm.runInContext(read('../js/crypto.js') + '\n;NoaddxCrypto', context);
-const R = vm.runInContext(read('../js/room-crypto.js') + '\n;NoaddxRoomCrypto', context);
+const C = vm.runInContext(read('../js/crypto.js') + '\n;ElyrnCrypto', context);
+const R = vm.runInContext(read('../js/room-crypto.js') + '\n;ElyrnRoomCrypto', context);
 
 const ACCOUNT_A = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 const ACCOUNT_B = 'HxwdHBsaGRgXFhUUExIREA8ODQwLCgkIBwYFBAMCAQA';
@@ -261,7 +261,7 @@ test('expiry hour gives at least the chosen lifetime and at most one hour more',
 test('room derivations match Go, and Go-sealed cards, vault, message and note open (interop)', async () => {
     const code = R.parseRoomCode(ROOM_VECTOR.code);
     assert.deepEqual([...code.secret], Array.from({ length: 32 }, (_, i) => 0x40 + i));
-    assert.equal(R.buildRoomCode(code), ROOM_VECTOR.code);
+    assert.equal(R.buildRoomCode(code), ROOM_VECTOR.code.replace(/^noaddx#/, 'elyrn#'));
     const room = await R.deriveRoom(code.secret);
     assert.equal(room.id, ROOM_VECTOR.id);
     assert.equal(room.lookup, ROOM_VECTOR.lookup);

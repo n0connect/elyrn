@@ -45,10 +45,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupEventListeners();
 
     // WebCrypto X25519 + secure context are hard requirements (no JS crypto fallbacks)
-    if (!window.isSecureContext || !(await NoaddxCrypto.isSupported())) {
+    if (!window.isSecureContext || !(await ElyrnCrypto.isSupported())) {
         showMainMenu();
         document.getElementById('unsupportedNotice').textContent =
-            'this browser cannot run noaddx. securely (needs https and WebCrypto X25519). update your browser.';
+            'this browser cannot run elyrn. securely (needs https and WebCrypto X25519). update your browser.';
         document.getElementById('showLoginBtn').disabled = true;
         document.getElementById('showRegisterFormBtn').disabled = true;
         return;
@@ -131,7 +131,7 @@ function setupEventListeners() {
     document.getElementById('createRoomBtn').addEventListener('click', () => Chat.createRoom());
     document.getElementById('copyRoomBtn').addEventListener('click', async () => {
         const code = document.getElementById('roomCode').textContent;
-        if (!code || !code.startsWith(NoaddxRoomCrypto.CODE_PREFIX)) return;
+        if (!code || !code.startsWith(ElyrnRoomCrypto.CODE_PREFIX)) return;
         try {
             await copyToClipboard(code);
             showSuccess('room code copied');

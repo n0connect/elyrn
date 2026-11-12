@@ -5,6 +5,7 @@
 // Trusted Types: the CSP allows exactly one policy, and it whitelists exactly one URL
 const POW_WORKER_PATH = 'js/pow-worker.js';
 const powWorkerPolicy = window.trustedTypes
+    // 'noaddx-worker' is the policy name the CSP allows; it is kept across the rename to elyrn.
     ? window.trustedTypes.createPolicy('noaddx-worker', {
         createScriptURL: (url) => {
             if (url !== POW_WORKER_PATH) {
@@ -75,15 +76,15 @@ function solvePowChallenge(challenge) {
 // A mismatch means the server (or something in between) swapped the identity key.
 // Everything the browser keeps for a session, derived from the account number once
 async function deriveSession(accountNumber) {
-    const identity = await NoaddxCrypto.deriveIdentity(accountNumber);
-    identity.roomsRoot = await NoaddxRoomCrypto.deriveRoomsRoot(accountNumber);
+    const identity = await ElyrnCrypto.deriveIdentity(accountNumber);
+    identity.roomsRoot = await ElyrnRoomCrypto.deriveRoomsRoot(accountNumber);
     return identity;
 }
 
 function roomLimits(data) {
     const members = data && data.room_max_members;
     const hours = data && data.room_max_ttl_hours;
-    if (!Number.isSafeInteger(members) || members < NoaddxRoomCrypto.MIN_MEMBERS || members > NoaddxRoomCrypto.MAX_MEMBERS ||
+    if (!Number.isSafeInteger(members) || members < ElyrnRoomCrypto.MIN_MEMBERS || members > ElyrnRoomCrypto.MAX_MEMBERS ||
         !Number.isSafeInteger(hours) || hours < 1 || hours > 720) {
         return null;
     }
@@ -147,7 +148,7 @@ async function login() {
         .normalize('NFKC')   // Unicode look-alike cleanup
         .trim();             // Remove leading/trailing hidden whitespace
 
-    if (normalizedAccountNumber.startsWith(NoaddxCrypto.INVITE_PREFIX)) {
+    if (ElyrnCrypto.codeBody(normalizedAccountNumber, ElyrnCrypto.INVITE_PREFIXES) !== null) {
         errorElement.textContent = 'that is an invite — log in first, then use join';
         return;
     }
@@ -163,7 +164,7 @@ async function login() {
     loginBtn.disabled = true;
     try {
         // ZERO-KNOWLEDGE: only HKDF(AccountNumber, "noaddx/auth") goes over the wire
-        const authKey = await NoaddxCrypto.deriveAuthKey(normalizedAccountNumber);
+        const authKey = await ElyrnCrypto.deriveAuthKey(normalizedAccountNumber);
         const response = await fetchWithErrorHandling(`${API_BASE_URL}/login`, {
             method: 'POST',
             headers: {
@@ -483,7 +484,7 @@ async function finishRegistration() {
     document.getElementById('generatedAccountNumber').textContent = '';
 
     if (await enterApp(identity, true)) {
-        showSuccess('welcome to noaddx.');
+        showSuccess('welcome to elyrn.');
     }
 }
 
@@ -491,7 +492,7 @@ async function finishRegistration() {
 // the account and only its answer was lost (then the number logs in), or the registration
 // expired first: that number will never work, so it is replaced rather than kept.
 async function recoverRegistration() {
-    const authKey = await NoaddxCrypto.deriveAuthKey(pendingRegistrationAccountNumber);
+    const authKey = await ElyrnCrypto.deriveAuthKey(pendingRegistrationAccountNumber);
     const login = await apiCall('POST', '/login', { auth_key: authKey });
     if (login.ok && login.data && login.data.success) {
         await finishRegistration();
@@ -536,12 +537,12 @@ async function deleteIdentity() {
     const button = document.getElementById('deleteConfirmBtn');
     button.disabled = true;
     try {
-        const identity = await NoaddxCrypto.deriveIdentity(accountNumber);
+        const identity = await ElyrnCrypto.deriveIdentity(accountNumber);
         if (identity.publicKey !== Chat.publicKey()) {
             showError('that is not the account number of this identity');
             return;
         }
-        const result = await apiCall('DELETE', '/me', { auth_key: await NoaddxCrypto.deriveAuthKey(accountNumber) });
+        const result = await apiCall('DELETE', '/me', { auth_key: await ElyrnCrypto.deriveAuthKey(accountNumber) });
         if (result.status === 429) {
             showWarning('too many attempts — wait a moment');
             return;

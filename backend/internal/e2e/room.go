@@ -2,10 +2,11 @@ package e2e
 
 // Room protocol (docs/architecture/rooms.md), the twin of frontend/js/room-crypto.js:
 //
-//	code    = "noaddx#" || base64url(S(32) || max members(1) || expiry hour(4, big-endian))
+//	code    = "elyrn#" || base64url(S(32) || max members(1) || expiry hour(4, big-endian))
 //	room id = UUIDv4 bits over HKDF(S, "noaddx/room/id", 16); lookup = HKDF(S, "noaddx/room/lookup")
 //	card    = nonce || AES-GCM(HKDF(S, "noaddx/room/card"), member key, AAD "NADC" 1 room id)
 //	member  = X25519 key from HKDF(rooms root, salt = room id, "noaddx/rooms/member/x25519")
+//	          (codes made before the rename carry "noaddx#" and are still accepted)
 //	message = header(162) || wraps(48 each) || body; each recipient unwraps the message key with
 //	          X25519(eph, R) || X25519(sender, R), which also authenticates the sender
 
@@ -24,10 +25,13 @@ import (
 )
 
 const (
-	RoomCodePrefix = "noaddx#"
-	RoomSecretSize = 32
-	MinRoomMembers = 2
-	MaxRoomMembers = 32
+	// RoomCodePrefix is what String emits.
+	RoomCodePrefix = "elyrn#"
+	// LegacyRoomCodePrefix marks codes made before the rename; ParseRoomCode still accepts it.
+	LegacyRoomCodePrefix = "noaddx#"
+	RoomSecretSize       = 32
+	MinRoomMembers       = 2
+	MaxRoomMembers       = 32
 
 	roomCodeBytes  = RoomSecretSize + 1 + 4
 	roomCardSize   = cryptoengine.GCMNonceSize + keySize + cryptoengine.GCMTagSize
@@ -43,6 +47,7 @@ const (
 	offsetCommit = offsetEph + keySize
 	offsetDigest = offsetCommit + keySize
 
+	// "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
 	derivationSalt   = "noaddx.v1"
 	infoRoomID       = "noaddx/room/id"
 	infoRoomLookup   = "noaddx/room/lookup"
@@ -159,16 +164,24 @@ func parseRoomCodeBytes(raw []byte) (*RoomCode, error) {
 	return code, nil
 }
 
-// ParseRoomCode accepts exactly the canonical form String produces.
+// roomCodePrefixes are the prefixes ParseRoomCode accepts: the current one first, then the legacy one.
+var roomCodePrefixes = [...]string{RoomCodePrefix, LegacyRoomCodePrefix}
+
+// ParseRoomCode accepts exactly the canonical form String produces, under the current or the
+// legacy prefix.
 func ParseRoomCode(code string) (*RoomCode, error) {
-	if !strings.HasPrefix(code, RoomCodePrefix) {
-		return nil, ErrInvalidInput
+	for _, prefix := range roomCodePrefixes {
+		body, ok := strings.CutPrefix(code, prefix)
+		if !ok {
+			continue
+		}
+		raw, err := decodeExact(body, roomCodeBytes)
+		if err != nil {
+			return nil, err
+		}
+		return parseRoomCodeBytes(raw)
 	}
-	raw, err := decodeExact(code[len(RoomCodePrefix):], roomCodeBytes)
-	if err != nil {
-		return nil, err
-	}
-	return parseRoomCodeBytes(raw)
+	return nil, ErrInvalidInput
 }
 
 // ---------- the room ----------

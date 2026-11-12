@@ -447,7 +447,7 @@ const (
 
 func TestRoomInterop_OpensWhatTheBrowserSealed(t *testing.T) {
 	code, err := ParseRoomCode(roomVectorCode)
-	if err != nil || code.String() != roomVectorCode || code.MaxMembers != 5 || code.ExpiresHour != 480000 {
+	if err != nil || code.String() != RoomCodePrefix+strings.TrimPrefix(roomVectorCode, LegacyRoomCodePrefix) || code.MaxMembers != 5 || code.ExpiresHour != 480000 {
 		t.Fatalf("ParseRoomCode: %v %+v", err, code)
 	}
 	for i, b := range code.Secret {

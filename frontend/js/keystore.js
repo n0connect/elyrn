@@ -12,6 +12,7 @@
 const Keystore = (() => {
     'use strict';
 
+    // Stored name, kept across the rename to elyrn: changing it would orphan every saved key.
     const DB_NAME = 'noaddx';
     const DB_VERSION = 2;
     const STORE = 'keys';
@@ -73,7 +74,7 @@ const Keystore = (() => {
             const record = await transact('readonly', store => store.get(RECORD));
             // A record from before rooms has no rooms root: logging in again derives it
             if (!record || !(record.privateKey instanceof CryptoKey) || record.privateKey.extractable ||
-                typeof record.publicKey !== 'string' || !NoaddxRoomCrypto.isRoomsRoot(record.roomsRoot)) {
+                typeof record.publicKey !== 'string' || !ElyrnRoomCrypto.isRoomsRoot(record.roomsRoot)) {
                 return null;
             }
             return { privateKey: record.privateKey, publicKey: record.publicKey, roomsRoot: record.roomsRoot };

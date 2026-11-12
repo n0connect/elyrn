@@ -34,7 +34,7 @@ function validateMessageText(input) {
         return { valid: false, sanitized: '', error: 'message contains control characters' };
     }
 
-    if (!NoaddxCrypto.payloadFits(normalized)) {
+    if (!ElyrnCrypto.payloadFits(normalized)) {
         return { valid: false, sanitized: '', error: 'message too long' };
     }
 
@@ -66,7 +66,7 @@ function looksLikeAccountNumber(input) {
 }
 
 /**
- * Validates an invite code (noaddx:<43 base64url chars>)
+ * Validates an invite code (elyrn:<43 base64url chars>; the legacy noaddx: prefix is accepted)
  * @param {string} input
  * @returns {object} - {valid: boolean, sanitized: object|null, error: string}
  */
@@ -82,14 +82,15 @@ function validateInviteCode(input) {
     }
 
     try {
-        return { valid: true, sanitized: NoaddxCrypto.parseInviteCode(value), error: '' };
+        return { valid: true, sanitized: ElyrnCrypto.parseInviteCode(value), error: '' };
     } catch (e) {
         return { valid: false, sanitized: null, error: 'invalid invite' };
     }
 }
 
 /**
- * Validates what the join field takes: an invite code (noaddx:…) or a room code (noaddx#…)
+ * Validates what the join field takes: an invite code (elyrn:…) or a room code (elyrn#…),
+ * either also under its legacy noaddx prefix
  * @param {string} input
  * @returns {object} - {valid: boolean, kind: 'invite'|'room', sanitized: object|null, error: string}
  */
@@ -98,11 +99,11 @@ function validateJoinCode(input) {
     if (value.length === 0) {
         return { valid: false, kind: 'invite', sanitized: null, error: 'paste an invite or a room code first' };
     }
-    if (!value.startsWith(NoaddxRoomCrypto.CODE_PREFIX)) {
+    if (ElyrnCrypto.codeBody(value, ElyrnRoomCrypto.CODE_PREFIXES) === null) {
         return Object.assign(validateInviteCode(value), { kind: 'invite' });
     }
     try {
-        return { valid: true, kind: 'room', sanitized: NoaddxRoomCrypto.parseRoomCode(value), error: '' };
+        return { valid: true, kind: 'room', sanitized: ElyrnRoomCrypto.parseRoomCode(value), error: '' };
     } catch (e) {
         return { valid: false, kind: 'room', sanitized: null, error: 'invalid room code' };
     }
@@ -114,5 +115,5 @@ function validateJoinCode(input) {
  * @returns {boolean}
  */
 function validateConversationId(id) {
-    return NoaddxCrypto.isUuidV4(id);
+    return ElyrnCrypto.isUuidV4(id);
 }

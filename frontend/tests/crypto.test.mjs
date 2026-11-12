@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../js/crypto.js', import.meta.url), 'utf8');
 const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa });
-const C = vm.runInContext(source + '\n;NoaddxCrypto', context);
+const C = vm.runInContext(source + '\n;ElyrnCrypto', context);
 
 // Same vector as backend/tests/identity/identity_test.go
 const ACCOUNT = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
@@ -93,7 +93,7 @@ test('invite code carries a fingerprint the redeemer can verify', async () => {
     const { a, b } = await peers();
     const token = 'AAAAAAAAAAAAAAAAAAAAAA';
     const code = await C.buildInviteCode(token, a.publicKey);
-    assert.ok(code.startsWith('noaddx:'));
+    assert.ok(code.startsWith('elyrn:'));
     const parsed = C.parseInviteCode(code);
     assert.equal(parsed.token, token);
     assert.equal(await C.fingerprintMatches(parsed, a.publicKey), true);

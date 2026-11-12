@@ -8,7 +8,7 @@
 const Rooms = (() => {
     'use strict';
 
-    const R = NoaddxRoomCrypto;
+    const R = ElyrnRoomCrypto;
     const HOUR_MS = 3600000;
     const TTL_CHOICES = [1, 24, 168];
     const MAX_CREATE_ATTEMPTS = 3;  // a fresh secret per attempt; a collision is astronomically rare
@@ -89,7 +89,7 @@ const Rooms = (() => {
             cards.push(entry.card);
             let publicKey;
             try {
-                publicKey = NoaddxCrypto.b64urlEncode(await R.openCard(room.keys, entry.card));
+                publicKey = ElyrnCrypto.b64urlEncode(await R.openCard(room.keys, entry.card));
             } catch (e) {
                 skipped++;
                 continue;
@@ -105,7 +105,7 @@ const Rooms = (() => {
             }
             seen.add(publicKey);
             if (mine) storedCard = entry.card;
-            roster.push({ card: entry.card, publicKey: publicKey, aura: await NoaddxCrypto.aura(publicKey), mine: mine, owner: entry.owner });
+            roster.push({ card: entry.card, publicKey: publicKey, aura: await ElyrnCrypto.aura(publicKey), mine: mine, owner: entry.owner });
         }
         // The vault says how many seats exist; a longer list is the server breaking the code's limit
         if (!seen.has(room.member.publicKey) || cards.length > room.maxMembers) {
@@ -197,7 +197,7 @@ const Rooms = (() => {
     // ---------- friend requests ----------
 
     async function befriend(api, conv, entry, inviteCode) {
-        const id = NoaddxCrypto.newMessageId();
+        const id = ElyrnCrypto.newMessageId();
         const blob = await R.sealNote(conv.room.keys, conv.room.member, id, entry.card, inviteCode, Date.now());
         return api('POST', `/conversations/${conv.id}/notes`, { id: id, to: entry.card, blob: blob });
     }
@@ -211,11 +211,11 @@ const Rooms = (() => {
         }
         const opened = [];
         for (const raw of result.data.notes.slice(0, R.MAX_MEMBERS)) {
-            if (!raw || !NoaddxCrypto.isUuidV4(raw.id) || typeof raw.blob !== 'string') continue;
+            if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || typeof raw.blob !== 'string') continue;
             try {
                 const note = await R.openNote(conv.room.keys, conv.room.member, raw.id, raw.blob);
                 if (note.text.length > MAX_NOTE_CHARS) continue;
-                opened.push({ id: raw.id, from: senderOf(conv.room, note.sender) || null, aura: await NoaddxCrypto.aura(note.sender), invite: note.text });
+                opened.push({ id: raw.id, from: senderOf(conv.room, note.sender) || null, aura: await ElyrnCrypto.aura(note.sender), invite: note.text });
             } catch (e) {
                 // Not for us, or tampered with
             }

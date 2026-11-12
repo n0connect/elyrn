@@ -33,7 +33,7 @@ test('received text: newlines, tabs, emoji and right-to-left scripts are untouch
 
 test('the join field tells invite codes and room codes apart, and refuses everything else', () => {
     const validate = vm.runInContext('validateJoinCode', context);
-    const R = vm.runInContext('NoaddxRoomCrypto', context);
+    const R = vm.runInContext('ElyrnRoomCrypto', context);
     const room = R.buildRoomCode(R.newRoomCode(4, 500000));
     const parsed = validate('  ' + room + '\n');
     assert.equal(parsed.valid, true);

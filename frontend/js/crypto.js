@@ -1,5 +1,5 @@
 // ========================================
-// NOADDX CRYPTO (WebCrypto only — no third-party code)
+// ELYRN CRYPTO (WebCrypto only — no third-party code)
 // ========================================
 // Mirrors backend/internal/identity byte-for-byte. Algorithms are restricted to
 // RULES.md §1.4: X25519, HKDF-SHA-256, AES-256-GCM, SHA-256.
@@ -8,9 +8,10 @@
 //               └─HKDF "noaddx/identity/x25519"──▶ X25519 identity (never leaves the browser)
 // identity × peer ──X25519──HKDF(conv id)────────▶ per-conversation AES-256-GCM key
 
-const NoaddxCrypto = (() => {
+const ElyrnCrypto = (() => {
     'use strict';
 
+    // "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
     const SALT = 'noaddx.v1';
     const INFO_AUTH = 'noaddx/auth';
     const INFO_IDENTITY = 'noaddx/identity/x25519';
@@ -22,7 +23,11 @@ const NoaddxCrypto = (() => {
     const TAG_BYTES = 16;
     const INVITE_TOKEN_BYTES = 16;
     const INVITE_FP_BYTES = 16;
-    const INVITE_PREFIX = 'noaddx:';
+    // Invites are emitted with INVITE_PREFIX; codes made before the rename carry the legacy one
+    // and are still accepted.
+    const INVITE_PREFIX = 'elyrn:';
+    const LEGACY_INVITE_PREFIX = 'noaddx:';
+    const INVITE_PREFIXES = Object.freeze([INVITE_PREFIX, LEGACY_INVITE_PREFIX]);
     // Plaintext is framed as len(2) || json || zero padding to a power-of-two size from
     // PAD_BLOCK to MAX_FRAME_BYTES, so ciphertext length reveals one of five size classes.
     // json = {"t": text, "ts": sender clock (ms), "n": sender's per-conversation counter};
@@ -291,19 +296,25 @@ const NoaddxCrypto = (() => {
         return digest.subarray(0, INVITE_FP_BYTES);
     }
 
-    // Invite code = "noaddx:" + base64url(token(16) || SHA-256("noaddx/invite-fp" || token || creator key)[0:16]).
+    // Invite code = "elyrn:" + base64url(token(16) || SHA-256("noaddx/invite-fp" || token || creator key)[0:16]).
     // The fingerprint never goes to the server; it lets the redeemer detect key substitution.
     async function buildInviteCode(token, creatorPublicKey) {
         const fp = await inviteFingerprint(token, creatorPublicKey);
         return INVITE_PREFIX + b64urlEncode(concat(b64urlDecode(token, INVITE_TOKEN_BYTES), fp));
     }
 
+    // codeBody returns what follows the first of prefixes that text starts with, or null.
+    function codeBody(text, prefixes) {
+        const prefix = prefixes.find((p) => text.startsWith(p));
+        return prefix === undefined ? null : text.slice(prefix.length);
+    }
+
     function parseInviteCode(code) {
-        const trimmed = String(code || '').trim();
-        if (!trimmed.startsWith(INVITE_PREFIX)) {
+        const body = codeBody(String(code || '').trim(), INVITE_PREFIXES);
+        if (body === null) {
             throw new Error('not an invite');
         }
-        const raw = b64urlDecode(trimmed.slice(INVITE_PREFIX.length), INVITE_TOKEN_BYTES + INVITE_FP_BYTES);
+        const raw = b64urlDecode(body, INVITE_TOKEN_BYTES + INVITE_FP_BYTES);
         return {
             token: b64urlEncode(raw.subarray(0, INVITE_TOKEN_BYTES)),
             fingerprint: raw.slice(INVITE_TOKEN_BYTES)
@@ -405,7 +416,9 @@ const NoaddxCrypto = (() => {
 
     return Object.freeze({
         INVITE_PREFIX,
+        INVITE_PREFIXES,
         INVITE_BODY_CHARS: Math.ceil((INVITE_TOKEN_BYTES + INVITE_FP_BYTES) * 4 / 3),
+        codeBody,
         b64urlDecode,
         b64urlEncode,
         uuidBytes,
