@@ -74,12 +74,16 @@ At startup the backend checks these keys against the database before it serves a
 |---|---|---|---|
 | `ALLOWED_ORIGINS` | list | `http://localhost,http://127.0.0.1` | Exact origins (scheme, host, port) for CORS and the same-origin check on writes. No wildcard or prefix matching. |
 | `TRUSTED_PROXIES` | list | nginx (`PROXY_IP`) | IPs/CIDRs allowed to supply the client address. Empty in Docker means "nginx only". |
-| `COMPOSE_SUBNET` | CIDR | `172.29.73.0/24` | Docker network range; change it (with `PROXY_IP`, `BACKEND_IP` and `TOR_IP`) if it collides with another network. |
-| `PROXY_IP` | IP | `172.29.73.10` | nginx's fixed address on that network. |
-| `BACKEND_IP` | IP | `172.29.73.12` | The backend's fixed address. nginx resolves the backend once, at start; a fixed address keeps it reachable after the backend container is recreated. |
-| `TOR_IP` | IP | `172.29.73.11` | The tor container's fixed address (`make onion`): the only peer nginx's onion listener accepts. Keep it inside `COMPOSE_SUBNET`. |
-| `HTTP_PORT` | int | `80` | Loopback port nginx is published on. |
-| `DB_HOST_PORT` | int | `5432` | Loopback port PostgreSQL is published on. |
+| `COMPOSE_SUBNET` | CIDR | `172.29.73.0/24` | Range of the internal `app` network (nginx and the backend); change it with `PROXY_IP` and `BACKEND_IP` if it collides with another network. See [Hardening](hardening.md#networks). |
+| `EDGE_SUBNET` | CIDR | `172.29.72.0/24` | Range of the `edge` network (nginx and tor, the published port); change it with `TOR_IP`. |
+| `DATA_SUBNET` | CIDR | `172.29.74.0/24` | Range of the internal `data` network (the backend and PostgreSQL). |
+| `PROXY_IP` | IP | `172.29.73.10` | nginx's fixed address on `app`: the address the backend trusts. |
+| `BACKEND_IP` | IP | `172.29.73.12` | The backend's fixed address on `app`. nginx resolves the backend once, at start; a fixed address keeps it reachable after the backend container is recreated. |
+| `TOR_IP` | IP | `172.29.72.11` | The tor container's fixed address on `edge` (`make onion`): the only peer nginx's onion listener accepts. Keep it inside `EDGE_SUBNET` (it was `172.29.73.11` before the split networks). |
+| `HTTP_PORT` | int | `80` | Loopback port nginx is published on (nginx listens on 8080 inside its container). |
+| `DB_HOST_PORT` | int | `5432` | Loopback port PostgreSQL is published on, in development only (`docker-compose.dev.yaml`). The backend's 8080 likewise. |
+| `BACKEND_MEM_LIMIT` | size | `512m` | The backend container's memory (no swap). Keep it at least `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` + 128 MiB; `make check-hardening` checks it. |
+| `BACKEND_GOMEMLIMIT` | size | `448MiB` | Go runtime soft limit; keep it about 64 MiB under `BACKEND_MEM_LIMIT`. |
 | `SEC_HEADER_COOP` / `SEC_HEADER_CORP` / `SEC_HEADER_COEP` | string | `same-origin` / `same-origin` / `require-corp` | API isolation headers; `off` disables one. |
 
 ---
@@ -100,7 +104,7 @@ Bounds: memory 8192-1048576 KiB (production floor 19456 KiB, the OWASP minimum),
 | `ARGON2_HASH_LENGTH` | int | `32` | 32 bytes | 32 bytes |
 | `ARGON2_MAX_CONCURRENT` | int | `4` | 4 (256 MiB peak) | 2 (64 MiB peak) |
 
-Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT` (1-64) bounds how many run at once, so peak memory is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. A registration phase 2 that cannot get a slot within 3 seconds is answered with `503 Service Unavailable` (its pending registration stays redeemable) instead of growing memory without limit; logins are unaffected.
+Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT` (1-64) bounds how many run at once, so peak memory is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. The backend container's memory limit (`BACKEND_MEM_LIMIT`, 512 MiB) must hold that peak plus at least 128 MiB. A registration phase 2 that cannot get a slot within 3 seconds is answered with `503 Service Unavailable` (its pending registration stays redeemable) instead of growing memory without limit; logins are unaffected.
 
 ---
 
@@ -112,6 +116,7 @@ Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT`
 |---|---|---|
 | Session cookie | `noaddx_session`, no `Secure` | `__Host-Session`, `Secure`, `HttpOnly`, `SameSite=Strict` |
 | Startup checks | ranges and whitelists | the same, plus `DB_SSL_MODE` `verify-ca`/`verify-full`, `DB_PASSWORD` >= 16 characters, `LOG_LEVEL` not `debug`, `ARGON2_MEMORY_KIB` >= 19456 |
+| Published ports | nginx, backend (8080) and PostgreSQL (`DB_HOST_PORT`) on loopback | nginx only ([Hardening](hardening.md#layouts)) |
 | HSTS | never | on API responses that arrived over HTTPS (`X-Forwarded-Proto: https` from a trusted proxy) |
 | Startup log | `Starting elyrn. backend (development)` | `Starting elyrn. backend (production)` and `Production mode validation passed` |
 
@@ -163,7 +168,7 @@ Check validity at any time: `openssl x509 -noout -enddate -in certs/postgres/ser
 An existing installation needs nothing extra: its next `make up` creates `certs/`, and the
 database volume, `.env` and accounts are untouched (the volume's own `pg_hba.conf` is ignored).
 
-Host-side clients reach the database through its loopback-published port, with TLS:
+In development, host-side clients reach the database through its loopback-published port (`docker-compose.dev.yaml`), with TLS:
 `psql "host=localhost port=$DB_HOST_PORT sslmode=verify-full sslrootcert=certs/ca/ca.crt user=postgres dbname=noaddx"`.
 
 ---

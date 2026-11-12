@@ -4,7 +4,7 @@
 # Go 1.27.3+ carries the crypto/x509 fix (GO-2026-6809).
 ARG ENGINE=openssl
 
-FROM golang:1.27.3-trixie AS builder
+FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS builder
 ARG ENGINE
 
 # OpenSSL headers come from Debian's signed packages (no source download to verify by hand)
@@ -26,7 +26,7 @@ RUN case "$ENGINE" in \
       *) echo "ENGINE must be openssl or native (got '$ENGINE')" >&2; exit 1 ;; \
     esac
 
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 ARG ENGINE
 
 # libssl3t64 only for the OpenSSL engine; wget serves the compose healthcheck

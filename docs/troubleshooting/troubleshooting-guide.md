@@ -21,7 +21,10 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | Backend log: `x509: certificate signed by unknown authority` or `certificate is not valid for any names` | `certs/` was replaced but a container still holds the old material, or `DOCKER_DB_HOST` names a host the certificate does not list. | `make up` (recreates what must reload); keep `DOCKER_DB_HOST=postgres`. |
 | `pg_hba.conf rejects connection ... no encryption` | A client connected to PostgreSQL over TCP without TLS; the bundled database refuses that. | Connect with TLS: `sslmode=verify-full sslrootcert=certs/ca/ca.crt` ([Database TLS](../operations/configuration-and-tuning.md#database-tls-make-certs)). |
 | `make onion` stops with `requires APP_ENV=production` | The onion service publishes the instance; development mode is refused. | Set `APP_ENV=production` in `.env` ([Production Mode](../operations/configuration-and-tuning.md#production-mode)). |
-| `pool overlaps` after adding `BACKEND_IP` or changing `COMPOSE_SUBNET` | `PROXY_IP`, `BACKEND_IP` and `TOR_IP` must all lie inside `COMPOSE_SUBNET`. | Move all four together in `.env`. |
+| `pool overlaps` after adding `BACKEND_IP` or changing `COMPOSE_SUBNET` | `PROXY_IP` and `BACKEND_IP` must lie inside `COMPOSE_SUBNET`, `TOR_IP` inside `EDGE_SUBNET`. | Move each range with its addresses in `.env`. |
+| `make onion`: `Invalid address 172.29.73.11` for tor | `.env` still sets the pre-split `TOR_IP`; tor now lives on `edge`. | `TOR_IP=172.29.72.11` (or delete the line). |
+| `curl localhost:8080` or `psql -p $DB_HOST_PORT` refused | Production layout: only nginx is published. | Use `http://localhost/api/...`, `make shell-db`; or run development (`APP_ENV=development`). See [Hardening](../operations/hardening.md#layouts). |
+| Backend killed with code `137` after raising Argon2id settings | `BACKEND_MEM_LIMIT` no longer holds `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. | Raise `BACKEND_MEM_LIMIT` (and `BACKEND_GOMEMLIMIT`); `make check-hardening` names the size. |
 
 ---
 
@@ -113,12 +116,9 @@ Another web server (Nginx, Apache, IIS) or database server (local PostgreSQL) is
    # Stop local Postgres:
    sudo systemctl stop postgresql
    ```
-3. **Option B: Remap frontend port in `docker-compose.yaml`:**
-   Change line 95 of `docker-compose.yaml`:
-   ```yaml
-   ports:
-     - "8080:80"   # Access via http://localhost:8080
-   ```
+3. **Option B: Move the published ports in `.env`:** `HTTP_PORT=8000` serves the app at
+   `http://localhost:8000` (add that origin to `ALLOWED_ORIGINS`); `DB_HOST_PORT` moves
+   PostgreSQL's development port.
 
 ---
 
@@ -138,7 +138,7 @@ In Docker Compose networking, `localhost` inside the `backend` container refers 
 ```ini
 DOCKER_DB_HOST=postgres
 ```
-*Note: Host-based development (e.g., `go test -p 1 -tags=test ./...` running directly on your laptop) continues to use `DB_HOST=localhost` because Docker exposes port 5432 to `127.0.0.1:5432`.*
+*Note: in the development layout Docker publishes PostgreSQL on `127.0.0.1:$DB_HOST_PORT` (TLS only, `sslmode=verify-full sslrootcert=certs/ca/ca.crt`); the production layout publishes nothing but nginx.*
 
 ---
 

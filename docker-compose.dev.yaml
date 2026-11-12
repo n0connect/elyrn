@@ -1,0 +1,24 @@
+# Development only: make up adds this file unless APP_ENV is production (Makefile COMPOSE_FILES).
+# It publishes the backend and PostgreSQL on loopback for local debugging, psql and host-side
+# tools. Production publishes nginx alone.
+#
+# A port can only be published from a network with a gateway, and app and data are internal,
+# so both services also join devhost here, which gives them outbound access in development.
+# The backend still trusts nginx's address alone (TRUSTED_PROXIES): a request from the host
+# arrives from devhost's gateway and is treated as an untrusted client.
+services:
+  backend:
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      devhost: {}
+
+  postgres:
+    # TLS only, like every TCP client: sslmode=verify-full sslrootcert=certs/ca/ca.crt
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
+    networks:
+      devhost: {}
+
+networks:
+  devhost: {}

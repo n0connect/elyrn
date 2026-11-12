@@ -111,7 +111,9 @@ Verify your deployment status from the terminal:
 # Check running containers and health status
 docker compose ps
 
-# Verify backend health endpoint (should return 401 Unauthorized, proving routing and middleware are active)
+# Verify the API through nginx (should return 401 Unauthorized, proving routing and middleware are active)
+curl -i http://localhost/api/v2/me
+# Development only: the backend directly (production publishes nginx alone)
 curl -i http://localhost:8080/api/v2/me
 
 # View live backend logs

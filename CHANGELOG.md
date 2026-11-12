@@ -7,6 +7,21 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **Restricted containers (S-08).** Every service now drops all capabilities (PostgreSQL keeps
+  `CHOWN`, `DAC_READ_SEARCH`, `FOWNER`, `SETUID`, `SETGID` for its start as root, then runs as
+  uid 70), runs with a read-only root, `no-new-privileges`, Docker's default seccomp profile and
+  bounded memory without swap, pids, CPU, open files and `/dev/shm`; writable paths are named
+  tmpfs mounts with `noexec,nosuid,nodev`. nginx runs as uid 101 on unprivileged ports and the
+  backend gets 512 MiB (Argon2id peak 256 MiB plus headroom, `BACKEND_MEM_LIMIT`). The single
+  network is split into `edge` (nginx, tor), `app` (nginx, backend) and `data` (backend,
+  PostgreSQL); `app` and `data` are internal with no bridge address, so the backend and the
+  database have no internet and neither the host nor a container on another network reaches
+  them, even where the runtime routes between bridges. The backend still trusts nginx alone at
+  `PROXY_IP`. Production publishes nginx only; the backend and PostgreSQL ports moved to
+  `docker-compose.dev.yaml`, which `make up` adds in development. nginx gained header, timeout,
+  dotfile and method limits; base images are pinned by digest. `make check-hardening` fails when
+  the rendered config loses a control. Upgrading: `make up` stops the old stack once (volumes
+  stay); an `.env` with `TOR_IP=172.29.73.11` needs `172.29.72.11` before `make onion`.
 - **One input contract, default deny.** Input checks were spread over handlers, utils and a
   content-type middleware, and some inputs slipped through: duplicate JSON keys (the last won),
   keys in any letter case, a registration body with unknown fields or trailing data (read as an

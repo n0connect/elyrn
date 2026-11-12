@@ -31,8 +31,19 @@ CGO_native := 0
 DEV_BRANCH := noaddx-dev
 RELEASE_BRANCH := main
 COMPOSE_ENV := ENGINE=$(ENGINE)
-# Includes the opt-in tor service, so stopping and listing always cover it too
-COMPOSE_ALL := $(DOCKER_COMPOSE) -f docker-compose.yaml --profile onion
+# APP_ENV as Compose sees it (the shell's value wins over .env), lower case without quotes.
+# Recursive: read when a recipe runs, after $(ENV_FILE) may have been created.
+APP_ENV_NOW = $(shell e="$${APP_ENV:-$$(sed -n 's/^APP_ENV=//p' "$(ENV_FILE)" 2>/dev/null | tail -n 1)}"; \
+	printf '%s' "$$e" | tr -d "\"' \r" | tr '[:upper:]' '[:lower:]')
+IS_PRODUCTION = $(filter production prod,$(APP_ENV_NOW))
+# Production publishes nginx alone; development adds docker-compose.dev.yaml (backend and
+# PostgreSQL on loopback). See docs/operations/hardening.md.
+DEV_COMPOSE := -f docker-compose.dev.yaml
+COMPOSE_FILES = -f docker-compose.yaml $(if $(IS_PRODUCTION),,$(DEV_COMPOSE))
+# Every file and the opt-in tor service, so stopping and listing always cover all of it
+COMPOSE_ALL := $(DOCKER_COMPOSE) -f docker-compose.yaml $(DEV_COMPOSE) --profile onion
+# Before the split networks (S-08) every service shared this one; it holds their address range
+LEGACY_NETWORK := noaddx_default
 # Fingerprints of the current certificates, as container labels: a renewed certificate changes
 # its label, so `up` recreates exactly the container that must load it (volumes stay)
 TLS_ENV = PG_TLS_CERT_SHA256="$$(openssl x509 -noout -fingerprint -sha256 -in "$(CERT_DIR)/postgres/server.crt" | cut -d= -f2)" \
@@ -40,7 +51,7 @@ TLS_ENV = PG_TLS_CERT_SHA256="$$(openssl x509 -noout -fingerprint -sha256 -in "$
 # Frontend manifest: what the release workflow signs and verify-frontend checks against
 MANIFEST ?= frontend.sha256
 
-.PHONY: all help setup certs check-production check-deps check-docker build up onion onion-address start run down stop restart logs ps clean agent \
+.PHONY: all help setup certs check-production check-hardening check-deps check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db \
         build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts
@@ -60,7 +71,8 @@ help:
 	@echo "  setup         Generate .env with fresh keys (kept if it exists) and the database TLS certificates"
 	@echo "  certs         Create or renew the database TLS certificates in $(CERT_DIR)/ (never touches .env or data)"
 	@echo "  build         Build Docker container images for ENGINE"
-	@echo "  up            Build and start services in background for ENGINE (APP_ENV from .env)"
+	@echo "  up            Build and start services in background for ENGINE (APP_ENV from .env;"
+	@echo "                development also publishes the backend and PostgreSQL on loopback)"
 	@echo "  onion         Like up, and publish the app as a Tor onion service (requires APP_ENV=production)"
 	@echo "  onion-address Print the onion address (published by make onion)"
 	@echo "  down          Stop and remove running containers"
@@ -68,6 +80,7 @@ help:
 	@echo "  logs          Stream container logs (Ctrl+C to exit)"
 	@echo "  ps            Display service container status"
 	@echo "  clean         Stop services, delete images, volumes and test artifacts"
+	@echo "  check-hardening  Fail unless the rendered compose config keeps every container control"
 	@echo "  agent         Build bin/elyrn-agent (the robot entrance, MCP on stdio) for this host and ENGINE"
 	@echo ""
 	@echo "Testing Targets:"
@@ -134,13 +147,19 @@ certs:
 # make onion publishes the instance: refuse to do it in development mode (unprefixed cookie
 # without Secure, production checks off). The shell's APP_ENV wins over .env, as in Compose.
 check-production: $(ENV_FILE)
-	@env="$${APP_ENV:-$$(sed -n 's/^APP_ENV=//p' "$(ENV_FILE)" | tail -n 1)}"; \
-	env=$$(printf '%s' "$$env" | tr -d "\"' \r" | tr '[:upper:]' '[:lower:]'); \
-	case "$$env" in \
-		production|prod) ;; \
-		*) echo "[ERROR] make onion requires APP_ENV=production (now: $${env:-unset})."; \
-		   echo "        Set APP_ENV=production in $(ENV_FILE); see docs/operations/onion-service.md"; exit 1 ;; \
-	esac
+	@if [ -z "$(IS_PRODUCTION)" ]; then \
+		echo "[ERROR] make onion requires APP_ENV=production (now: $(or $(APP_ENV_NOW),unset))."; \
+		echo "        Set APP_ENV=production in $(ENV_FILE); see docs/operations/onion-service.md"; exit 1; \
+	fi
+
+# Every service keeps its container controls (docs/operations/hardening.md), in both layouts.
+# The rendered config holds .env values: it goes straight into the checker, which prints names only.
+check-hardening:
+	@set -o pipefail; for layout in production development; do \
+		files="-f docker-compose.yaml"; [ "$$layout" = development ] && files="$$files $(DEV_COMPOSE)"; \
+		$(DOCKER_COMPOSE) $$files --profile onion config --format json \
+			| python3 -I scripts/check-hardening.py "$$layout" || exit 1; \
+	done
 
 $(ENV_FILE):
 	@$(MAKE) setup
@@ -161,16 +180,25 @@ build: check-docker $(ENV_FILE)
 	@echo "[INFO] Building Docker images (crypto engine: $(ENGINE))..."
 	@$(COMPOSE_ENV) $(DOCKER_COMPOSE) -f docker-compose.yaml build
 
-up: check-docker $(ENV_FILE) certs
-	@echo "[INFO] Starting services (crypto engine: $(ENGINE))..."
-	@$(COMPOSE_ENV) $(TLS_ENV) $(DOCKER_COMPOSE) -f docker-compose.yaml up -d --build
-	@echo "[OK] Services running"
-	@$(DOCKER_COMPOSE) -f docker-compose.yaml ps
+# Once, on an installation from before the split networks: stop its containers (volumes stay)
+# and remove the old network, whose address range the app network takes over
+migrate-networks: check-docker
+	@if docker network inspect $(LEGACY_NETWORK) >/dev/null 2>&1; then \
+		echo "[INFO] Moving to the split networks: stopping the old stack once (volumes stay)"; \
+		$(COMPOSE_ALL) down && docker network rm $(LEGACY_NETWORK) >/dev/null; \
+	fi
 
-# The tor service is opt-in: it makes this instance reachable from anywhere through Tor
-onion: check-docker check-production certs
+up: check-docker $(ENV_FILE) certs migrate-networks
+	@echo "[INFO] Starting services (crypto engine: $(ENGINE), APP_ENV: $(or $(APP_ENV_NOW),development))..."
+	@$(COMPOSE_ENV) $(TLS_ENV) $(DOCKER_COMPOSE) $(COMPOSE_FILES) up -d --build
+	@echo "[OK] Services running"
+	@$(DOCKER_COMPOSE) $(COMPOSE_FILES) ps
+
+# The tor service is opt-in: it makes this instance reachable from anywhere through Tor.
+# Production only, so the development file (published backend and database) is never included.
+onion: check-docker check-production certs migrate-networks
 	@echo "[INFO] Starting services and the onion service (crypto engine: $(ENGINE))..."
-	@$(COMPOSE_ENV) $(TLS_ENV) $(COMPOSE_ALL) up -d --build
+	@$(COMPOSE_ENV) $(TLS_ENV) $(DOCKER_COMPOSE) $(COMPOSE_FILES) --profile onion up -d --build
 	@echo "[OK] Services running; the onion address appears once tor has published it (about a minute):"
 	@echo "     make onion-address"
 

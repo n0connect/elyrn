@@ -19,8 +19,12 @@ for f in server.crt server.key; do
 	fi
 done
 
-install -d -o postgres -g postgres -m 0700 "$dst"
+# The directory goes to postgres last: with every capability but CHOWN, DAC_READ_SEARCH, FOWNER,
+# SETUID and SETGID dropped (docker-compose.yaml), root cannot write into a directory it no
+# longer owns
+install -d -m 0700 "$dst"
 install -o postgres -g postgres -m 0644 "$src/server.crt" "$dst/server.crt"
 install -o postgres -g postgres -m 0600 "$src/server.key" "$dst/server.key"
+chown postgres:postgres "$dst"
 
 exec docker-entrypoint.sh "$@"

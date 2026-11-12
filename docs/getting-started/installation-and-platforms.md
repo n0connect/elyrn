@@ -126,6 +126,22 @@ bash: \r: invalid command
 
 ---
 
+## Development and Production Layouts
+
+`make up` reads `APP_ENV` (the shell's value wins over `.env`). In `development`, the default,
+it adds [docker-compose.dev.yaml](../../docker-compose.dev.yaml): the backend on
+`127.0.0.1:8080` and PostgreSQL on `127.0.0.1:$DB_HOST_PORT` (TLS only) for debugging, `psql`
+and host-side tools. In `production` only nginx is published. Every container runs restricted
+either way; see [Container Hardening](../operations/hardening.md).
+
+```bash
+make up                         # layout from .env
+APP_ENV=production make up      # production layout without editing .env
+make check-hardening            # the rendered config keeps every container control
+```
+
+---
+
 ## Memory Sizing & VPS Optimization (Argon2id)
 
 `elyrn.` uses memory-hard Argon2id key derivation on the server to protect derived auth keys:
