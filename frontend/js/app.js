@@ -229,7 +229,8 @@ function setupPairingListeners() {
         document.getElementById('inviteInput').focus();
     });
     document.getElementById('closeJoinBtn').addEventListener('click', () => togglePairPanel(null));
-    document.getElementById('copyInviteBtn').addEventListener('click', copyShownText('inviteCode', Errors.NOTICE.INVITE_COPIED));
+    document.getElementById('copyInviteBtn').addEventListener('click', copyShownText('inviteCode', Errors.NOTICE.INVITE_COPIED,
+        null, true));
     document.getElementById('joinBtn').addEventListener('click', () => Chat.join());
 }
 

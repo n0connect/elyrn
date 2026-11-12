@@ -37,6 +37,9 @@ const Errors = (() => {
         E_API_TOO_MANY_REQUESTS: e('too many requests — wait a minute'),
         E_API_INTERNAL: e('internal server error — try again in a moment'),
         E_API_UNAVAILABLE: e('service unavailable — try again in a moment'),
+        // nginx refused the request before the backend saw it (EDGE_CODES)
+        E_API_ROUTE_UNKNOWN: e('the server does not accept this request — reload the page and try again'),
+        E_API_BODY_TOO_LARGE: e('what you sent is too large for the server — make it shorter and try again'),
         E_REQUEST_FAILED: e('request failed — try again'),
         // no answer at all (apiCall's status 0): the request timed out, or never reached the server
         E_REQUEST_TIMEOUT: e('no answer from the server — check your connection and try again'),
@@ -190,6 +193,17 @@ const Errors = (() => {
         500: CODES.E_API_INTERNAL
     });
 
+    // The codes nginx's own /api/ failures carry in their JSON body ("code"), one per entry of
+    // backend/internal/apperr/edge.go EdgeAnswers (errors.test.mjs fails on one missing here).
+    // A known code wins over the message and the status; any other code is ignored.
+    const EDGE_CODES = Object.freeze({
+        E_BACKEND_UNAVAILABLE: CODES.E_API_UNAVAILABLE,
+        E_EDGE_NOT_FOUND: CODES.E_API_ROUTE_UNKNOWN,
+        E_EDGE_METHOD_NOT_ALLOWED: CODES.E_API_ROUTE_UNKNOWN,
+        E_BODY_TOO_LARGE: CODES.E_API_BODY_TOO_LARGE,
+        E_EDGE_RATE_LIMITED: CODES.E_API_TOO_MANY_REQUESTS
+    });
+
     // Texts that are not failures but share the inline status lines and toasts with them
     const NOTICE = Object.freeze({
         DERIVING_KEYS: 'deriving your keys…',
@@ -298,18 +312,33 @@ const Errors = (() => {
         element.textContent = logged(code, params, cause).text;
     }
 
-    // Maps a server's error answer to a code; its own text is never shown
-    function fromApi(apiMessage, status) {
-        if (apiMessage) {
-            const key = String(apiMessage).trim().toLowerCase();
-            return has(API_MESSAGES, key) ? API_MESSAGES[key] : CODES.E_REQUEST_FAILED;
+    // table's own entry under key, or fallback: a key like '__proto__' or 'constructor' is no entry
+    function lookup(table, key, fallback) {
+        return (typeof key === 'string' || typeof key === 'number') && has(table, key) ? table[key] : fallback;
+    }
+
+    // An answer body's own field, or undefined: the body is whatever JSON the server sent
+    function field(data, name) {
+        return data !== null && typeof data === 'object' && has(data, name) ? data[name] : undefined;
+    }
+
+    // Maps a server's error answer to a code; its own text is never shown. A message that is not
+    // a string (hostile JSON) is unrecognised, like any text not in API_MESSAGES.
+    function fromApi(apiMessage, status, edgeCode) {
+        const edge = lookup(EDGE_CODES, edgeCode, null);
+        if (edge) {
+            return edge;
         }
-        return has(API_STATUSES, status) ? API_STATUSES[status] : CODES.E_REQUEST_FAILED;
+        if (apiMessage) {
+            const key = typeof apiMessage === 'string' ? apiMessage.trim().toLowerCase() : null;
+            return lookup(API_MESSAGES, key, CODES.E_REQUEST_FAILED);
+        }
+        return lookup(API_STATUSES, status, CODES.E_REQUEST_FAILED);
     }
 
     // A failed apiCall result ({ status, data, timedOut, tooLarge }) as a code: an answer refused
     // for its size says so, no answer (status 0) says whether it timed out, any other answer is
-    // mapped by fromApi
+    // mapped by fromApi (a text/plain body is data null, so it maps by status)
     function fromResult(result) {
         if (result.tooLarge) {
             return CODES.E_RESPONSE_TOO_LARGE;
@@ -317,11 +346,11 @@ const Errors = (() => {
         if (result.status === 0) {
             return result.timedOut ? CODES.E_REQUEST_TIMEOUT : CODES.E_SERVER_UNREACHABLE;
         }
-        return fromApi(result.data ? result.data.message : null, result.status);
+        return fromApi(field(result.data, 'message'), result.status, field(result.data, 'code'));
     }
 
     return Object.freeze({
-        CODES, INTERNAL, NOTICE, REGISTRY, report, inline, fromApi, fromResult, format, notice,
+        CODES, INTERNAL, NOTICE, REGISTRY, EDGE_CODES, report, inline, fromApi, fromResult, format, notice,
         message: (code, params) => resolve(code, params).text
     });
 })();

@@ -3,9 +3,9 @@
 // ========================================
 
 const API_BASE_URL = '/api/v2';
-// The static status pages nginx serves (nginx-site.conf, nginx-api-errors.conf); the names are
-// opaque so they cannot be guessed at. The app itself only ever leaves for the 404 page: every
-// API failure is explained in place (apiCall).
+// The static status page for page navigation (nginx-site.conf); its name is opaque so it cannot
+// be guessed at. API failures never lead to a page: nginx answers them JSON with a registered code
+// (nginx-api-errors.conf) and the app explains every one in place (apiCall, Errors.fromResult).
 const STATUS_PAGES = Object.freeze({
     NOT_FOUND: '/e0ab670f-6801-4475-b337-c08d5adb9e73.html'
 });
@@ -21,8 +21,8 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const TOO_LARGE = 'ResponseTooLarge';
 // Far enough left that the copy fallback's textarea is never on screen
 const OFFSCREEN_LEFT = '-999999px';
-// A room code is copied for the user to paste elsewhere: after this long it is cleared from the
-// clipboard (clearClipboardLater), if the clipboard still holds it
+// A room or invite code is copied for the user to paste elsewhere: after this long it is cleared
+// from the clipboard (clearClipboardLater), if the clipboard still holds it
 const CLIPBOARD_CLEAR_DELAY_MS = 120000;
 
 // What this page last put in the clipboard, as far as the page can tell: a copy it made, or the
@@ -41,7 +41,7 @@ async function copyToClipboard(text) {
 }
 
 // Copies text and confirms with notice, or asks the user to copy it by hand. clearLater: text is
-// a secret worth clearing from the clipboard afterwards (a room code: clearClipboardLater).
+// a secret worth clearing from the clipboard afterwards (a room or invite code: clearClipboardLater).
 async function copyWithNotice(text, notice, clearLater) {
     try {
         await copyToClipboard(text);

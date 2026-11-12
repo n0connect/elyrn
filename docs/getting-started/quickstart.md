@@ -89,7 +89,7 @@ To test end-to-end encryption locally between two parties:
    - Click **new identity**, then **copy**.
    - Your browser solves a Proof-of-Work (PoW) hashcash challenge in a background Web Worker while the account number scrambles; then your **AccountNumber** appears (43 characters) and is copied to the clipboard. **Save it in a password manager:** it is the only way back into this identity.
    - Click **continue →** to create the account (a second, fresh PoW).
-   - Click **+ invite**. Every invite costs one PoW too: the code scrambles for a few seconds, then appears (`elyrn:` + 43 characters) and is copied.
+   - Click **+ invite**. Every invite costs one PoW too: the code scrambles for a few seconds, then appears (`elyrn:` + 43 characters) and is copied; two minutes later the clipboard is cleared if it still holds the invite, as for a room code.
 
 2. **Party B (Incognito / Second Browser Window):**
    - Open a private window to `http://localhost` and create a second identity the same way.

@@ -889,7 +889,7 @@ const Chat = (() => {
             return;
         }
         inviteRun = null;
-        await copyWithNotice(invite.code, Errors.NOTICE.INVITE_COPIED, false);
+        await copyWithNotice(invite.code, Errors.NOTICE.INVITE_COPIED, true);
     }
 
     // The join field takes an invite code or a room code; a second press while one runs is
