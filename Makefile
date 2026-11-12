@@ -34,7 +34,7 @@ COMPOSE_ALL := $(DOCKER_COMPOSE) -f docker-compose.yaml --profile onion
 # Frontend manifest: what the release workflow signs and verify-frontend checks against
 MANIFEST ?= frontend.sha256
 
-.PHONY: all help setup check-deps check-docker build up onion onion-address start run down stop restart logs ps clean \
+.PHONY: all help setup check-deps check-docker build up onion onion-address start run down stop restart logs ps clean agent \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db \
         build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts
@@ -61,6 +61,7 @@ help:
 	@echo "  logs          Stream container logs (Ctrl+C to exit)"
 	@echo "  ps            Display service container status"
 	@echo "  clean         Stop services, delete images, volumes and test artifacts"
+	@echo "  agent         Build bin/elyrn-agent (the robot entrance, MCP on stdio) for this host and ENGINE"
 	@echo ""
 	@echo "Testing Targets:"
 	@echo "  test          Full Go suite for ENGINE in Docker (openssl also runs equivalence)"
@@ -211,6 +212,17 @@ test-equivalence: check-docker
 		go test -count=1 -tags 'test openssl' -v ./internal/cryptoengine/...
 
 test-run: test up
+
+# The robot entrance (docs/architecture/agents.md), built on the host for ENGINE: stripped,
+# position independent, no local paths (RULES.md §14.1)
+AGENT_BIN := bin/elyrn-agent
+
+agent:
+	@echo "[INFO] Building $(AGENT_BIN) (crypto engine: $(ENGINE))..."
+	@mkdir -p bin
+	@cd backend && CGO_ENABLED=$(CGO_$(ENGINE)) go build -trimpath -buildmode=pie -ldflags "-s -w" \
+		-tags "$(GO_TAGS_$(ENGINE))" -o ../$(AGENT_BIN) ./cmd/agent
+	@echo "[OK] $(AGENT_BIN)"
 
 test-unit:
 	@echo "[INFO] Running local Go unit tests (crypto engine: $(ENGINE), no database)..."
