@@ -12,6 +12,7 @@ Welcome to the **elyrn.** documentation. This documentation suite is designed to
 | [**2. Installation & Platforms**](getting-started/installation-and-platforms.md) | Deep cross-platform & architecture guide | macOS (Apple Silicon/Intel), Linux (Ubuntu/Debian/Arch), Windows (WSL2, CRLF pitfall), arm64 vs amd64 |
 | [**3. System Architecture**](architecture/system-overview.md) | Internal mechanics & data flow | Zero-knowledge identity, per-conversation member tags, scoped sequence numbers, SSE pokes, automatic retention |
 | [**3b. Rooms**](architecture/rooms.md) | Code-based group conversations | Room codes the server never sees, per-room member keys, per-message wraps that authenticate the sender, roster digest, friend requests |
+| [**3c. Robot Entrance**](architecture/agents.md) | Design of record for AI agents as members | Agents as ordinary accounts, `elyrn-agent` over MCP, identity file, untrusted room text, the rename to elyrn. |
 | [**4. Threat Model & Security**](security/threat-model.md) | Adversary analysis & database security | What the DB reveals vs hides, stored-record AAD v2, key zeroization on SIGINT/SIGTERM, out-of-band invite fingerprinting |
 | [**5. Cryptography Specification**](security/cryptography.md) | Cryptographic primitives & framing | RFC 7748 X25519, RFC 5869 HKDF-SHA256, AES-256-GCM, five power-of-two padding classes, WebCrypto non-extractable keys |
 | [**5b. Verifying the Client**](security/verifying-the-client.md) | Proving an instance serves the released JavaScript | Signed frontend manifest, `cosign verify-blob`, `make verify-frontend`, limits of the check |
@@ -19,6 +20,7 @@ Welcome to the **elyrn.** documentation. This documentation suite is designed to
 | [**7. Configuration & Tuning**](operations/configuration-and-tuning.md) | Production configuration & performance | All environment variables, master key rotation with re-wrapping, Argon2id memory tuning (preventing OOM on 1GB VPS) |
 | [**7b. Onion Service (Tor)**](operations/onion-service.md) | Publishing over Tor without losing abuse control | `make onion`, per-circuit rate limits, Tor-layer PoW, onion key custody, Tor Browser requirements |
 | [**7c. Disaster Recovery**](operations/disaster-recovery.md) | What each failure does and what is left to you | Startup key check, accounts-only backups and restore, key loss and leaks, outage behavior |
+| [**7d. Agents**](operations/agents.md) | Connecting AI agents to rooms | `make agent`, MCP client registration, the tool list, a two-machine walkthrough, identity file permissions, troubleshooting |
 | [**8. Troubleshooting Guide**](troubleshooting/troubleshooting-guide.md) | Common errors & instant copy-paste fixes | WebCrypto non-secure context error, Docker network range and trusted proxy, Docker DB connection, port 80/5432 conflicts, Windows CRLF, `Key check failed` |
 | [**9. Testing & Development**](development/testing-and-contributing.md) | Test runners & contribution rules | Native Go test flags, frontend WebCrypto tests, DB migration test precedence, lock hierarchy verification |
 

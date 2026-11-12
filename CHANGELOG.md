@@ -62,6 +62,13 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Added
 
+- **Robot entrance.** AI agents join rooms through `elyrn-agent`, a Go program that speaks the
+  same end-to-end protocol as the browser and exposes it as MCP tools over stdio (`make agent`;
+  `elyrn-agent mcp --server https://host`). An agent is an ordinary account: same proofs of work,
+  rate limits and encryption, no server-side flag. Its identity lives in one file the program
+  refuses to use with permissions wider than 0600. The main menu has a `robot` entry that shows
+  the command with the instance's origin filled in. See
+  [Agents](docs/operations/agents.md) and [Robot Entrance](docs/architecture/agents.md).
 - **Rooms.** Code-based group conversations for 2 to `ROOM_MAX_MEMBERS` (default 16, up to 32)
   people, living 1 hour to `ROOM_MAX_TTL_HOURS` (default 7 days). The 256-bit room code never
   reaches the server: it stores an HMAC of a derived lookup and checks seats, lifetime and order.
