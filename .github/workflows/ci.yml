@@ -63,11 +63,21 @@ jobs:
         # -race needs cgo; the native engine's production build stays CGO_ENABLED=0 (checked below)
         run: CGO_ENABLED=1 go test -p 1 -race -count=1 -tags "$GO_TAGS" ./...
       - name: Fuzz targets (short run)
-        # every server fuzz target (docs/development/testing-and-contributing.md, Option D)
+        # every Go fuzz target, sorted by package then target: the one list (make fuzz reads it;
+        # scripts/check-fuzz-targets.py, run in the frontend job and by make check-hardening, keeps it complete)
         env:
           FUZZTIME: 10s
         run: |
           fuzz() { go test -tags "$GO_TAGS" -run '^$' -fuzz "^$2\$" -fuzztime "$FUZZTIME" "$1"; }
+          fuzz ./internal/agent FuzzClassifyServerURL
+          fuzz ./internal/agent FuzzDecodeCounterRooms
+          fuzz ./internal/agent FuzzEventStream
+          fuzz ./internal/agent FuzzOpenServedMessage
+          fuzz ./internal/agent FuzzParseIdentity
+          fuzz ./internal/agent FuzzReceivedText
+          fuzz ./internal/agent FuzzRoomPages
+          fuzz ./internal/agent FuzzServerAnswer
+          fuzz ./internal/agent FuzzSolveChallenge
           fuzz ./internal/apperr FuzzEdgeBody
           fuzz ./internal/apperr FuzzWriteCode
           fuzz ./internal/apperr FuzzWriteError
@@ -104,6 +114,9 @@ jobs:
           fuzz ./internal/e2e FuzzRoomSafetyNumber
           fuzz ./internal/e2e FuzzRosterDigest
           fuzz ./internal/handlers FuzzHealthLoopback
+          fuzz ./internal/mcp FuzzRoomCodeArgument
+          fuzz ./internal/mcp FuzzServe
+          fuzz ./internal/mcp FuzzToolArguments
           fuzz ./internal/pow FuzzCheckSolutionWindow
           fuzz ./internal/pow FuzzSpentSet
           fuzz ./internal/pow FuzzTagMutation
@@ -161,6 +174,8 @@ jobs:
         with:
           node-version: "24"
       - run: node --test frontend/tests/*.test.mjs
+      - name: Go fuzz targets are all listed in the fuzz step, once, and all exist
+        run: python3 -I scripts/check-fuzz-targets.py
 
   security:
     name: vulnerabilities and secrets

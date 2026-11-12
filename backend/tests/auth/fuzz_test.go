@@ -48,17 +48,8 @@ func FuzzVerifyAccountNumberHash(f *testing.F) {
 	})
 }
 
-// signingInput is a JWT's header and payload as sent: what its signature covers.
-func signingInput(token string) string {
-	cut := strings.LastIndex(token, ".")
-	if cut < 0 {
-		return ""
-	}
-	return token[:cut]
-}
-
-// tokenSeeds are the genuine token and its look-alikes: the same claims under another
-// algorithm, issuer or audience, an unsigned one, a truncated one, and hostile strings.
+// tokenSeeds are the genuine token and its look-alikes: its signature malleations, the same
+// claims under another algorithm or issuer, an unsigned one, a truncated one, and hostile strings.
 func tokenSeeds(t testing.TB, genuine string, claims auth.Claims) []string {
 	t.Helper()
 	secret := []byte(os.Getenv("JWT_SECRET"))
@@ -72,13 +63,13 @@ func tokenSeeds(t testing.TB, genuine string, claims auth.Claims) []string {
 	}
 	foreign := claims
 	foreign.Issuer = "someone-else"
-	return []string{genuine, genuine + "A", genuine[:len(genuine)-1], genuine + "\n", strings.ToUpper(genuine),
-		hs512, none, signWithServerSecret(t, foreign), "a.b.c", "..", "", strings.Repeat("A", auth.MaxTokenBytes+1)}
+	return append(signatureMalleations(t, genuine), genuine, genuine+"A", genuine[:len(genuine)-1], genuine+"\n", strings.ToUpper(genuine),
+		hs512, none, signWithServerSecret(t, foreign), "a.b.c", "..", "", strings.Repeat("A", auth.MaxTokenBytes+1))
 }
 
-// FuzzVerifyToken: nothing panics, and only a token the server signed for this issuer and
-// audience verifies: whatever verifies carries the genuine header and payload (a fuzzer cannot
-// forge HMAC-SHA256) and yields the genuine session.
+// FuzzVerifyToken: nothing panics, and only the exact genuine token string verifies (a fuzzer
+// cannot forge HMAC-SHA256, and the shape whitelist plus strict decoding leave one spelling of
+// each signature: no flipped unused bit, no inserted CR/LF) and it yields the genuine session.
 func FuzzVerifyToken(f *testing.F) {
 	testutil.SetupTestEnv(f)
 	f.Cleanup(func() { testutil.TeardownTestEnv(f) })
@@ -100,14 +91,15 @@ func FuzzVerifyToken(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if signingInput(token) != signingInput(genuine) || session.UserUUID != subject || session.SessionEpoch != epoch {
+		if token != genuine || session.UserUUID != subject || session.SessionEpoch != epoch {
 			t.Fatalf("token %q verified as %+v", token, session)
 		}
 	})
 }
 
-// FuzzVerifyPendingToken: only the pending token the server signed verifies (a session token
-// never does), and it yields the identity phase 1 stored under its pending id.
+// FuzzVerifyPendingToken: only the exact pending token string the server signed verifies (a
+// session token or a signature-malleated look-alike never does), and it yields the identity
+// phase 1 stored under its pending id.
 func FuzzVerifyPendingToken(f *testing.F) {
 	testutil.SetupTestEnv(f)
 	f.Cleanup(func() {
@@ -130,7 +122,7 @@ func FuzzVerifyPendingToken(f *testing.F) {
 	if err != nil {
 		f.Fatalf("SignToken: %v", err)
 	}
-	for _, seed := range []string{genuine, genuine + "A", genuine[:len(genuine)-1], session, "", "a.b.c"} {
+	for _, seed := range append(signatureMalleations(f, genuine), genuine, genuine+"A", genuine[:len(genuine)-1], session, "", "a.b.c") {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, token string) {
@@ -138,7 +130,7 @@ func FuzzVerifyPendingToken(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if signingInput(token) != signingInput(genuine) || id != pendingID || got != stored {
+		if token != genuine || id != pendingID || got != stored {
 			t.Fatalf("token %q verified as pending %q", token, id)
 		}
 	})

@@ -48,11 +48,13 @@ LEGACY_NETWORK := noaddx_default
 # its label, so `up` recreates exactly the container that must load it (volumes stay)
 TLS_ENV = PG_TLS_CERT_SHA256="$$(openssl x509 -noout -fingerprint -sha256 -in "$(CERT_DIR)/postgres/server.crt" | cut -d= -f2)" \
 	DB_CA_SHA256="$$(openssl x509 -noout -fingerprint -sha256 -in "$(CERT_DIR)/ca/ca.crt" | cut -d= -f2)"
+# The one list of Go fuzz targets lives in the CI fuzz step; this script checks and prints it
+FUZZ_TARGETS := scripts/check-fuzz-targets.py
 # Frontend manifest: what the release workflow signs and verify-frontend checks against
 MANIFEST ?= frontend.sha256
 
 .PHONY: all help setup certs check-production check-hardening check-deps check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent \
-        test test-engines test-equivalence test-run test-unit test-crypto test-all test-db \
+        test test-engines test-equivalence test-run test-unit test-crypto test-all test-db fuzz fuzz-js \
         build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts test-restore
 
@@ -92,6 +94,8 @@ help:
 	@echo "  test-crypto   Run frontend WebCrypto derivation tests (Node.js 20+)"
 	@echo "  test-all      Run local Go unit tests and frontend crypto tests"
 	@echo "  test-db       Run Go database and integration tests (requires local PostgreSQL)"
+	@echo "  fuzz          Run every Go fuzz target of the CI list for FUZZTIME each (default $(FUZZTIME)) on ENGINE"
+	@echo "  fuzz-js       Run the frontend fuzz files (FUZZ_SCALE multiplies iterations, FUZZ_SEED replays a seed)"
 	@echo "  test-restore  Restore drill in the disposable test stack: seed, dump (backup-accounts' command), restore, log in"
 	@echo ""
 	@echo "Release Targets:"
@@ -156,6 +160,7 @@ check-production: $(ENV_FILE)
 # Every service keeps its container controls (docs/operations/hardening.md), in both layouts.
 # The rendered config holds .env values: it goes straight into the checker, which prints names only.
 check-hardening:
+	@python3 -I $(FUZZ_TARGETS)
 	@set -o pipefail; for layout in production development; do \
 		files="-f docker-compose.yaml"; [ "$$layout" = development ] && files="$$files $(DEV_COMPOSE)"; \
 		$(DOCKER_COMPOSE) $$files --profile onion config --format json \
@@ -288,6 +293,24 @@ test-crypto:
 	@node --test frontend/tests/*.test.mjs
 
 test-all: test-crypto test-unit
+
+# Every Go fuzz target, read from the CI fuzz step (the one list; the script refuses an
+# incomplete, duplicated or unsorted list first), each for FUZZTIME on ENGINE, locally
+FUZZTIME ?= 20s
+
+fuzz:
+	@targets="$$(python3 -I $(FUZZ_TARGETS) --list)" || exit 1; \
+	cd backend && while read -r pkg target; do \
+		echo "[INFO] $$target ($$pkg, $(FUZZTIME), crypto engine: $(ENGINE))"; \
+		CGO_ENABLED=$(CGO_$(ENGINE)) go test -tags "test $(GO_TAGS_$(ENGINE))" -run '^$$' -fuzz "^$$target\$$" \
+			-fuzztime "$(FUZZTIME)" "$$pkg" < /dev/null || exit 1; \
+	done <<< "$$targets"
+	@echo "[OK] Every Go fuzz target ran $(FUZZTIME) without a failure ($(ENGINE))"
+
+# The frontend fuzz files; FUZZ_SCALE and FUZZ_SEED pass through from the environment or the
+# command line (frontend/tests/fuzz-helpers.mjs)
+fuzz-js:
+	@node --test frontend/tests/*.fuzz.test.mjs
 
 # Database and integration tests against a separate local PostgreSQL (TEST_DB_* overrides), never
 # the bundled one: it holds live data and accepts TLS connections only

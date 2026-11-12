@@ -97,16 +97,18 @@ make test-all
 
 ### Option D: Fuzzing the Parsers
 
-Every module of the server that parses, decodes, validates or classifies attacker-influenced bytes has a fuzz target (64, none needs a database), plus the stored Argon2id hash format (its verifier is test-only since login stopped reading the hash, S-02; it stays while the hash does, S-07). A target asserts invariants, not only "no panic": whatever is accepted is canonical (re-encoding gives the input back), a mutated or forged blob, token, record or proof of work fails closed, every refusal is a registered `apperr` answer below 500, and state machines (spent proofs, log throttle, event hub) stay within their bounds and agree with a model.
+Every module of the server that parses, decodes, validates or classifies attacker-influenced bytes has a fuzz target, and so does every surface of the agent (`elyrn-agent`, its MCP server) that judges bytes it does not control (76 Go targets in all, none needs a database), plus the stored Argon2id hash format (its verifier is test-only since login stopped reading the hash, S-02; it stays while the hash does, S-07). A target asserts invariants, not only "no panic": whatever is accepted is canonical (re-encoding gives the input back), a mutated or forged blob, token, record or proof of work fails closed, every refusal is a registered `apperr` answer below 500, and state machines (spent proofs, log throttle, event hub) stay within their bounds and agree with a model.
 
 | Package | Targets |
 |---|---|
+| `internal/agent` | the nine targets below |
 | `internal/apperr` | `FuzzWriteError`, `FuzzWriteCode`, `FuzzEdgeBody` |
 | `internal/chat` | `FuzzParseRoomInput`, `FuzzRosterDigestMatchesClient`, `FuzzMessageWindow`, `FuzzClockTrusted` |
 | `internal/contract` | `FuzzGateRequest`, `FuzzGateLoginBody`, `FuzzPattern*` (12), `FuzzIntegerLiteral` |
 | `internal/database` | `FuzzClassify` |
 | `internal/e2e` | `FuzzDecrypt`, `FuzzDecryptBindings`, `FuzzParseRoomCode`, `FuzzRoomCodeBuild`, `FuzzOpenRoomMessage`, `FuzzMutateRoomMessage`, `FuzzOpenRoomNote`, `FuzzOpenRoomCard`, `FuzzOpenRoomVault`, `FuzzRosterDigest`, `FuzzAura`, `FuzzRoomSafetyNumber` |
 | `internal/handlers` | `FuzzHealthLoopback` |
+| `internal/mcp` | the three targets below |
 | `internal/pow` | `FuzzValidateSolution`, `FuzzTagMutation`, `FuzzCheckSolutionWindow`, `FuzzSpentSet` |
 | `internal/realtime` | `FuzzHubOperations` |
 | `internal/server` | `FuzzRouteChain` (the production chain, differential against the mux) |
@@ -118,6 +120,28 @@ Every module of the server that parses, decodes, validates or classifies attacke
 | `tests/middleware` | `FuzzClientKey`, `FuzzCORS`, `FuzzRecover` |
 | `tests/utils` | `FuzzParseCanonicalUUIDv4`, `FuzzValidateInviteToken`, `FuzzValidateCiphertext` |
 
+The agent and its MCP server, one invariant each:
+
+- `FuzzClassifyServerURL`: an accepted server address yields a canonical origin that classifies again to itself; a refused one yields no origin.
+- `FuzzParseIdentity`: a loaded identity file holds a canonical origin and a well-formed secret, and saved again loads identically.
+- `FuzzDecodeCounterRooms`: a loaded counter file stays within its rooms and senders bounds with canonical keys and safe sequence numbers, round-trips through save, and keeps no long-expired room.
+- `FuzzServerAnswer`: a bounded answer is read as served; a refused one never hands its status to the caller, and nginx's own edge answers never pass as the backend's status (never as 404 "room gone").
+- `FuzzEventStream`: the event stream never ends a wait by itself, wakes it only for a `msg` or `conv` event, and never drops the roster without a `conv` event.
+- `FuzzSolveChallenge`: a malformed challenge is a server-answer failure, one above the difficulty bound a proof-of-work failure, and every solution is canonical and really has the leading zero bits.
+- `FuzzReceivedText`: received text is neutralized one for one and idempotently; sent text is exactly the CRLF-normalized input trimmed of the shared trim set (`messageTrimChars`, the browser's `MESSAGE_TRIM_CHARS`, pinned by one sample table on both sides), within 1..2000 characters, with no forbidden character.
+- `FuzzRoomPages`: pages served withheld, repeated, reordered or mutated are judged as an independent model judges them (a lower counter after a higher one, or one above its history ceiling, is a replay; the same page served again is history, not a replay).
+- `FuzzOpenServedMessage`: arbitrary ciphertext under a real message id opens only to that message's own text, sender and "mine", else it is broken with no text.
+- `FuzzServe` (MCP): every input line gets at most one answer, stdout never ends inside a line, and every protocol error is a registered code with its number and sentence.
+- `FuzzToolArguments` (MCP): arguments refused by validation give the same answer with no backend at all (nothing reaches the backend before validation), and a backend that refuses everything never yields success.
+- `FuzzRoomCodeArgument` (MCP): every code `JoinRoom` can parse is accepted as an argument, and what is accepted is canonical and round-trips.
+
+The Go list lives in one place, the CI step "Fuzz targets (short run)" in `.github/workflows/ci.yml` (sorted by package, then target). `scripts/check-fuzz-targets.py` fails unless every `func Fuzz...` in `backend/` is listed there exactly once under its own package and every listed target exists; CI runs it in the frontend job and `make check-hardening` runs it first. `make fuzz` reads that list through the same script and runs every target locally:
+
+```bash
+make fuzz                         # every Go target, 20 s each, ENGINE=openssl
+make fuzz ENGINE=native FUZZTIME=2m
+```
+
 Run one target at a time (both engines: add `openssl` to the tags for the OpenSSL build):
 
 ```bash
@@ -126,9 +150,30 @@ go test -tags test -run '^$' -fuzz '^FuzzGateRequest$' -fuzztime 60s ./internal/
 go test -tags 'test openssl' -run '^$' -fuzz '^FuzzOpenRoomMessage$' -fuzztime 60s ./internal/e2e
 ```
 
-CI runs every target for 10 seconds per engine (`.github/workflows/ci.yml`, "Fuzz targets (short run)"); a new target is registered there and in the table above.
+CI runs every target for 10 seconds per engine (`.github/workflows/ci.yml`, "Fuzz targets (short run)"); a new target is registered there (the check above fails until it is) and in the table above.
 
 Any input that fails is written to `testdata/fuzz/` next to the package and becomes a permanent regression test; commit it with the fix.
+
+#### Frontend fuzz files
+
+Each browser module that judges untrusted input has a seeded fuzz file under `frontend/tests/`, loaded as the browser loads it (helpers in `fuzz-helpers.mjs`); CI runs them with the other frontend tests:
+
+| File | Module and invariant |
+|---|---|
+| `validation.fuzz.test.mjs` | `validation.js`: accepted message text is clean, bounded, trimmed of exactly `MESSAGE_TRIM_CHARS` (equal to the agent's `messageTrimChars`, read from the Go source) and re-validates to itself; codes and ids are never laxer than the server's patterns |
+| `room-crypto.fuzz.test.mjs` | `crypto.js`, `room-crypto.js`: codes round-trip; tampered cards, vaults, messages and notes never open to anything but their genuine plaintext |
+| `counters.fuzz.test.mjs` | `counters.js`: the replay judgement agrees with an independent model (the invariants `FuzzRoomPages` asserts for the agent) |
+| `errors.fuzz.test.mjs` | `errors.js`: arbitrary answers always yield a registered code and a registry sentence, never the server's text |
+| `utils.fuzz.test.mjs` | `utils.js`: `apiCall` reads answers of random status, type, size and chunking from a real local server; `once` and `singleFlight` hold under random interleavings |
+| `pow-worker.fuzz.test.mjs` | `pow-worker.js`: task shapes judged against the server's hex patterns, SHA-256 against Node's, low-difficulty answers verified |
+| `robot-door.fuzz.test.mjs` | `robot-door.js`: total, deterministic and finite |
+
+```bash
+make fuzz-js                      # node --test frontend/tests/*.fuzz.test.mjs
+FUZZ_SCALE=20 make fuzz-js        # twenty times the iterations of every target
+```
+
+A failing JS target prefixes its assertion with `[fuzz seed=0x... iteration=N]`. Every target draws all its inputs from one generator started at that seed, so the same seed replays the same inputs in the same order: pass it back, with enough iterations to reach N (`FUZZ_SCALE` only changes how many are drawn, not which), and narrow the run to the failing test by name, e.g. `FUZZ_SEED=0x5eed0001 node --test --test-name-pattern='validateMessageText' frontend/tests/validation.fuzz.test.mjs` (decimal or `0x` hex; `FUZZ_SEED` replaces every target's seed in that run). Each file's targets have fixed seeds, so a CI failure also reproduces with the plain command. Turn the input into a plain test next to the fix.
 
 ### Continuous Integration
 

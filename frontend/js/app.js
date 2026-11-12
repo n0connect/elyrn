@@ -11,13 +11,8 @@ function isValidFrontendRoute() {
         return true;
     }
 
-    // Allow status pages (UUID HTML files) - these are handled by nginx
-    const statusPagePattern = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.html$/i;
-    if (statusPagePattern.test(path)) {
-        return true;
-    }
-
-    // Reject any other paths (including /api/*) - they don't exist in this SPA
+    // Reject any other path (including /api/*): nginx serves this app at / only, and the
+    // status page (STATUS_PAGES.NOT_FOUND) is static HTML that never loads this script
     return false;
 }
 

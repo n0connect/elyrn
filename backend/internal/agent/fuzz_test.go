@@ -361,7 +361,43 @@ func FuzzSolveChallenge(f *testing.F) {
 	})
 }
 
+// messageTrimSamples pins the one message-text trim rule (messageTrimChars, validation.js
+// MESSAGE_TRIM_CHARS): each sample at both ends and inside, and what is sent ("" = refused).
+// frontend/tests/validation.fuzz.test.mjs holds the same table, row for row.
+var messageTrimSamples = []struct{ text, sent string }{
+	{"\u0085hi\u0085", ""}, // C1 control: not trimmed, refused
+	{"a\u0085b", ""},
+	{"\ufeffhi\ufeff", "hi"}, // byte order mark: trimmed
+	{"a\ufeffb", "a\ufeffb"},
+	{"\u00a0hi\u00a0", "hi"}, // no-break space: trimmed
+	{"a\u00a0b", "a\u00a0b"},
+	{"\u2028hi\u2028", "hi"}, // line separator: trimmed
+	{"a\u2028b", "a\u2028b"},
+	{"\u2029hi\u2029", "hi"}, // paragraph separator: trimmed
+	{"a\u2029b", "a\u2029b"},
+	{"\u200bhi\u200b", "\u200bhi\u200b"}, // zero-width space: content, kept
+	{"a\u200bb", "a\u200bb"},
+	{"\thi\t", "hi"}, // tab: trimmed, kept inside
+	{"a\tb", "a\tb"},
+	{"\r\nhi\r\n", "hi"}, // CR/LF: normalized to LF, trimmed, kept inside
+	{"a\r\nb", "a\nb"},
+	{"a\rb", "a\nb"},
+	{"\nhi\r", "hi"},
+	{" \t\r\n\u00a0\u2028\u2029\ufeff", ""}, // nothing but trimmed characters: empty, refused
+}
+
 func FuzzReceivedText(f *testing.F) {
+	for _, sample := range messageTrimSamples {
+		sent, err := ValidateMessageText(sample.text)
+		if sample.sent == "" {
+			if err == nil {
+				f.Fatalf("ValidateMessageText(%q) sent %q, want refused", sample.text, sent)
+			}
+		} else if err != nil || sent != sample.sent {
+			f.Fatalf("ValidateMessageText(%q) = %q, %v, want %q", sample.text, sent, err, sample.sent)
+		}
+		f.Add(sample.text)
+	}
 	for _, seed := range []string{
 		"hello", "  trimmed  ", "a\r\nb\rc", "tab\tand\nnewline", "bell\a", "swap\u202eme", "\u2066iso\u2069",
 		"\u0085next line", "\x7f", "\xff\xfe", "", "   ", strings.Repeat("\u00e7", MaxMessageChars),
@@ -386,7 +422,8 @@ func FuzzReceivedText(f *testing.F) {
 			return
 		}
 		n := utf8.RuneCountInString(sent)
-		if n < 1 || n > MaxMessageChars || strings.ContainsRune(sent, '\r') || strings.TrimSpace(sent) != sent || neutralize(sent) != sent {
+		if n < 1 || n > MaxMessageChars || strings.ContainsRune(sent, '\r') || neutralize(sent) != sent ||
+			sent != strings.Trim(crlfNormalizer.Replace(text), messageTrimChars) {
 			t.Fatalf("ValidateMessageText(%q) accepted %q", text, sent)
 		}
 		if again, err := ValidateMessageText(sent); err != nil || again != sent {

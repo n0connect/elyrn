@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
@@ -126,5 +127,31 @@ func TestVerifyPendingRegistrationToken_InvalidPendingID(t *testing.T) {
 	_, _, err = auth.VerifyPendingRegistrationToken(token)
 	if err == nil {
 		t.Error("VerifyPendingRegistrationToken() with non-existent pending ID should have failed")
+	}
+}
+
+// A genuine pending token verifies; its signature-malleated look-alikes never do.
+func TestVerifyPendingRegistrationToken_RefusesSignatureMalleation(t *testing.T) {
+	setupPendingJWTEnv(t)
+	t.Cleanup(auth.ResetPendingStoreForTesting)
+
+	pendingID, err := auth.GeneratePendingID()
+	if err != nil {
+		t.Fatalf("GeneratePendingID: %v", err)
+	}
+	if err := auth.StorePendingRegistration(pendingID, testutil.NewPendingIdentity(t)); err != nil {
+		t.Fatalf("StorePendingRegistration: %v", err)
+	}
+	token, err := auth.SignPendingRegistrationToken(pendingID)
+	if err != nil {
+		t.Fatalf("SignPendingRegistrationToken: %v", err)
+	}
+	if _, _, err := auth.VerifyPendingRegistrationToken(token); err != nil {
+		t.Fatalf("VerifyPendingRegistrationToken(genuine): %v", err)
+	}
+	for _, variant := range signatureMalleations(t, token) {
+		if _, _, err := auth.VerifyPendingRegistrationToken(variant); !errors.Is(err, auth.ErrInvalidToken) {
+			t.Errorf("VerifyPendingRegistrationToken(%q) = %v, want ErrInvalidToken", variant, err)
+		}
 	}
 }

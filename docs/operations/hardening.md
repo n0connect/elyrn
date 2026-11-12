@@ -103,14 +103,14 @@ being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too
 |---|---|
 | Unprivileged ports 8080 (clearnet) and 8081 (onion) | `nginx.conf` `listen` |
 | `server_tokens off`, no access log, errors at `crit` (at `error`, nginx names the client address and path in every upstream and rate-limit line; an unreachable backend shows instead as `503 E_BACKEND_UNAVAILABLE` and in the backend's healthcheck) | `nginx-site.conf` top |
-| `/api/`: the backend's answers pass through (`proxy_intercept_errors off`); nginx's own failures answer JSON with a registered code: 404 `E_EDGE_NOT_FOUND`, 405 `E_EDGE_METHOD_NOT_ALLOWED`, 413 `E_BODY_TOO_LARGE`, 429 `E_EDGE_RATE_LIMITED`, 500/502/503/504 as 503 `E_BACKEND_UNAVAILABLE`; HTML status pages for page navigation only | [nginx-api-errors.conf](../../nginx-api-errors.conf), named locations in `nginx-site.conf` |
+| `/api/`: the backend's answers pass through (`proxy_intercept_errors off`); nginx's own failures answer JSON with a registered code: 404 `E_EDGE_NOT_FOUND`, 405 `E_EDGE_METHOD_NOT_ALLOWED`, 413 `E_BODY_TOO_LARGE`, 429 `E_EDGE_RATE_LIMITED`, 500/502/503/504 as 503 `E_BACKEND_UNAVAILABLE`; the HTML 404 page for page navigation only | [nginx-api-errors.conf](../../nginx-api-errors.conf), named locations in `nginx-site.conf` |
 | Method whitelist for the whole site: GET, HEAD, POST, DELETE, OPTIONS, else 405 | `nginx-site.conf` `if ($request_method ...)` |
 | Body bound 1k outside `/api/`; per API location below | `client_max_body_size` |
 | Headers: 1k buffer, at most 4 × 8k | `client_header_buffer_size`, `large_client_header_buffers` |
 | Timeouts: header and body 10 s, send 30 s, keepalive 30 s, upstream connect 5 s | `client_*_timeout`, `send_timeout`, `keepalive_timeout`, `proxy_connect_timeout` |
 | Redirects never name the internal port | `absolute_redirect off` |
 | Dotfiles never served (first regex location) | `location ~ /\.` |
-| Path whitelist: `/`, static files, status pages, the API below; everything else 404 | `location / { return 404; }` |
+| Path whitelist: `/`, static files, the one status page (the 404 page, an exact location equal to the `error_page 404` target and `STATUS_PAGES.NOT_FOUND`, checked by `make check-hardening`), the API below; everything else 404 | `location / { return 404; }` |
 | Rate limit 20 r/s per client (burst 40), per Tor circuit behind the onion listener | `nginx.conf` `limit_req_zone`, [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
 | Onion listener open to the tor container only, PROXY header required | `nginx.conf` `allow ${TOR_IP}; deny all;` |
 | Forwarding headers set by nginx alone | [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |

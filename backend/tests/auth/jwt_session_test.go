@@ -1,7 +1,11 @@
 package auth
 
 import (
+	"bytes"
+	"encoding/base64"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +24,40 @@ func signWithServerSecret(t testing.TB, claims auth.Claims) string {
 		t.Fatalf("SignedString: %v", err)
 	}
 	return token
+}
+
+// base64URLAlphabet is RFC 4648 section 5's alphabet in index order
+const base64URLAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+// signatureMalleations are look-alikes of a genuine token that a lenient decoder reads as the
+// same signature: the last signature character with its unused low bit flipped (an HS256
+// signature is 32 bytes, so its 43rd character carries two unused bits), and CR/LF inserted
+// into the signature (Go's base64 skips them). Each must be refused.
+func signatureMalleations(t testing.TB, genuine string) []string {
+	t.Helper()
+	cut := strings.LastIndex(genuine, ".")
+	if cut < 0 || cut == len(genuine)-1 {
+		t.Fatalf("token %q has no signature segment", genuine)
+	}
+	last := len(genuine) - 1
+	index := strings.IndexByte(base64URLAlphabet, genuine[last])
+	if index < 0 {
+		t.Fatalf("token %q ends outside the base64url alphabet", genuine)
+	}
+	flipped := genuine[:last] + string(base64URLAlphabet[index^1])
+	want, err := base64.RawURLEncoding.DecodeString(genuine[cut+1:])
+	if err != nil {
+		t.Fatalf("genuine signature does not decode: %v", err)
+	}
+	if got, err := base64.RawURLEncoding.DecodeString(flipped[cut+1:]); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("flipped signature no longer decodes leniently to the same bytes (%v)", err)
+	}
+	return []string{
+		flipped,
+		genuine[:last] + "\n" + genuine[last:],
+		genuine[:last] + "\r\n" + genuine[last:],
+		genuine[:cut+1] + "\n" + genuine[cut+1:],
+	}
 }
 
 func serverClaims(subject string, epoch int) auth.Claims {
@@ -104,5 +142,23 @@ func TestTokens_PendingAndSessionAreNotInterchangeable(t *testing.T) {
 	}
 	if _, _, err := auth.VerifyPendingRegistrationToken(session); err == nil {
 		t.Fatal("session token accepted as a pending registration")
+	}
+}
+
+// A genuine session token verifies; its signature-malleated look-alikes never do.
+func TestVerifyToken_RefusesSignatureMalleation(t *testing.T) {
+	setupPendingJWTEnv(t)
+
+	token, err := auth.SignToken(testutil.NewInternalID(t), 0)
+	if err != nil {
+		t.Fatalf("SignToken: %v", err)
+	}
+	if _, err := auth.VerifyToken(token); err != nil {
+		t.Fatalf("VerifyToken(genuine): %v", err)
+	}
+	for _, variant := range signatureMalleations(t, token) {
+		if _, err := auth.VerifyToken(variant); !errors.Is(err, auth.ErrInvalidToken) {
+			t.Errorf("VerifyToken(%q) = %v, want ErrInvalidToken", variant, err)
+		}
 	}
 }

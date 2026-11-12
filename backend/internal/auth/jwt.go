@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"elyrn/internal/config"
@@ -19,6 +20,12 @@ var (
 
 // MaxTokenBytes bounds what the JWT parser ever sees; a genuine token is ~250 bytes
 const MaxTokenBytes = 1024
+
+// compactSegments is the number of segments of a compact JWS: header, payload, signature
+const compactSegments = 3
+
+// segmentSeparator joins the segments of a compact JWS
+const segmentSeparator = "."
 
 // pendingSubject marks pending-registration tokens; it can never be a valid user id
 const pendingSubject = "pending_registration"
@@ -166,35 +173,9 @@ func SignPendingRegistrationToken(pendingID string) (string, error) {
 // pending registration token or is invalid/expired. The entry stays until the caller
 // completes it (CompletePendingRegistration) once the account exists.
 func VerifyPendingRegistrationToken(tokenString string) (string, PendingIdentity, error) {
-	if len(tokenString) == 0 || len(tokenString) > MaxTokenBytes {
-		return "", PendingIdentity{}, ErrInvalidToken
-	}
-
-	secret, issuer, audience, err := getJWTBaseConfig()
+	token, err := parseServerToken("VerifyPendingRegistrationToken", tokenString, &PendingRegistrationClaims{})
 	if err != nil {
-		jwtLogger.Error("VerifyPendingRegistrationToken: %v", err)
 		return "", PendingIdentity{}, err
-	}
-
-	token, err := jwt.ParseWithClaims(tokenString, &PendingRegistrationClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			jwtLogger.Warn("VerifyPendingRegistrationToken: unexpected signing method: %v", token.Method.Alg())
-			return nil, errors.New("unexpected signing method")
-		}
-		return []byte(secret), nil
-	}, jwt.WithValidMethods([]string{"HS256"}),
-		jwt.WithIssuer(issuer),
-		jwt.WithAudience(audience),
-		jwt.WithExpirationRequired(),
-	)
-
-	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) {
-			jwtLogger.Warn("VerifyPendingRegistrationToken: token expired")
-			return "", PendingIdentity{}, ErrExpiredToken
-		}
-		jwtLogger.Warn("VerifyPendingRegistrationToken: invalid token")
-		return "", PendingIdentity{}, ErrInvalidToken
 	}
 
 	claims, ok := token.Claims.(*PendingRegistrationClaims)
@@ -225,38 +206,9 @@ func VerifyPendingRegistrationToken(tokenString string) (string, PendingIdentity
 // VerifyToken verifies a JWT token and returns the session it carries
 // Security: Validates signing method, issuer, audience, expiration and the subject's exact shape
 func VerifyToken(tokenString string) (*Session, error) {
-	if len(tokenString) == 0 || len(tokenString) > MaxTokenBytes {
-		return nil, ErrInvalidToken
-	}
-
-	secret, issuer, audience, err := getJWTBaseConfig()
+	token, err := parseServerToken("VerifyToken", tokenString, &Claims{})
 	if err != nil {
-		jwtLogger.Error("VerifyToken: %v", err)
 		return nil, err
-	}
-
-	// Parse with explicit validation options
-	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		// CRITICAL: Validate signing method to prevent algorithm confusion attacks
-		// Only accept HMAC (HS256/HS384/HS512), reject RS256, ES256, none, etc.
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			jwtLogger.Warn("VerifyToken: unexpected signing method: %v", token.Method.Alg())
-			return nil, errors.New("unexpected signing method")
-		}
-		return []byte(secret), nil
-	}, jwt.WithValidMethods([]string{"HS256"}), // Explicitly allow only HS256
-		jwt.WithIssuer(issuer),       // Validate issuer
-		jwt.WithAudience(audience),   // Validate audience
-		jwt.WithExpirationRequired(), // Require expiration
-	)
-
-	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) {
-			jwtLogger.Warn("VerifyToken: token expired")
-			return nil, ErrExpiredToken
-		}
-		jwtLogger.Warn("VerifyToken: invalid token")
-		return nil, ErrInvalidToken
 	}
 
 	claims, ok := token.Claims.(*Claims)
@@ -272,4 +224,66 @@ func VerifyToken(tokenString string) (*Session, error) {
 	}
 
 	return &Session{UserUUID: claims.Subject, SessionEpoch: claims.SessionEpoch, IssuedAt: claims.IssuedAt.Time}, nil
+}
+
+// wellFormedToken reports whether s has the exact shape of a compact JWS the server signs:
+// at most MaxTokenBytes, exactly three non-empty segments of the unpadded base64url alphabet.
+// Go's base64 decoders skip CR and LF even in strict mode, so the alphabet is whitelisted
+// before anything is decoded; strict decoding (parseServerToken) then refuses non-zero unused
+// bits, so exactly one string carries a given signature.
+func wellFormedToken(s string) bool {
+	if len(s) == 0 || len(s) > MaxTokenBytes {
+		return false
+	}
+	segments := strings.Split(s, segmentSeparator)
+	if len(segments) != compactSegments {
+		return false
+	}
+	for _, segment := range segments {
+		if !utils.IsBase64URL(segment) {
+			return false
+		}
+	}
+	return true
+}
+
+// parseServerToken is the one parse path of every token the server verifies (session and
+// pending): the shape whitelist, then HS256 under the server's secret, issuer and audience
+// with strict base64url decoding and a required expiry. Every refusal is ErrInvalidToken
+// (ErrExpiredToken for a genuine but expired token), the same public answer whatever the cause.
+func parseServerToken(op, tokenString string, claims jwt.Claims) (*jwt.Token, error) {
+	if !wellFormedToken(tokenString) {
+		jwtLogger.Warn("%s: malformed token", op)
+		return nil, ErrInvalidToken
+	}
+
+	secret, issuer, audience, err := getJWTBaseConfig()
+	if err != nil {
+		jwtLogger.Error("%s: %v", op, err)
+		return nil, err
+	}
+
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		// CRITICAL: Validate signing method to prevent algorithm confusion attacks
+		// Only accept HMAC (HS256/HS384/HS512), reject RS256, ES256, none, etc.
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			jwtLogger.Warn("%s: unexpected signing method: %v", op, token.Method.Alg())
+			return nil, errors.New("unexpected signing method")
+		}
+		return []byte(secret), nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), // Explicitly allow only HS256
+		jwt.WithIssuer(issuer),       // Validate issuer
+		jwt.WithAudience(audience),   // Validate audience
+		jwt.WithExpirationRequired(), // Require expiration
+		jwt.WithStrictDecoding(),     // Canonical base64url only: no non-zero unused bits
+	)
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			jwtLogger.Warn("%s: token expired", op)
+			return nil, ErrExpiredToken
+		}
+		jwtLogger.Warn("%s: invalid token", op)
+		return nil, ErrInvalidToken
+	}
+	return token, nil
 }

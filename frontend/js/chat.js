@@ -727,7 +727,7 @@ const Chat = (() => {
         const typed = input.value;
         const validation = validateMessageText(typed);
         if (!validation.valid) {
-            if (input.value.trim() !== '') Errors.report(validation.error, validation.params);
+            if (validation.error !== Errors.CODES.E_MESSAGE_EMPTY) Errors.report(validation.error, validation.params);
             return;
         }
 

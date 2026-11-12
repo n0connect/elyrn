@@ -12,6 +12,29 @@ const ACCOUNT_NUMBER_REGEX = new RegExp('^[A-Za-z0-9_-]{' + ACCOUNT_NUMBER_LEN +
 // Control characters other than \n and \t (C0, DEL, C1) plus bidi overrides
 const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F‪-‮⁦-⁩]/;
 
+// The only characters trimmed from either end of a message: ECMAScript's WhiteSpace and
+// LineTerminator (what String.prototype.trim strips), spelled out so the rule never depends on
+// the engine's Unicode version. The agent trims exactly this set (backend/internal/agent
+// messages.go messageTrimChars, compared by frontend/tests/validation.fuzz.test.mjs). U+0085 is
+// not in it (a C1 control, refused below) and neither is U+200B (content).
+const MESSAGE_TRIM_CHARS = '\t\n\v\f\r \u00A0\u1680' +
+    '\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A' +
+    '\u2028\u2029\u202F\u205F\u3000\uFEFF';
+
+/**
+ * Removes MESSAGE_TRIM_CHARS from both ends (a linear scan: a regular expression anchored at
+ * the end would be quadratic on a long inner run of spaces)
+ * @param {string} text
+ * @returns {string}
+ */
+function trimMessageText(text) {
+    let start = 0;
+    let end = text.length;
+    while (start < end && MESSAGE_TRIM_CHARS.includes(text[start])) start++;
+    while (end > start && MESSAGE_TRIM_CHARS.includes(text[end - 1])) end--;
+    return text.slice(start, end);
+}
+
 /**
  * Validates a chat message before encryption
  * @param {string} input - Raw composer value
@@ -22,7 +45,7 @@ function validateMessageText(input) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_INVALID };
     }
 
-    const normalized = input.replace(/\r\n?/g, '\n').trim();
+    const normalized = trimMessageText(input.replace(/\r\n?/g, '\n'));
 
     if (normalized.length === 0) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_EMPTY };

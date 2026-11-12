@@ -5,7 +5,7 @@
 // Run: node --test frontend/tests/*.fuzz.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fuzz, load, goPatterns, goBase64Exact } from './fuzz-helpers.mjs';
+import { fuzz, load, goPatterns, goBase64Exact, goMessageTrimChars } from './fuzz-helpers.mjs';
 
 const SEED = 0x5eed0001;
 const MESSAGE_ITERATIONS = 3000;
@@ -27,6 +27,31 @@ const FORBIDDEN = get('FORBIDDEN_TEXT_CHARS');
 const go = goPatterns();
 const GO_UUID = new RegExp(go.exprUUIDv4);
 
+// The one message-text trim rule (validation.js MESSAGE_TRIM_CHARS, the agent's messageTrimChars):
+// each sample at both ends and inside, and what is sent ('' = refused). The agent's
+// FuzzReceivedText (backend/internal/agent/fuzz_test.go messageTrimSamples) holds the same table.
+const MESSAGE_TRIM_SAMPLES = [
+    ['\u0085hi\u0085', ''], // C1 control: not trimmed, refused
+    ['a\u0085b', ''],
+    ['\uFEFFhi\uFEFF', 'hi'], // byte order mark: trimmed
+    ['a\uFEFFb', 'a\uFEFFb'],
+    ['\u00A0hi\u00A0', 'hi'], // no-break space: trimmed
+    ['a\u00A0b', 'a\u00A0b'],
+    ['\u2028hi\u2028', 'hi'], // line separator: trimmed
+    ['a\u2028b', 'a\u2028b'],
+    ['\u2029hi\u2029', 'hi'], // paragraph separator: trimmed
+    ['a\u2029b', 'a\u2029b'],
+    ['\u200Bhi\u200B', '\u200Bhi\u200B'], // zero-width space: content, kept
+    ['a\u200Bb', 'a\u200Bb'],
+    ['\thi\t', 'hi'], // tab: trimmed, kept inside
+    ['a\tb', 'a\tb'],
+    ['\r\nhi\r\n', 'hi'], // CR/LF: normalized to LF, trimmed, kept inside
+    ['a\r\nb', 'a\nb'],
+    ['a\rb', 'a\nb'],
+    ['\nhi\r', 'hi'],
+    [' \t\r\n\u00A0\u2028\u2029\uFEFF', ''], // nothing but trimmed characters: empty, refused
+];
+
 const registered = (code) => typeof code === 'string' && Object.prototype.hasOwnProperty.call(Errors.REGISTRY, code);
 
 // A valid invite or room code, under a random prefix choice, for the mutator to start from
@@ -38,8 +63,24 @@ function validCode(r) {
     return r.pick(R.CODE_PREFIXES) + R.buildRoomCode(code).slice(R.CODE_PREFIX.length);
 }
 
+test('message trim rule: the browser trims exactly the agent\'s set, and the shared samples agree', () => {
+    const trimChars = get('MESSAGE_TRIM_CHARS');
+    assert.equal(trimChars, goMessageTrimChars(), 'validation.js MESSAGE_TRIM_CHARS differs from messages.go messageTrimChars');
+    const validate = get('validateMessageText');
+    for (const [text, sent] of MESSAGE_TRIM_SAMPLES) {
+        const result = validate(text);
+        if (sent === '') {
+            assert.equal(result.valid, false, `${JSON.stringify(text)} was sent as ${JSON.stringify(result.sanitized)}`);
+        } else {
+            assert.equal(result.valid, true, `${JSON.stringify(text)} refused: ${result.error}`);
+            assert.equal(result.sanitized, sent);
+        }
+    }
+});
+
 test('validateMessageText: never throws; what it accepts is clean, bounded and re-validates to itself', async () => {
     const validate = get('validateMessageText');
+    const trimMessage = get('trimMessageText');
     await fuzz(SEED, MESSAGE_ITERATIONS, (r) => {
         const input = r.bool(0.9) ? r.string() : r.value();
         const result = validate(input);
@@ -53,7 +94,8 @@ test('validateMessageText: never throws; what it accepts is clean, bounded and r
         assert.ok(chars >= 1 && chars <= MAX_MESSAGE_CHARS, `${chars} characters accepted`);
         assert.equal(FORBIDDEN.test(text), false, 'a forbidden character was accepted');
         assert.equal(text.includes('\r'), false);
-        assert.equal(text.trim(), text);
+        // exactly the CRLF-normalized input, trimmed of MESSAGE_TRIM_CHARS and nothing else
+        assert.equal(text, trimMessage(input.replace(/\r\n?/g, '\n')));
         assert.equal(result.error, '');
         const again = validate(text);
         assert.equal(again.valid, true);

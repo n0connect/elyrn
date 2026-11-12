@@ -5,7 +5,9 @@ Usage (make check-hardening): docker compose ... config --format json | python3 
 The rendered config holds values from .env (secrets among them): this script prints service,
 key and variable names only, never a value from the input. It also reads the nginx files and
 two backend sources from the repository (no secrets there): nginx's own /api/ answers must be
-the ones registered in backend/internal/apperr/edge.go, and the backend's stop grace must
+the ones registered in backend/internal/apperr/edge.go, the 404 page must be the only status
+page (nginx's error_page 404 target, its one HTML location, frontend/js/utils.js
+STATUS_PAGES.NOT_FOUND and the only HTML file in frontend/ besides index.html), and the backend's stop grace must
 outlast its shutdown budget in backend/cmd/server/main.go. Exit 0 when every control holds, 1
 with one line per failure otherwise, 2 on unusable input.
 """
@@ -71,6 +73,16 @@ APPERR_GO = ROOT / "backend/internal/apperr/apperr.go"
 EDGE_GO = ROOT / "backend/internal/apperr/edge.go"
 NGINX_SITE = ROOT / "nginx-site.conf"
 NGINX_API_ERRORS = ROOT / "nginx-api-errors.conf"
+FRONTEND = ROOT / "frontend"
+UTILS_JS = FRONTEND / "js/utils.js"
+# The SPA's page; every other HTML file in frontend/ is a status page
+SPA_PAGE = "index.html"
+# The one status page: nginx's error_page 404 target, served by an exact location, and the page
+# frontend/js/utils.js sends an unknown route to
+ERROR_PAGE_404 = re.compile(r"^error_page 404 (/[\w-]+\.html);$", re.MULTILINE)
+# The opening line of every location that names an HTML file
+HTML_LOCATION = re.compile(r"^location [^{\n]*html[^{\n]*\{", re.MULTILINE)
+NOT_FOUND_PAGE = re.compile(r"NOT_FOUND: '(/[\w-]+\.html)'")
 API_PROXY_INCLUDE = "include /etc/nginx/elyrn/api-proxy.conf;"
 API_ERRORS_INCLUDE = "include /etc/nginx/elyrn/api-errors.conf;"
 API_DEFAULT_DENY = "location /api/ { " + API_ERRORS_INCLUDE + " return 404; }"
@@ -250,6 +262,25 @@ def check_nginx():
     missing = set(answers) - {json.loads(b).get("code") for _, b in returned if b.startswith("{")}
     if missing:
         fail("nginx", "registered edge answers nginx never returns: " + ", ".join(sorted(missing)))
+    check_status_pages(site)
+
+
+def check_status_pages(site):
+    """The 404 page is the only status page: nginx's error_page 404 target, the one location that
+    serves a status page (exactly that URI), the page the app redirects to, and the only HTML file
+    in frontend/ besides the SPA's own."""
+    target = ERROR_PAGE_404.findall(site)
+    if len(target) != 1:
+        fail("nginx", "nginx-site.conf must name exactly one error_page 404 target")
+        return
+    page = target[0]
+    if HTML_LOCATION.findall(site) != [f"location = {page} {{"]:
+        fail("nginx", f"the only status-page location must be the exact location of {page}")
+    if NOT_FOUND_PAGE.findall(read(UTILS_JS)) != [page]:
+        fail("frontend", f"utils.js STATUS_PAGES.NOT_FOUND must be {page}")
+    pages = sorted("/" + p.name for p in FRONTEND.glob("*.html") if p.name != SPA_PAGE)
+    if pages != [page]:
+        fail("frontend", "the only status page in frontend/ must be the 404 page; found: " + ", ".join(pages))
 
 
 def check_backend_memory(svc):
