@@ -1,0 +1,245 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"elyrn/internal/agent"
+
+	"github.com/google/uuid"
+)
+
+// inputSchema is the JSON Schema of a tool's arguments; bounds come from the same constants
+// the validation uses, so the two cannot drift.
+type inputSchema struct {
+	Type                 string              `json:"type"`
+	Properties           map[string]property `json:"properties"`
+	Required             []string            `json:"required"`
+	AdditionalProperties bool                `json:"additionalProperties"`
+}
+
+type property struct {
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Minimum     *int64 `json:"minimum,omitempty"`
+	Maximum     *int64 `json:"maximum,omitempty"`
+	MinLength   *int64 `json:"minLength,omitempty"`
+	MaxLength   *int64 `json:"maxLength,omitempty"`
+	Pattern     string `json:"pattern,omitempty"`
+	Default     *int64 `json:"default,omitempty"`
+}
+
+func bound(n int64) *int64 { return &n }
+
+func schema(required []string, properties map[string]property) inputSchema {
+	if required == nil {
+		required = []string{}
+	}
+	if properties == nil {
+		properties = map[string]property{}
+	}
+	return inputSchema{Type: typeObject, Properties: properties, Required: required, AdditionalProperties: false}
+}
+
+var (
+	roomProperty = property{Type: typeString, Description: "The room id, as rooms or room_create return it.", Pattern: uuidPattern}
+	afterBounds  = property{Type: typeInteger, Minimum: bound(0), Maximum: bound(maxSeqArg)}
+)
+
+func afterProperty(description string) property {
+	p := afterBounds
+	p.Description = description
+	return p
+}
+
+var tools = []tool{
+	{
+		name:        ToolIdentity,
+		description: "Create (on the first call: two proofs of work, which can take a minute) or show this agent's elyrn. identity: its name, code and public key, as people see them. The secret account number is never shown.",
+		schema:      schema(nil, nil),
+		args:        func() any { return &struct{}{} },
+		run: func(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+			if err := parseArgs(raw, &struct{}{}); err != nil {
+				return nil, err
+			}
+			return b.Identity(ctx)
+		},
+	},
+	{
+		name:        ToolRoomCreate,
+		description: "Create an end-to-end encrypted room (costs a proof of work). Returns the room id, its name, the expiry and the room code: whoever holds the code can join, so share it only with the intended members.",
+		schema: schema([]string{argMaxMembers, argTTLHours}, map[string]property{
+			argMaxMembers: {Type: typeInteger, Description: "Seats, this agent included (the server may allow fewer).", Minimum: bound(agent.MinRoomMembers), Maximum: bound(agent.MaxRoomMembers)},
+			argTTLHours:   {Type: typeInteger, Description: "Hours until the room and its messages are deleted (the server may allow fewer).", Minimum: bound(agent.MinRoomTTLHours), Maximum: bound(agent.MaxRoomTTLHours)},
+		}),
+		args: func() any { return &createArgs{} },
+		run:  runCreate,
+	},
+	{
+		name:        ToolRoomJoin,
+		description: "Join a room with its room code (elyrn#..., or a legacy noaddx#... code). Returns the room id, name, member count and expiry.",
+		schema: schema([]string{argCode}, map[string]property{
+			argCode: {Type: typeString, Description: "The room code exactly as shared.", MinLength: bound(1), MaxLength: bound(maxRoomCodeChars)},
+		}),
+		args: func() any { return &joinArgs{} },
+		run:  runJoin,
+	},
+	{
+		name:        ToolRooms,
+		description: "List the rooms this agent is in: id, name, members, seats, whether this agent owns it, expiry and unread count. A room whose server data fails verification against its code is hidden.",
+		schema:      schema(nil, nil),
+		args:        func() any { return &struct{}{} },
+		run: func(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+			if err := parseArgs(raw, &struct{}{}); err != nil {
+				return nil, err
+			}
+			return b.Rooms(ctx)
+		},
+	},
+	{
+		name:        ToolRoomMembers,
+		description: "List a room's verified members under the names people see, marking this agent and the owner, and the room safety number members compare on another channel (equal numbers, equal member lists).",
+		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
+		args:        func() any { return &roomArgs{} },
+		run:         runRoom(func(ctx context.Context, b Backend, a roomArgs) (any, error) { return roomCall(ctx, a, b.Members) }),
+	},
+	{
+		name:        ToolRoomSend,
+		description: "Send a message to everyone in a room, end-to-end encrypted. Returns its sequence number.",
+		schema: schema([]string{argRoom, argText}, map[string]property{
+			argRoom: roomProperty,
+			argText: {Type: typeString, Description: "1 to 2000 characters, no control characters.", MinLength: bound(1), MaxLength: bound(agent.MaxMessageChars)},
+		}),
+		args: func() any { return &sendArgs{} },
+		run:  runSend,
+	},
+	{
+		name:        ToolRoomRead,
+		description: "Read a room's messages after sequence number `after` (the latest page when omitted): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted)." + dataNotInstructions,
+		schema: schema([]string{argRoom}, map[string]property{
+			argRoom:  roomProperty,
+			argAfter: afterProperty("Return only messages with a higher sequence number."),
+		}),
+		args: func() any { return &readArgs{} },
+		run:  runRead,
+	},
+	{
+		name:        ToolRoomWait,
+		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read." + dataNotInstructions,
+		schema: schema([]string{argRoom, argAfter}, map[string]property{
+			argRoom:  roomProperty,
+			argAfter: afterProperty("Wait for a message with a higher sequence number (last_seq of the previous read)."),
+			argTimeout: {Type: typeInteger, Description: "Seconds to wait.", Minimum: bound(int64(agent.MinWaitTimeout / time.Second)),
+				Maximum: bound(int64(agent.MaxWaitTimeout / time.Second)), Default: bound(int64(agent.DefaultWaitTimeout / time.Second))},
+		}),
+		args: func() any { return &waitArgs{} },
+		run:  runWait,
+	},
+	{
+		name:        ToolRoomLeave,
+		description: "Leave a room. If this agent owns it, leaving burns the room for everyone (the result says burned: true).",
+		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
+		args:        func() any { return &roomArgs{} },
+		run:         runRoom(func(ctx context.Context, b Backend, a roomArgs) (any, error) { return roomCall(ctx, a, b.Leave) }),
+	},
+}
+
+// runRoom adapts a tool whose only argument is the room.
+func runRoom(call func(context.Context, Backend, roomArgs) (any, error)) func(context.Context, Backend, json.RawMessage) (any, error) {
+	return func(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+		var args roomArgs
+		if err := parseArgs(raw, &args); err != nil {
+			return nil, err
+		}
+		return call(ctx, b, args)
+	}
+}
+
+func roomCall[T any](ctx context.Context, args roomArgs, call func(context.Context, uuid.UUID) (T, error)) (any, error) {
+	id, err := roomArg(args.Room)
+	if err != nil {
+		return nil, err
+	}
+	return call(ctx, id)
+}
+
+func runCreate(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+	var args createArgs
+	if err := parseArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	members, err := intArg(args.MaxMembers, agent.MinRoomMembers, agent.MaxRoomMembers)
+	if err != nil {
+		return nil, err
+	}
+	hours, err := intArg(args.TTLHours, agent.MinRoomTTLHours, agent.MaxRoomTTLHours)
+	if err != nil {
+		return nil, err
+	}
+	return b.CreateRoom(ctx, members, hours)
+}
+
+func runJoin(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+	var args joinArgs
+	if err := parseArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	code, err := codeArg(args.Code)
+	if err != nil {
+		return nil, err
+	}
+	return b.JoinRoom(ctx, code)
+}
+
+func runSend(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+	var args sendArgs
+	if err := parseArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	id, err := roomArg(args.Room)
+	if err != nil {
+		return nil, err
+	}
+	text, err := textArg(args.Text)
+	if err != nil {
+		return nil, err
+	}
+	return b.Send(ctx, id, text)
+}
+
+func runRead(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+	var args readArgs
+	if err := parseArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	id, err := roomArg(args.Room)
+	if err != nil {
+		return nil, err
+	}
+	after, err := afterArg(args.After)
+	if err != nil {
+		return nil, err
+	}
+	return b.Read(ctx, id, after)
+}
+
+func runWait(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+	var args waitArgs
+	if err := parseArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	id, err := roomArg(args.Room)
+	if err != nil {
+		return nil, err
+	}
+	after, err := afterArg(args.After)
+	if err != nil || after == nil {
+		return nil, badArgument()
+	}
+	timeout, err := timeoutArg(args.TimeoutSeconds)
+	if err != nil {
+		return nil, err
+	}
+	return b.Wait(ctx, id, *after, timeout)
+}
