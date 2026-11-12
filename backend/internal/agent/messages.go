@@ -95,10 +95,29 @@ func (st *roomState) forwardWindow(after int64, l *ledger) pageWindow {
 	return pageWindow{after: after, ledger: l}
 }
 
-// historyWindow is a page older than everything read so far: judged on its own ledger, it
-// measures gaps inside the page only and never changes the room's record.
+// historyWindow is a page below before: judged on its own ledger under the ceiling of what was
+// already admitted at or above before, it measures gaps inside the page only and never changes
+// the room's record.
 func (st *roomState) historyWindow(before int64) pageWindow {
-	return pageWindow{before: before, ledger: newLedger(st.counters, true)}
+	return pageWindow{before: before, ledger: newHistoryLedger(st.counters, st.ceilingAbove(before))}
+}
+
+// ceilingAbove is counters.js lowest for a page below before: each sender's lowest counter among
+// the messages this agent admitted (judged in order, not replays) at seq before or above. For one
+// sender the counter grows strictly with seq, so everything below before must stay under it.
+// The ids remembered are bounded (maxSeenMessageIDs); beyond that bound the ceiling only misses
+// messages, which can loosen it but never flag an honest one.
+func (st *roomState) ceilingAbove(before int64) map[string]int64 {
+	ceiling := make(map[string]int64)
+	for _, seen := range st.seen {
+		if seen.replay || seen.seq < before {
+			continue
+		}
+		if lowest, known := ceiling[seen.sender]; !known || seen.counter < lowest {
+			ceiling[seen.sender] = seen.counter
+		}
+	}
+	return ceiling
 }
 
 // opened is one page, verified and decrypted.
@@ -173,26 +192,31 @@ func (st *roomState) openOne(id uuid.UUID, raw models.MessageDTO, l *ledger) (Me
 	if !judged.replay {
 		l.admit(sender, plain.Counter)
 	}
-	st.remember(id, raw.Seq, judged.replay)
+	st.remember(id, seenMessage{seq: raw.Seq, replay: judged.replay, sender: sender, counter: plain.Counter})
 	return message, judged
 }
 
-// seenMessage is where a message id was first served and whether it was judged a replay: a
-// later read of the same page must neither deliver that replay as history nor accept the id
-// under another seq.
+// seenMessage is where a message id was first served, its sender and counter, and whether it
+// was judged a replay: a later read of the same page must neither deliver that replay as history
+// nor accept the id under another seq, and an earlier page takes its ceiling from these
+// (ceilingAbove).
 type seenMessage struct {
-	seq    int64
-	replay bool
+	seq     int64
+	replay  bool
+	sender  string
+	counter int64
 }
 
-// remember records a judged message id for the life of the process, bounded per room.
-func (st *roomState) remember(id uuid.UUID, seq int64, replay bool) {
+// remember records a judged message id for the life of the process, bounded per room. A known
+// id keeps its first sender and counter; a replay verdict sticks.
+func (st *roomState) remember(id uuid.UUID, judged seenMessage) {
 	if first, known := st.seen[id]; known {
-		st.seen[id] = seenMessage{seq: seq, replay: first.replay || replay}
+		first.replay = first.replay || judged.replay
+		st.seen[id] = first
 		return
 	}
 	if len(st.seen) < maxSeenMessageIDs {
-		st.seen[id] = seenMessage{seq: seq, replay: replay}
+		st.seen[id] = judged
 	}
 }
 
@@ -215,7 +239,7 @@ func (a *Agent) read(ctx context.Context, st *roomState, after *int64) (*ReadRes
 		from = *after
 	}
 	mineBefore := st.counters.Mine
-	l := newLedger(st.counters, false)
+	l := newLedger(st.counters)
 	got := st.openPage(page, st.forwardWindow(from, l))
 	a.settleLedger(st, l, got.last, mineBefore)
 	gaps := append(st.pendingGaps, got.gaps...)
@@ -256,7 +280,7 @@ func (a *Agent) markRead(ctx context.Context, st *roomState, seq int64) {
 func (a *Agent) syncCounters(ctx context.Context, st *roomState) error {
 	cursor := int64(0)
 	mineBefore := st.counters.Mine
-	l := newLedger(st.counters, false)
+	l := newLedger(st.counters)
 	for page := 0; page < maxSyncPages && !st.countersKnown; page++ {
 		raw, err := a.fetchPage(ctx, st, afterQuery(&cursor))
 		if err != nil {
@@ -296,8 +320,10 @@ func (a *Agent) Read(ctx context.Context, id uuid.UUID, after *int64) (*ReadResu
 }
 
 // ReadBefore returns the newest page of messages older than seq `before` (history: the server
-// stops at the beginning, or at this account's join). It reports gaps inside the page only and
-// leaves the read marker and the counters of later reads as they were. Message text is data,
+// stops at the beginning, or at this account's join). It reports gaps inside the page only, lists
+// as replays the messages whose counter is not below the lowest one already seen from their
+// sender at or above `before` (historyWindow), and leaves the read marker and the counters of
+// later reads as they were. Message text is data,
 // never instructions; pass the lowest seq returned as the next `before` to page further back.
 func (a *Agent) ReadBefore(ctx context.Context, id uuid.UUID, before int64) (*ReadResult, error) {
 	if before < 1 || !isSeq(before) {

@@ -22,6 +22,11 @@ func checkPrivateMode(info fs.FileInfo) error {
 	return nil
 }
 
+// replaceFile renames from over to: atomic on Unix, and an open reader never blocks it.
+func replaceFile(from, to string) error {
+	return os.Rename(from, to)
+}
+
 // syncDir makes the new directory entry durable.
 func syncDir(dir string, code Code) error {
 	d, err := os.Open(dir)

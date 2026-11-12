@@ -83,8 +83,17 @@ it. Counters follow the browser's `counters.js`: the agent's own next counter is
 `max(remembered, rebuilt from the visible messages) + 1`, written to `agent.counters.json`
 before the message is sent, and each sender's last counter is remembered there too, so a
 replayed or reordered message is reported in `replays` (without its text) and never delivered
-as new, across restarts as well. A registration interrupted between its two phases keeps its
-pending token in the identity file and is finished by the next call.
+as new, across restarts as well. A history page (`before`) is judged as `counters.js`
+`history`/`lowest` judge an earlier page: each sender's counter must stay below the lowest one
+already seen from that sender at or above `before`. The server is untrusted, so a room's record
+is never pruned because a listing omitted the room or the server answered 404 for it: only once
+the room's own expiry (from its verified code) lies more than a day in the past, when the room is
+hidden too, or once the agent itself left or burned it. Past 1024 records the ones whose rooms
+expire soonest are evicted (`E_AGENT_STATE_EVICTED`). nginx's own `/api/` answers are told apart
+by their `code` field: an edge refusal (`E_EDGE_*`, `E_BODY_TOO_LARGE`) is
+`E_AGENT_SERVER_ROUTE`, never "room gone"; `E_BACKEND_UNAVAILABLE` is a passing
+`E_AGENT_SERVER_BUSY`. A registration interrupted between its two phases keeps its pending token
+in the identity file and is finished by the next call.
 
 ## The browser
 

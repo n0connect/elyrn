@@ -51,11 +51,15 @@ func (a *Agent) openEvents(ctx context.Context) (*eventStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	stream := &eventStream{resp: resp, reader: bufio.NewReaderSize(resp.Body, maxSSELineBytes)}
 	if resp.StatusCode != http.StatusOK {
-		stream.close()
-		return nil, statusError(resp.StatusCode)
+		defer resp.Body.Close()
+		ans, err := readAnswer(resp)
+		if err != nil {
+			return nil, err
+		}
+		return nil, failedAnswer(ans)
 	}
+	stream := &eventStream{resp: resp, reader: bufio.NewReaderSize(resp.Body, maxSSELineBytes)}
 	if !strings.HasPrefix(resp.Header.Get(headerContentType), mimeEventStream) {
 		stream.close()
 		return nil, fail(CodeServerAnswer, nil)

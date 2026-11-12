@@ -10,14 +10,23 @@ package agent
 //     sender's highest counter at that point: a message above that seq must carry a counter
 //     above the sender's remembered one. At or below it, the message is history already seen
 //     and only rule 1 applies, so reading the same page again is not a replay.
-// A gap is a counter more than one above the sender's last. A history page (before) is judged
-// on its own: gaps inside the page only, and it never changes the record.
+// A gap is a counter more than one above the sender's last.
+//
+// Earlier pages (before), as counters.js EARLIER PAGES: each page is judged on its own ledger
+// (newHistoryLedger, counters.js history): rule 1 inside the page, rule 2 against the record,
+// and each sender's counter must stay below the lowest one already known for that sender above
+// the page (its ceiling: roomState.ceilingAbove, counters.js lowest); at or above it is a replay
+// or a reorder. A gap is measured inside the page only, and a history ledger never changes the
+// record.
 
-// counterRecord is what the agent remembers of one room (persisted in the state file).
+// counterRecord is what the agent remembers of one room (persisted in the state file). Expires is
+// the room's own expiry (unix seconds) from its verified code: the only fact a record is pruned
+// on (state.go); 0 in a record written before it was kept.
 type counterRecord struct {
-	Seq     int64            `json:"seq"`     // highest seq processed by a forward read
-	Mine    int64            `json:"mine"`    // highest counter this account spent or was seen to send
-	Senders map[string]int64 `json:"senders"` // member public key (base64url) → highest counter
+	Seq     int64            `json:"seq"`               // highest seq processed by a forward read
+	Mine    int64            `json:"mine"`              // highest counter this account spent or was seen to send
+	Senders map[string]int64 `json:"senders"`           // member public key (base64url) → highest counter
+	Expires int64            `json:"expires,omitempty"` // the room's expiry from its code, unix seconds
 }
 
 func newCounterRecord() *counterRecord {
@@ -30,30 +39,45 @@ type verdict struct {
 	gap    int64
 }
 
-// ledger is one loaded sequence judged against record (which it never changes itself).
+// ledger is one loaded sequence judged against record (which it never changes itself). ceiling
+// is nil for a forward sequence; for an earlier page it holds each sender's lowest counter known
+// above the page, and is never nil (an empty ceiling still marks a history ledger).
 type ledger struct {
 	record  *counterRecord
 	run     map[string]int64
-	history bool
+	ceiling map[string]int64
 }
 
-func newLedger(record *counterRecord, history bool) *ledger {
-	return &ledger{record: record, run: make(map[string]int64), history: history}
+// newLedger is counters.js ledger: a forward sequence.
+func newLedger(record *counterRecord) *ledger {
+	return &ledger{record: record, run: make(map[string]int64)}
 }
 
-// judge is counters.js judge.
+// newHistoryLedger is counters.js history: an earlier page under its ceiling.
+func newHistoryLedger(record *counterRecord, ceiling map[string]int64) *ledger {
+	if ceiling == nil {
+		ceiling = make(map[string]int64)
+	}
+	return &ledger{record: record, run: make(map[string]int64), ceiling: ceiling}
+}
+
+func (l *ledger) history() bool { return l.ceiling != nil }
+
+// judge is counters.js judge, its ceiling clause included.
 func (l *ledger) judge(sender string, counter, seq int64) verdict {
 	run, inRun := l.run[sender]
 	isNew := seq > l.record.Seq
 	stored := l.record.Senders[sender]
-	if (inRun && counter <= run) || (isNew && counter <= stored) {
+	ceiling, capped := l.ceiling[sender]
+	if (inRun && counter <= run) || (isNew && counter <= stored) || (capped && counter >= ceiling) {
 		return verdict{replay: true}
 	}
+	// An earlier page measures gaps from inside itself only (counters.js EARLIER PAGES)
 	last := int64(0)
 	switch {
 	case inRun:
 		last = run
-	case isNew && !l.history:
+	case isNew && !l.history():
 		last = stored
 	}
 	if last > 0 && counter > last+1 {
@@ -73,7 +97,7 @@ func (l *ledger) admit(sender string, counter int64) {
 // snapshot is counters.js snapshot: record raised by this sequence, processed up to seq. A
 // history ledger changes nothing. It reports whether the record changed.
 func (l *ledger) snapshot(record *counterRecord, seq int64) bool {
-	if l.history {
+	if l.history() {
 		return false
 	}
 	changed := false

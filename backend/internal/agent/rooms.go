@@ -66,6 +66,9 @@ func (a *Agent) adopt(item *models.ConversationDTO) (*roomState, error) {
 	if code.MaxMembers != view.MaxMembers || code.ExpiresAt() != view.ExpiresAt {
 		return nil, fail(CodeRoomVerify, nil)
 	}
+	if expiredLongAgo(code.ExpiresAt(), time.Now()) {
+		return nil, fail(CodeRoomExpired, nil) // its counter record may be gone (state.go): never shown again
+	}
 	return a.roomFromCode(id, code, view.Vault, item)
 }
 
@@ -90,7 +93,7 @@ func (a *Agent) roomFromCode(id uuid.UUID, code *e2e.RoomCode, vault string, ite
 	st := &roomState{
 		id: id, name: roomAura.Name, selfName: self.Name, vault: vault, keys: keys, member: member,
 		maxMembers: code.MaxMembers, expiresAt: time.Unix(code.ExpiresAt(), 0),
-		counters: a.counters.record(id), seen: make(map[uuid.UUID]seenMessage),
+		counters: a.counters.record(id, code.ExpiresAt()), seen: make(map[uuid.UUID]seenMessage),
 	}
 	return st, st.refreshView(item)
 }
@@ -107,8 +110,10 @@ func (st *roomState) refreshView(item *models.ConversationDTO) error {
 }
 
 // listRooms refreshes the verified rooms from the server's listing. One-to-one conversations
-// are skipped (design D5); a room that fails verification is hidden, never shown. The rooms come
-// back in the server's order (newest first).
+// are skipped (design D5); a room that fails verification, or whose code expired more than
+// expiredRoomGrace ago, is hidden, never shown. The rooms come back in the server's order
+// (newest first). A room missing from the listing keeps its counter record (state.go): the
+// server's omission is not a fact this agent prunes on.
 func (a *Agent) listRooms(ctx context.Context) ([]*roomState, error) {
 	var resp models.ConversationsResponse
 	status, err := a.api(ctx, http.MethodGet, pathConversations, nil, &resp)
@@ -139,7 +144,7 @@ func (a *Agent) listRooms(ctx context.Context) ([]*roomState, error) {
 		}
 	}
 	a.rooms = next
-	if a.counters.prune(next) {
+	if a.counters.pruneExpired(time.Now()) {
 		a.persistCountersAfterRead()
 	}
 	return ordered, nil
@@ -149,15 +154,28 @@ func (a *Agent) listRooms(ctx context.Context) ([]*roomState, error) {
 func (a *Agent) verifiedRoom(item *models.ConversationDTO) (*roomState, error) {
 	if id, ok := utils.ParseCanonicalUUIDv4(item.ID); ok {
 		if known := a.rooms[id]; known != nil && known.vault == item.Room.Vault {
+			if known.expiredLongAgo(time.Now()) {
+				return nil, fail(CodeRoomExpired, nil)
+			}
 			return known, known.refreshView(item)
 		}
 	}
 	return a.adopt(item)
 }
 
-// room returns a verified room this account is in.
+// expiredLongAgo reports whether the room's code expired more than expiredRoomGrace ago.
+func (st *roomState) expiredLongAgo(now time.Time) bool {
+	return expiredLongAgo(st.expiresAt.Unix(), now)
+}
+
+// room returns a verified room this account is in; one whose code expired more than
+// expiredRoomGrace ago is refused, as listRooms hides it.
 func (a *Agent) room(ctx context.Context, id uuid.UUID) (*roomState, error) {
 	if st := a.rooms[id]; st != nil {
+		if st.expiredLongAgo(time.Now()) {
+			delete(a.rooms, id)
+			return nil, fail(CodeRoomExpired, nil)
+		}
 		return st, nil
 	}
 	if _, err := a.listRooms(ctx); err != nil {
@@ -169,13 +187,16 @@ func (a *Agent) room(ctx context.Context, id uuid.UUID) (*roomState, error) {
 	return nil, fail(CodeRoomUnknown, nil)
 }
 
-// forget drops a room the server no longer serves to this account.
+// forget stops serving a room the server answered 404 for. Its counter record stays (state.go):
+// the server's word is not a fact this agent prunes on, and if the room comes back its old
+// messages are still judged against what was seen.
 func (a *Agent) forget(id uuid.UUID) error {
-	a.drop(id)
+	delete(a.rooms, id)
 	return fail(CodeRoomUnknown, nil)
 }
 
-// drop forgets a room this account is no longer in, with its counter record.
+// drop forgets a room this agent itself left or burned (the server confirmed with 204), with its
+// counter record.
 func (a *Agent) drop(id uuid.UUID) {
 	delete(a.rooms, id)
 	if a.counters.drop(id) {

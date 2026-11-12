@@ -145,7 +145,7 @@ func writePrivate(path string, raw []byte, replace bool, code Code) error {
 		return fail(code, err)
 	}
 	if replace {
-		err = os.Rename(name, path)
+		err = replaceFile(name, path) // per OS: Windows retries a briefly held file
 	} else {
 		err = os.Link(name, path)
 	}

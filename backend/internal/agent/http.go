@@ -125,9 +125,15 @@ func (a *Agent) roundTrip(ctx context.Context, method, path string, body any) (*
 		return nil, err
 	}
 	defer resp.Body.Close()
+	return readAnswer(resp)
+}
+
+// readAnswer reads a whole answer within its bound. A failure's body is read only for nginx's
+// edge code (edgeFailure) and is never shown.
+func readAnswer(resp *http.Response) (*answer, error) {
 	limit := int64(maxResponseBytes)
 	if !success(resp.StatusCode) {
-		limit = maxErrorBodyBytes // never read, only drained so the connection can be reused
+		limit = maxErrorBodyBytes
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
@@ -139,6 +145,72 @@ func (a *Agent) roundTrip(ctx context.Context, method, path string, body any) (*
 	return &answer{status: resp.StatusCode, body: raw}, nil
 }
 
+// The ids nginx answers its own /api/ failures with, as JSON {"success":false,"message":…,
+// "code":…} (backend/internal/apperr/edge.go EdgeAnswers; that package carries the server's
+// store, so the ids are repeated here and edge_test.go compares the two tables). 500, 502 and
+// 504 all reach the agent as 503 E_BACKEND_UNAVAILABLE.
+const (
+	edgeBackendUnavailable = "E_BACKEND_UNAVAILABLE"
+	edgeNotFound           = "E_EDGE_NOT_FOUND"
+	edgeMethodNotAllowed   = "E_EDGE_METHOD_NOT_ALLOWED"
+	edgeBodyTooLarge       = "E_BODY_TOO_LARGE"
+	edgeRateLimited        = "E_EDGE_RATE_LIMITED"
+)
+
+// edgeAnswer is what the agent makes of one edge id: the status it must come with, and whether
+// nginx refused the request itself (route: the backend never saw it, so a status the callers
+// give a meaning to, above all 404 "room gone", must not be read from it).
+type edgeAnswer struct {
+	status int
+	route  bool
+}
+
+var edgeAnswers = map[string]edgeAnswer{
+	edgeBackendUnavailable: {http.StatusServiceUnavailable, false}, // status mapping: CodeServerBusy, a passing failure
+	edgeRateLimited:        {http.StatusTooManyRequests, false},    // status mapping: CodeRateLimited
+	edgeNotFound:           {http.StatusNotFound, true},
+	edgeMethodNotAllowed:   {http.StatusMethodNotAllowed, true},
+	edgeBodyTooLarge:       {http.StatusRequestEntityTooLarge, true},
+}
+
+// edgeBody is the one field read from a failure's body; the message is never read.
+type edgeBody struct {
+	Code string `json:"code"`
+}
+
+// edgeFailure classifies a failed answer by nginx's edge code: a refusal at the edge is
+// CodeServerRoute, a known id under another status is CodeServerAnswer, and anything else (the
+// backend's own text answers, unknown JSON, an unavailable or rate-limited edge answer) is nil:
+// the caller maps the status.
+func edgeFailure(ans *answer) error {
+	if success(ans.status) {
+		return nil
+	}
+	var body edgeBody
+	if json.Unmarshal(ans.body, &body) != nil {
+		return nil
+	}
+	edge, known := edgeAnswers[body.Code]
+	switch {
+	case !known:
+		return nil
+	case edge.status != ans.status:
+		return fail(CodeServerAnswer, nil)
+	case edge.route:
+		return fail(CodeServerRoute, nil)
+	default:
+		return nil
+	}
+}
+
+// failedAnswer explains a failed answer the caller has no specific meaning for.
+func failedAnswer(ans *answer) error {
+	if err := edgeFailure(ans); err != nil {
+		return err
+	}
+	return statusError(ans.status)
+}
+
 func success(status int) bool {
 	return status == http.StatusOK || status == http.StatusCreated || status == http.StatusNoContent
 }
@@ -147,6 +219,15 @@ func success(status int) bool {
 func (a *Agent) public(ctx context.Context, method, path string, body, out any) (int, error) {
 	ans, err := a.roundTrip(ctx, method, path, body)
 	if err != nil {
+		return 0, err
+	}
+	return settleAnswer(ans, out)
+}
+
+// settleAnswer hands the caller the status of an answer, or the error of an edge refusal
+// (edgeFailure) in place of a status it could misread; out is decoded from a 200 or 201.
+func settleAnswer(ans *answer, out any) (int, error) {
+	if err := edgeFailure(ans); err != nil {
 		return 0, err
 	}
 	return ans.status, decodeAnswer(ans, out)
@@ -171,7 +252,7 @@ func (a *Agent) api(ctx context.Context, method, path string, body, out any) (in
 			return 0, err
 		}
 	}
-	return ans.status, decodeAnswer(ans, out)
+	return settleAnswer(ans, out)
 }
 
 func decodeAnswer(ans *answer, out any) error {

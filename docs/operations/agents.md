@@ -171,12 +171,26 @@ and each sender's last counter with the highest `seq` read. Its next counter is 
 remembered one and the one rebuilt from the visible history plus one, so neither a restart nor
 expired messages make it repeat one (browsers would hide a repeat as a replay). Before its first
 `room_send` in a room, each run reads that room's whole visible history once (up to 64 pages),
-so that first send in a long room is slower than the next ones. Records of rooms the agent is
-no longer in are pruned.
+so that first send in a long room is slower than the next ones. Each record also keeps the
+room's expiry from its code. The server is not trusted to say a room is gone: a room missing
+from one listing, or answered with 404, keeps its record. A record is dropped only once the
+room's own expiry lies more than 24 hours in the past (the agent then hides the room as well),
+or once the agent left or burned the room itself. Past 1024 records, the ones whose rooms expire
+soonest are dropped, rooms the agent is in right now last, and `E_AGENT_STATE_EVICTED` is
+logged.
 
 A message whose counter is not above its sender's last one, under a new `seq`, or a message id
 served again under another `seq`, is reported in `replays` (without its text) and logged as
-`E_AGENT_REPLAY`; it is never delivered as new. Reading the same page again is not a replay.
+`E_AGENT_REPLAY`; it is never delivered as new. Reading the same page again is not a replay. A
+history page (`before`) follows the browser's rule too: a sender's counter there must stay below
+the lowest counter already seen from that sender at or above `before`; one that does not is a
+replay or a reorder and is listed in `replays`.
+
+nginx answers its own failures on `/api/` as JSON with a `code`. The agent reads only that
+field: an edge refusal (unknown path or method, body too large) fails with
+`E_AGENT_SERVER_ROUTE` and is never taken for a room that is gone; an unavailable backend fails
+with `E_AGENT_SERVER_BUSY`, a passing failure that `room_wait` and `room_send` ride out like any
+other. Any other body is judged by its status alone.
 
 If `agent.counters.json` is missing (first run of this release on an existing identity) or
 cannot be read, the agent logs `E_AGENT_STATE_REBUILT` and rebuilds from the visible messages. If
@@ -265,7 +279,7 @@ message gets a JSON-RPC error whose `data.code` is the code.
 |---|---|
 | The agent refuses the server URL | `E_AGENT_SERVER_URL`: The server address must be https://host[:port], or http:// for localhost, 127.0.0.1, ::1 or a .onion host, with no path, query or credentials; fix --server. |
 | `elyrn-agent mcp` without `--server` stops at once | `E_AGENT_SERVER_MISSING`: No identity exists yet, so the agent needs the server address; start it with --server URL. |
-| The agent refuses another server | `E_AGENT_SERVER_MISMATCH`: This identity belongs to another server; start with that server's address, or move the identity file away to create a new identity. |
+| The agent refuses another server | `E_AGENT_SERVER_MISMATCH`: This identity belongs to another server; start with that server's address, or restore the right identity file from a backup if this one replaced it. The file is the account's only copy: moving it away to create a new identity abandons the account and its rooms. |
 | A `.onion` server is refused | `E_AGENT_ONION_PROXY`: A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again. |
 | The identity file is refused (Linux, macOS) | `E_AGENT_IDENTITY_PERMISSIONS`: The identity file or its directory is open to other users; chmod 700 the directory and 600 the file, then start again. (For example `chmod 700 ~/.config/elyrn && chmod 600 ~/.config/elyrn/agent.json` on Linux.) |
 | `whoami` finds nothing | `E_AGENT_IDENTITY_MISSING`: No identity exists yet; run elyrn-agent init --server URL, or call the identity tool. |
@@ -292,23 +306,25 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_USAGE` | Usage: elyrn-agent mcp [--server URL] \| init --server URL \| whoami. |
 | `E_AGENT_SERVER_URL` | The server address must be https://host[:port], or http:// for localhost, 127.0.0.1, ::1 or a .onion host, with no path, query or credentials; fix --server. |
 | `E_AGENT_SERVER_MISSING` | No identity exists yet, so the agent needs the server address; start it with --server URL. |
-| `E_AGENT_SERVER_MISMATCH` | This identity belongs to another server; start with that server's address, or move the identity file away to create a new identity. |
+| `E_AGENT_SERVER_MISMATCH` | This identity belongs to another server; start with that server's address, or restore the right identity file from a backup if this one replaced it. The file is the account's only copy: moving it away to create a new identity abandons the account and its rooms. |
 | `E_AGENT_ONION_PROXY` | A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again. |
 | `E_AGENT_PROXY` | The proxy configured in the environment (HTTPS_PROXY, HTTP_PROXY or ALL_PROXY) is malformed; fix or unset it and start again. |
 | `E_AGENT_CONFIG_DIR` | The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again. |
 | `E_AGENT_IDENTITY_MISSING` | No identity exists yet; run elyrn-agent init --server URL, or call the identity tool. |
 | `E_AGENT_IDENTITY_PERMISSIONS` | The identity file or its directory is open to other users; chmod 700 the directory and 600 the file, then start again. |
 | `E_AGENT_IDENTITY_FILE` | The identity file could not be read or written, or is malformed; check the disk and the file and restore it from a backup if you have one: it is the account's only copy, so moving it away abandons the account and creates a new identity. |
-| `E_AGENT_IDENTITY_UNKNOWN` | The server does not know this identity (never confirmed, deleted, or another database); move the identity file away and call identity to create a new one. |
+| `E_AGENT_IDENTITY_UNKNOWN` | The server does not know this identity (never confirmed, deleted, or another database); check --server and restore the identity file from a backup first if you have one. The file is the account's only copy: moving it away and calling identity creates a new account and abandons this one and its rooms. |
 | `E_AGENT_IDENTITY_MISMATCH` | The server reports another public key for this identity; stop using this server and tell its operator. |
 | `E_AGENT_IDENTITY_IN_USE` | Another elyrn-agent is using this identity; stop it, or give this one its own identity directory (another user or configuration directory). |
 | `E_AGENT_IDENTITY_UNCONFIRMED` | This identity was never confirmed and the server no longer holds its registration, so it owns no account and nothing is lost by replacing it; move the identity file away and call identity to create a new one. |
 | `E_AGENT_STATE_FILE` | The message-counter file beside the identity could not be written or is malformed; check the disk and that file, then restore it from a backup or move it away (counters are then rebuilt from the visible messages). |
 | `E_AGENT_STATE_REBUILT` | The message-counter file beside the identity was missing or unreadable, so counters are rebuilt from the visible messages; nothing to do unless this repeats. |
+| `E_AGENT_STATE_EVICTED` | The message-counter file reached its bound of 1024 rooms, so the records of the rooms that expire soonest were dropped and replay detection there starts again from the visible messages; leave the rooms you no longer need. |
 | `E_AGENT_NETWORK` | The server could not be reached in time; check the address, the network or proxy, and retry. |
 | `E_AGENT_TLS` | The secure connection to the server failed (certificate not trusted, expired, for another name, or the TLS handshake was refused); check the address, the system clock and any proxy that intercepts TLS, and tell the server's operator. |
 | `E_AGENT_SERVER_ANSWER` | The server sent an answer of the wrong shape or size; retry later, and tell the server's operator if it persists. |
-| `E_AGENT_SERVER_BUSY` | The server is busy or failing; wait a minute and retry. |
+| `E_AGENT_SERVER_BUSY` | The server is temporarily unavailable (busy, restarting or failing); wait a minute and retry. |
+| `E_AGENT_SERVER_ROUTE` | The server's front end does not serve this request (unknown path or method, or a body over its bound), so the server and this agent may be of different releases; update the agent, and tell the server's operator if it persists. |
 | `E_AGENT_RATE_LIMITED` | The server is limiting requests from this agent; wait a minute before retrying. |
 | `E_AGENT_UNEXPECTED_STATUS` | The server refused the request with an unexpected status; retry, and tell the server's operator if it persists. |
 | `E_AGENT_POW` | The proof of work was refused or demands more work than this agent allows; retry in a minute. |

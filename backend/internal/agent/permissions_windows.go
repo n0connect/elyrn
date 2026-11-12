@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"syscall"
+	"time"
 )
 
 // errorSharingViolation is ERROR_SHARING_VIOLATION: another handle holds the file without
@@ -15,6 +16,27 @@ const errorSharingViolation = syscall.Errno(32)
 
 // lockShareMode shares the lock file with nobody: a second open fails until this handle closes.
 const lockShareMode = 0
+
+// A replace (rename over the file) fails while another process holds the file open without
+// sharing delete, as a whoami beside the running agent briefly does while it reads the identity:
+// Windows answers a sharing violation or access denied. The replace is retried replaceRetries
+// times after replaceBackoff, doubled each time (10 ms … 160 ms, about 0.3 s in all).
+const (
+	replaceRetries = 5
+	replaceBackoff = 10 * time.Millisecond
+)
+
+// replaceFile renames from over to, retrying while another handle briefly holds to.
+func replaceFile(from, to string) error {
+	for attempt := 0; ; attempt++ {
+		err := os.Rename(from, to)
+		if err == nil || attempt == replaceRetries ||
+			!(errors.Is(err, errorSharingViolation) || errors.Is(err, syscall.ERROR_ACCESS_DENIED)) {
+			return err
+		}
+		time.Sleep(replaceBackoff << attempt)
+	}
+}
 
 // checkPrivateMode accepts any mode on Windows. Go synthesises Windows modes from the read-only
 // attribute alone (0666 or 0444 for files, 0777 for directories), so they say nothing about who

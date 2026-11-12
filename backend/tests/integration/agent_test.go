@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"elyrn/internal/agent"
+	"elyrn/internal/apperr"
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
 	"elyrn/internal/e2e"
@@ -643,5 +645,168 @@ func TestAgent_ALostCreateAnswerSettlesTheStoredRoom(t *testing.T) {
 	}
 	if _, err := e2e.ParseRoomCode(created.Code); err != nil {
 		t.Fatalf("the settled code does not parse: %v", err)
+	}
+}
+
+// isMessagesRead reports whether r reads a conversation's messages.
+func isMessagesRead(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, models.PathConversations+"/") &&
+		strings.HasSuffix(r.URL.Path, "/"+models.SubMessages)
+}
+
+// answerJSON writes status and a JSON body as nginx's own answers come.
+func answerJSON(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
+
+// A hostile server hides a room from one listing, then answers 404 for it once: neither is a
+// fact the agent prunes its counter record on. An old counter served afterwards under a new seq
+// is still a replay, in the same run and after a restart, and the agent's own counter never
+// goes backwards.
+func TestAgent_AHiddenRoomKeepsItsCounterRecord(t *testing.T) {
+	mux := setup(t)
+	var hide, gone atomic.Bool
+	srv := hostileServer(t, mux, func(w http.ResponseWriter, r *http.Request) bool {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == models.PathConversations && hide.CompareAndSwap(true, false):
+			answerJSON(w, http.StatusOK, `{"conversations":[]}`)
+			return true
+		case isMessagesRead(r) && gone.CompareAndSwap(true, false):
+			http.Error(w, "Not found", http.StatusNotFound) // the backend's own 404
+			return true
+		}
+		return false
+	})
+	ctx := context.Background()
+	path := newIdentityPath(t.TempDir(), "robot")
+	robot, room, carol := agentWithRoom(t, mux, srv, path)
+	agentSend(t, robot, room, "mine")
+	carol.say(t, "first", 1)
+	first := agentRead(t, robot, room, nil)
+	if !slices.Equal(texts(first), []string{"mine", "first"}) {
+		t.Fatalf("first read %+v", first)
+	}
+
+	hide.Store(true)
+	if listed, err := robot.Rooms(ctx); err != nil || len(listed.Rooms) != 0 {
+		t.Fatalf("the hidden listing = %+v, %v", listed, err)
+	}
+	gone.Store(true)
+	if _, err := robot.Read(ctx, room, &first.LastSeq); agent.CodeOf(err) != agent.CodeRoomUnknown {
+		t.Fatalf("a read answered 404: %v, want %s", err, agent.CodeRoomUnknown)
+	}
+	carol.say(t, "again", 1)
+	again, err := robot.Read(ctx, room, &first.LastSeq)
+	if err != nil || len(again.Messages) != 0 || len(again.Replays) != 1 || again.Replays[0].Mine {
+		t.Fatalf("after the room was hidden an old counter was not a replay: %+v, %v", again, err)
+	}
+	robot.Close()
+
+	restarted := newAgent(t, "", path)
+	carol.say(t, "stale", 1)
+	stale, err := restarted.Read(ctx, room, &again.LastSeq)
+	if err != nil || len(stale.Messages) != 0 || len(stale.Replays) != 1 {
+		t.Fatalf("after a restart an old counter was not a replay: %+v, %v", stale, err)
+	}
+	agentSend(t, restarted, room, "after")
+	if got := countersHeard(t, carol); !slices.Equal(got, []int64{1, 1, 1, 1, 2}) {
+		t.Fatalf("counters heard %v, want [1 1 1 1 2]: the agent's own counter went backwards", got)
+	}
+}
+
+// A history page (before) is held under the ceiling of what was already read above it, as the
+// browser's counters.js history/lowest do: a message below whose counter is not under its
+// sender's lowest counter above is a replay or a reorder, listed in replays and never delivered.
+func TestAgent_HistoryPagesStayBelowTheirCeiling(t *testing.T) {
+	mux := setup(t)
+	robot, room, carol := agentWithRoom(t, mux, clientServer(t, mux), newIdentityPath(t.TempDir(), "robot"))
+	ctx := context.Background()
+	agentSend(t, robot, room, "hello") // the counter sync runs now, on an empty room
+	carol.say(t, "one", 1)
+	carol.say(t, "high", 5) // a lower seq than "low" below, yet a higher counter: out of order
+	mark := agentSend(t, robot, room, "mark")
+	carol.say(t, "low", 2)
+	if got := agentRead(t, robot, room, &mark); !slices.Equal(texts(got), []string{"low"}) || len(got.Replays) != 0 {
+		t.Fatalf("the read above the mark = %+v", got)
+	}
+
+	for range 2 { // reading the page again must not turn the replay into history
+		page, err := robot.ReadBefore(ctx, room, mark)
+		if err != nil || !slices.Equal(texts(page), []string{"hello", "one"}) || len(page.Gaps) != 0 ||
+			len(page.Replays) != 1 || page.Replays[0].Mine || page.Replays[0].Seq <= page.Messages[1].Seq || page.Replays[0].Seq >= mark {
+			t.Fatalf("the history page = %+v, %v (want hello and one delivered, high listed as a replay)", page, err)
+		}
+	}
+}
+
+// nginx answers its own /api/ failures as JSON with a registered edge id. An edge 404 (or any
+// edge refusal) is never read as "the room is gone"; an unavailable backend is a passing
+// failure; a JSON body with an unknown id falls back to the status; a known id under another
+// status is a malformed answer. The room and its counter record survive all of it.
+func TestAgent_EdgeAnswersAreNotTheRoomsAnswers(t *testing.T) {
+	mux := setup(t)
+	type reply struct {
+		status int
+		body   string
+	}
+	var next atomic.Pointer[reply]
+	srv := hostileServer(t, mux, func(w http.ResponseWriter, r *http.Request) bool {
+		if !isMessagesRead(r) {
+			return false
+		}
+		served := next.Swap(nil)
+		if served == nil {
+			return false
+		}
+		answerJSON(w, served.status, served.body)
+		return true
+	})
+	ctx := context.Background()
+	robot, room, carol := agentWithRoom(t, mux, srv, newIdentityPath(t.TempDir(), "robot"))
+	carol.say(t, "first", 1)
+	first := agentRead(t, robot, room, nil)
+
+	want := map[string]agent.Code{
+		"E_BACKEND_UNAVAILABLE":     agent.CodeServerBusy,
+		"E_EDGE_NOT_FOUND":          agent.CodeServerRoute,
+		"E_EDGE_METHOD_NOT_ALLOWED": agent.CodeServerRoute,
+		"E_BODY_TOO_LARGE":          agent.CodeServerRoute,
+		"E_EDGE_RATE_LIMITED":       agent.CodeRateLimited,
+	}
+	cases := map[string]struct {
+		reply reply
+		want  agent.Code
+	}{
+		"an unknown id under 404":     {reply{http.StatusNotFound, `{"success":false,"message":"x","code":"E_SOMETHING_ELSE"}`}, agent.CodeRoomUnknown},
+		"an edge id under its status": {reply{http.StatusNotFound, apperr.EdgeAnswers[0].Body()}, agent.CodeServerAnswer},
+	}
+	for _, edge := range apperr.EdgeAnswers {
+		code, known := want[edge.ID]
+		if !known {
+			t.Fatalf("nginx answers %s, which this test does not expect: decide what the agent makes of it", edge.ID)
+		}
+		cases[edge.ID] = struct {
+			reply reply
+			want  agent.Code
+		}{reply{edge.Status, edge.Body()}, code}
+	}
+	if cases["an edge id under its status"].reply.status == apperr.EdgeAnswers[0].Status {
+		t.Fatal("the mismatched case serves the edge id under its own status")
+	}
+	for name, c := range cases {
+		next.Store(&c.reply)
+		if _, err := robot.Read(ctx, room, &first.LastSeq); agent.CodeOf(err) != c.want {
+			t.Fatalf("%s: %v, want %s", name, err, c.want)
+		}
+		if after := agentRead(t, robot, room, &first.LastSeq); len(after.Messages)+len(after.Replays) != 0 {
+			t.Fatalf("%s: the next read = %+v", name, after)
+		}
+	}
+	carol.say(t, "again", 1)
+	again, err := robot.Read(ctx, room, &first.LastSeq)
+	if err != nil || len(again.Messages) != 0 || len(again.Replays) != 1 {
+		t.Fatalf("after the edge answers an old counter was not a replay: %+v, %v", again, err)
 	}
 }

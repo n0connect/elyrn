@@ -47,6 +47,10 @@ const (
 	DefaultWaitTimeout = 60 * time.Second
 	MinWaitTimeout     = time.Second
 	MaxWaitTimeout     = 300 * time.Second
+	// How long past its code's expiry a room is still believed listed (the server's retention
+	// and the two clocks may lag); after that the agent hides the room and drops its counter
+	// record (state.go), on its own fact alone
+	expiredRoomGrace = 24 * time.Hour
 )
 
 // Sizes and counts: every loop and every server-supplied collection is bounded (RULES.md §8.1).
