@@ -1,118 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 120" width="680" height="120">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 212 63" width="212" height="63">
   <style>
-    rect.bg { fill: #0d1117; }
-    .seg { fill: none; stroke-linecap: square; stroke-linejoin: miter; }
-    .on  { stroke: #e6edf3; stroke-width: 3.5; opacity: 1; }
-    .dim { stroke: #e6edf3; stroke-width: 3.5; opacity: 0.07; }
-    .dot-on { fill: #4493f8; }
-    @media (prefers-color-scheme: light) {
-      rect.bg { fill: #ffffff; }
-      .on  { stroke: #1f2328; }
-      .dim { stroke: #1f2328; opacity: 0.06; }
-      .dot-on { fill: #0969da; }
+    .ascii {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 9px;
+      line-height: 11px;
+      font-weight: 700;
+      fill: #1f2328;
+      white-space: pre;
+    }
+    .dot {
+      fill: #0969da;
+      font-weight: 800;
+    }
+    @media (prefers-color-scheme: dark) {
+      .ascii {
+        fill: #f0f6fc;
+      }
+      .dot {
+        fill: #58a6ff;
+      }
     }
   </style>
-
-  <!-- Background -->
-  <rect class="bg" x="0" y="0" width="680" height="120" rx="8"/>
-
-  <!--
-    Segmented-display font: each glyph is 56px wide × 80px tall, 10px gap.
-    Segment layout (7-segment):
-      a = top horizontal
-      b = top-right vertical
-      c = bottom-right vertical
-      d = bottom horizontal
-      e = bottom-left vertical
-      f = top-left vertical
-      g = middle horizontal
-    Origin per glyph at top-left corner.
-    Grid: starts x=32, y=20. Step=66.
-    Letters: e l y r n  → 5 glyphs → total width = 5*66 - 10 + 32*2 = 352. Centered in 680.
-    start_x = (680 - (5*66-10)) / 2 = (680 - 320) / 2 = 180
-  -->
-
-  <!-- GLYPH: e  (segments: a f g e d)  -->
-  <!-- top -->
-  <line class="seg on"  x1="192" y1="22" x2="230" y2="22"/>
-  <!-- top-right -->
-  <line class="seg dim" x1="232" y1="24" x2="232" y2="58"/>
-  <!-- mid -->
-  <line class="seg on"  x1="192" y1="60" x2="230" y2="60"/>
-  <!-- bottom-right -->
-  <line class="seg dim" x1="232" y1="62" x2="232" y2="96"/>
-  <!-- bot -->
-  <line class="seg on"  x1="192" y1="98" x2="230" y2="98"/>
-  <!-- top-left -->
-  <line class="seg on"  x1="190" y1="24" x2="190" y2="58"/>
-  <!-- bot-left -->
-  <line class="seg on"  x1="190" y1="62" x2="190" y2="96"/>
-
-  <!-- GLYPH: l  (segments: f e d ... actually b c d)  x=246 -->
-  <!-- l = top-left vertical + bottom-left vertical + bottom -->
-  <!-- top -->
-  <line class="seg dim" x1="258" y1="22" x2="296" y2="22"/>
-  <!-- top-right -->
-  <line class="seg dim" x1="298" y1="24" x2="298" y2="58"/>
-  <!-- mid -->
-  <line class="seg dim" x1="258" y1="60" x2="296" y2="60"/>
-  <!-- bottom-right -->
-  <line class="seg dim" x1="298" y1="62" x2="298" y2="96"/>
-  <!-- bot -->
-  <line class="seg on"  x1="258" y1="98" x2="296" y2="98"/>
-  <!-- top-left -->
-  <line class="seg on"  x1="256" y1="24" x2="256" y2="58"/>
-  <!-- bot-left -->
-  <line class="seg on"  x1="256" y1="62" x2="256" y2="96"/>
-
-  <!-- GLYPH: y  (segments: f b g c d) x=312 -->
-  <!-- top -->
-  <line class="seg dim" x1="324" y1="22" x2="362" y2="22"/>
-  <!-- top-right -->
-  <line class="seg on"  x1="364" y1="24" x2="364" y2="58"/>
-  <!-- mid -->
-  <line class="seg on"  x1="324" y1="60" x2="362" y2="60"/>
-  <!-- bottom-right -->
-  <line class="seg on"  x1="364" y1="62" x2="364" y2="96"/>
-  <!-- bot -->
-  <line class="seg on"  x1="324" y1="98" x2="362" y2="98"/>
-  <!-- top-left -->
-  <line class="seg on"  x1="322" y1="24" x2="322" y2="58"/>
-  <!-- bot-left -->
-  <line class="seg dim" x1="322" y1="62" x2="322" y2="96"/>
-
-  <!-- GLYPH: r  (segments: a f g e) x=378 -->
-  <!-- top -->
-  <line class="seg on"  x1="390" y1="22" x2="428" y2="22"/>
-  <!-- top-right -->
-  <line class="seg on"  x1="430" y1="24" x2="430" y2="58"/>
-  <!-- mid -->
-  <line class="seg on"  x1="390" y1="60" x2="428" y2="60"/>
-  <!-- bottom-right -->
-  <line class="seg dim" x1="430" y1="62" x2="430" y2="96"/>
-  <!-- bot -->
-  <line class="seg dim" x1="390" y1="98" x2="428" y2="98"/>
-  <!-- top-left -->
-  <line class="seg on"  x1="388" y1="24" x2="388" y2="58"/>
-  <!-- bot-left -->
-  <line class="seg on"  x1="388" y1="62" x2="388" y2="96"/>
-
-  <!-- GLYPH: n  (segments: a f b g c) x=444 -->
-  <!-- top -->
-  <line class="seg on"  x1="456" y1="22" x2="494" y2="22"/>
-  <!-- top-right -->
-  <line class="seg on"  x1="496" y1="24" x2="496" y2="58"/>
-  <!-- mid -->
-  <line class="seg on"  x1="456" y1="60" x2="494" y2="60"/>
-  <!-- bottom-right -->
-  <line class="seg on"  x1="496" y1="62" x2="496" y2="96"/>
-  <!-- bot -->
-  <line class="seg dim" x1="456" y1="98" x2="494" y2="98"/>
-  <!-- top-left -->
-  <line class="seg on"  x1="454" y1="24" x2="454" y2="58"/>
-  <!-- bot-left -->
-  <line class="seg dim" x1="454" y1="62" x2="454" y2="96"/>
-
-  <!-- DOT -->
-  <rect class="dot-on" x="508" y="88" width="10" height="10" rx="1"/>
+  <text class="ascii" xml:space="preserve">
+    <tspan x="8" y="12">         _</tspan>
+    <tspan x="8" y="23">  ___   | |   _  _    _ _    _ _</tspan>
+    <tspan x="8" y="34"> / -_)  | |  | || |  | &apos;_|  | &apos; \</tspan>
+    <tspan x="8" y="45"> \___|  |_|   \_, |  |_|    |_||_| </tspan><tspan class="dot">.</tspan>
+    <tspan x="8" y="56">              |__/</tspan>
+  </text>
 </svg>
