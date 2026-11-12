@@ -71,3 +71,19 @@ test('outsiders are read from any iterable, as the room keeps them in a Map', as
     const outsiders = new Map([[outsider.publicKey, outsider]]);
     assert.equal(Rooms.nameCollisions([victim], outsiders.values()).size, 2);
 });
+
+// A code with the same secret and other limit bytes opens the same room id (the id derives from
+// the secret only): only the limits tell the doctored code apart, so join must carry them
+test('a code doctored in its limit bytes opens the same room id and is told apart by its limits', async () => {
+    const R = vm.runInContext('ElyrnRoomCrypto', context);
+    const code = R.newRoomCode(R.MIN_MEMBERS + 1, R.expiryHourFor(1, Date.now()));
+    const honest = R.parseRoomCode(R.buildRoomCode(code));
+    const longer = R.parseRoomCode(R.buildRoomCode({ ...code, expiresHour: code.expiresHour + 1 }));
+    const larger = R.parseRoomCode(R.buildRoomCode({ ...code, maxMembers: code.maxMembers + 1 }));
+    const id = await Rooms.roomIdOf(code);
+    for (const doctored of [longer, larger]) {
+        assert.equal(await Rooms.roomIdOf(doctored), id);
+        assert.equal(Rooms.sameLimits(code, doctored), false);
+    }
+    assert.equal(Rooms.sameLimits(code, honest), true);
+});

@@ -172,6 +172,22 @@ const Rooms = (() => {
 
     // ---------- create & join ----------
 
+    // The limits a code carries, as create and join send them: the server binds a join to them
+    function limitsOf(code) {
+        return { max_members: code.maxMembers, expires_at: code.expiresHour * HOUR_SECONDS };
+    }
+
+    // True when two codes carry the same limits (a code with the same secret and other limits
+    // is doctored: the server refuses it)
+    function sameLimits(a, b) {
+        return a.maxMembers === b.maxMembers && a.expiresHour === b.expiresHour;
+    }
+
+    // The room id a code opens, derived locally
+    async function roomIdOf(code) {
+        return (await R.deriveRoom(code.secret)).id;
+    }
+
     function ttlChoices(maxTTLHours) {
         return TTL_CHOICES.filter(hours => hours <= maxTTLHours);
     }
@@ -188,8 +204,7 @@ const Rooms = (() => {
             const result = await api('POST', '/rooms', {
                 id: keys.id,
                 lookup: keys.lookup,
-                max_members: code.maxMembers,
-                expires_at: code.expiresHour * HOUR_SECONDS,
+                ...limitsOf(code),
                 card: member.card,
                 vault: await R.sealVault(root, keys.id, code),
                 pow: pow
@@ -211,7 +226,8 @@ const Rooms = (() => {
             id: keys.id,
             lookup: keys.lookup,
             card: member.card,
-            vault: await R.sealVault(root, keys.id, code)
+            vault: await R.sealVault(root, keys.id, code),
+            ...limitsOf(code)
         });
         const conv = result.data && result.data.conversation;
         if (result.ok && (!conv || conv.id !== keys.id)) {
@@ -265,7 +281,7 @@ const Rooms = (() => {
 
     return Object.freeze({
         adopt, refreshView, expired, loadRoster, senderOf, nameCollisions, seal, open,
-        ttlChoices, create, join, codeText, befriend, notes, dismissNote, safetyNumber,
+        ttlChoices, create, join, roomIdOf, sameLimits, codeText, befriend, notes, dismissNote, safetyNumber,
         aura: (id) => R.roomAura(id)
     });
 })();

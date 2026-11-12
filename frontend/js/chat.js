@@ -818,6 +818,13 @@ const Chat = (() => {
             Errors.report(Errors.CODES.E_ROOM_CODE_EXPIRED);
             return null;
         }
+        // A room this account is in, pasted with other limits, is a doctored code: rejoining
+        // with it would only replace the verified vault, so nothing is sent
+        const known = conversations.get(await Rooms.roomIdOf(code));
+        if (known && known.room && !Rooms.sameLimits(known.room.code, code)) {
+            Errors.report(Errors.CODES.E_ROOM_CODE_INVALID);
+            return null;
+        }
         const result = await Rooms.join(api, me.roomsRoot, code);
         if (result.id) {
             showSuccess(result.status === 201 ? 'you joined the room' : 'you are already in this room');
