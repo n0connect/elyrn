@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="elyrn." width="284">
+  <img src="assets/banner.png" alt="elyrn." width="600">
 </p>
 
 <p align="center">
@@ -186,7 +186,7 @@ make test-db      # Database + integration tests against a local PostgreSQL (TES
 
 # Releases (both engines are tested first)
 make release VERSION=v1.0.0           # on main: tags elyrn-openssl-v1.0.0 and elyrn-native-v1.0.0
-make tag-dev                          # on noaddx-dev: moves elyrn-openssl-dev / elyrn-native-dev
+make tag-dev                          # on elyrn-dev: moves elyrn-openssl-dev / elyrn-native-dev
 make build-ref REF=elyrn-native-v1.0.0  # build the image of any tag or commit
 
 # Verifying a deployment

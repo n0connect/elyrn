@@ -123,7 +123,7 @@ Another web server (Nginx, Apache, IIS) or database server (local PostgreSQL) is
 ### Symptom
 The `elyrn-backend` container restarts repeatedly. Logs show:
 ```text
-failed to connect to `host=localhost user=postgres database=noaddx`: dial tcp 127.0.0.1:5432: connect: connection refused
+failed to connect to `host=localhost user=postgres database=elyrn`: dial tcp 127.0.0.1:5432: connect: connection refused
 ```
 
 ### Cause

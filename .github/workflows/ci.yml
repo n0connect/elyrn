@@ -3,7 +3,7 @@ name: ci
 on:
   push:
     # The branch and the test database names are kept as "noaddx" across the rename to elyrn.
-    branches: [main, noaddx-dev]
+    branches: [main, elyrn-dev]
     tags: ["elyrn-*"]
   pull_request:
 

@@ -21,7 +21,7 @@
 |                       NGINX (Reverse Proxy)                            |
 |  - Static SPA file server (/usr/share/nginx/html)                      |
 |  - Zero Telemetry: access logs disabled, error logs restricted to crit |
-|  - Strict CSP + Trusted Types policy ('noaddx-worker')                 |
+|  - Strict CSP + Trusted Types policy ('elyrn-worker')                 |
 |  - Unbuffered SSE proxy for /api/v2/events (proxy_buffering off)       |
 |  - Strips/Overrides untrusted client proxy headers                     |
 |  - Onion listener :8081: tor container only; forwards the circuit as   |

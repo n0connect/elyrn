@@ -84,8 +84,8 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
   picks one at build time and OpenSSL is the default. Input validation is shared, known-answer
   tests run on both, a differential suite proves identical outputs and rejections
   (`make test-equivalence`), and the server runs a known-answer self-test before it starts.
-- Release tags per engine (`noaddx-openssl-vX.Y.Z`, `noaddx-native-vX.Y.Z`), moving dev tags
-  (`noaddx-openssl-dev`, `noaddx-native-dev`) and `make build-ref REF=<tag>` to rebuild any of them.
+- Release tags per engine (`elyrn-openssl-vX.Y.Z`, `elyrn-native-vX.Y.Z`), moving dev tags
+  (`elyrn-openssl-dev`, `elyrn-native-dev`) and `make build-ref REF=<tag>` to rebuild any of them.
 - **Verifiable client.** Each release tag gets the SHA-256 of every frontend file, signed with
   Sigstore keyless by the release workflow; `make verify-frontend URL=…` checks that any
   instance, onion included, serves exactly those bytes.

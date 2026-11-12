@@ -53,7 +53,7 @@ request, whatever circuit they arrive on.
 ## The onion address key
 
 The service identity lives in the `tor_data` volume
-(`/var/lib/tor/noaddx/hs_ed25519_secret_key`). Losing it changes the address; leaking it lets
+(`/var/lib/tor/elyrn/hs_ed25519_secret_key`). Losing it changes the address; leaking it lets
 someone impersonate the service. Back it up encrypted and offline. `make clean` deletes it
 along with every other volume.
 

@@ -14,8 +14,8 @@ All settings can be configured via `.env` or injected directly as environment va
 |---|---|---|---|
 | `JWT_SECRET` | string | *Generated* | HMAC-SHA256 signing secret for session tokens (must be >= `JWT_SECRET_MIN_LEN`). |
 | `JWT_SECRET_MIN_LEN` | int | `32` | Minimum length for `JWT_SECRET` (32-1024; cannot be lowered below 32). |
-| `JWT_ISSUER` | string | `noaddx-backend` | `iss` claim checked on every JWT validation. |
-| `JWT_AUDIENCE` | string | `noaddx-web` | `aud` claim checked on every JWT validation. |
+| `JWT_ISSUER` | string | `elyrn-backend` | `iss` claim checked on every JWT validation. |
+| `JWT_AUDIENCE` | string | `elyrn-web` | `aud` claim checked on every JWT validation. |
 | `JWT_EXPIRATION_MINUTES` | int | `15` | Session lifespan (1-1440). Active sessions sliding-refresh past half-life. The token lives only in the HttpOnly cookie. |
 | `MASTER_KEY_ACTIVE` | hex/base64 | *Generated* | Active 256-bit key: exactly 32 bytes as 64 hex characters or base64. Text passphrases are rejected. |
 | `MASTER_KEY_ACTIVE_ID` | string | *Generated* | Key id stored next to every record (`[A-Za-z0-9._-]`, 1-32 chars, e.g. `key-2026-01`). |
@@ -35,7 +35,7 @@ At startup the backend checks these keys against the database before it serves a
 | `DB_PORT` | int | `5432` | PostgreSQL listening port. |
 | `DB_USER` | string | `postgres` | Database user. |
 | `DB_PASSWORD` | string | *Generated* | Database password (no default; `make setup` generates one; >= 16 characters in production). |
-| `DB_NAME` | string | `noaddx` | Database name. |
+| `DB_NAME` | string | `elyrn` | Database name. |
 | `DB_SSL_MODE` | string | `disable` | libpq sslmode. Production requires `verify-ca` or `verify-full` (an unauthenticated `require` link can be intercepted). |
 
 ---
@@ -150,7 +150,7 @@ The reverse proxy (`nginx-site.conf`, shared by the clearnet and onion listeners
 
 ```nginx
 # Content Security Policy (CSP)
-add_header Content-Security-Policy "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types noaddx-worker;" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types elyrn-worker;" always;
 
 # Cross-Origin Isolation
 add_header Cross-Origin-Opener-Policy "same-origin" always;
@@ -159,9 +159,9 @@ add_header Cross-Origin-Resource-Policy "same-origin" always;
 ```
 
 ### Trusted Types Policy
-The application registers a single Trusted Types policy in JavaScript (`noaddx-worker`):
+The application registers a single Trusted Types policy in JavaScript (`elyrn-worker`):
 ```javascript
-window.trustedTypes.createPolicy('noaddx-worker', {
+window.trustedTypes.createPolicy('elyrn-worker', {
     createScriptURL: (url) => {
         if (url !== 'js/pow-worker.js') throw new TypeError('script URL not whitelisted');
         return url;
