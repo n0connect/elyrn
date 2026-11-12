@@ -160,13 +160,16 @@ func decodeAnswer(ans *answer, out any) error {
 	if out == nil || (ans.status != http.StatusOK && ans.status != http.StatusCreated) {
 		return nil
 	}
-	return decodeStrict(ans.body, out)
+	return decodeServerJSON(ans.body, out)
 }
 
-// decodeStrict accepts exactly one JSON value with only the fields out declares.
-func decodeStrict(raw []byte, out any) error {
+// decodeServerJSON is the one decoder of server answers and event data: exactly one JSON value,
+// every field out declares type-checked by encoding/json (the callers then check lengths and
+// ranges). Fields out does not declare are ignored on purpose: a server that adds a response
+// field must not break every agent already deployed (forward compatibility). Nothing unknown is
+// kept, so nothing unknown is ever trusted or shown.
+func decodeServerJSON(raw []byte, out any) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
 		return fail(CodeServerAnswer, err)
 	}

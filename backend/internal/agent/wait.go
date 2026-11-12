@@ -162,7 +162,7 @@ func (a *Agent) pokes(event, data string, st *roomState) bool {
 		return true
 	case sseEventMsg:
 		var poke pokeData
-		if err := decodeStrict([]byte(strings.TrimPrefix(data, sseDataPrefix)), &poke); err != nil {
+		if err := decodeServerJSON([]byte(strings.TrimPrefix(data, sseDataPrefix)), &poke); err != nil {
 			return false
 		}
 		return poke.C == st.id.String()
