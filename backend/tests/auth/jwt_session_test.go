@@ -13,7 +13,7 @@ import (
 
 // signWithServerSecret signs claims exactly as the server would (same secret, issuer,
 // audience, algorithm), so only the claim under test differs from a genuine token.
-func signWithServerSecret(t *testing.T, claims auth.Claims) string {
+func signWithServerSecret(t testing.TB, claims auth.Claims) string {
 	t.Helper()
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(os.Getenv("JWT_SECRET")))
 	if err != nil {

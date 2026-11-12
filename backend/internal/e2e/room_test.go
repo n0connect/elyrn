@@ -21,7 +21,7 @@ type roomParty struct {
 	member *RoomMember
 }
 
-func roomFixture(t *testing.T, maxMembers int) (*RoomCode, *Room) {
+func roomFixture(t testing.TB, maxMembers int) (*RoomCode, *Room) {
 	t.Helper()
 	code, err := NewRoomCode(maxMembers, 500000)
 	if err != nil {
@@ -34,7 +34,7 @@ func roomFixture(t *testing.T, maxMembers int) (*RoomCode, *Room) {
 	return code, room
 }
 
-func joinAs(t *testing.T, room *Room, account string) roomParty {
+func joinAs(t testing.TB, room *Room, account string) roomParty {
 	t.Helper()
 	root, err := RoomsRoot(account)
 	if err != nil {
@@ -55,7 +55,7 @@ func rosterOf(parties ...roomParty) []string {
 	return cards
 }
 
-func sealFor(t *testing.T, room *Room, from roomParty, roster []string, id uuid.UUID, counter int64) string {
+func sealFor(t testing.TB, room *Room, from roomParty, roster []string, id uuid.UUID, counter int64) string {
 	t.Helper()
 	recipients, digest, err := room.Recipients(from.member, roster)
 	if err != nil {
@@ -68,7 +68,7 @@ func sealFor(t *testing.T, room *Room, from roomParty, roster []string, id uuid.
 	return blob
 }
 
-func flip(t *testing.T, blob string, index int) string {
+func flip(t testing.TB, blob string, index int) string {
 	t.Helper()
 	raw, err := base64.RawURLEncoding.DecodeString(blob)
 	if err != nil {

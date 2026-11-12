@@ -97,14 +97,36 @@ make test-all
 
 ### Option D: Fuzzing the Parsers
 
-Every parser that faces the network has a fuzz target, plus the stored Argon2id hash format (its verifier is test-only since login stopped reading the hash, S-02; it stays while the hash does, S-07): E2E ciphertext and its AAD bindings, the UUID / invite-token / ciphertext whitelists, PoW solutions and JSON request bodies. A target asserts that nothing panics and that whatever is accepted is genuinely valid (canonical encoding, correct key, issued challenge).
+Every module of the server that parses, decodes, validates or classifies attacker-influenced bytes has a fuzz target (64, none needs a database), plus the stored Argon2id hash format (its verifier is test-only since login stopped reading the hash, S-02; it stays while the hash does, S-07). A target asserts invariants, not only "no panic": whatever is accepted is canonical (re-encoding gives the input back), a mutated or forged blob, token, record or proof of work fails closed, every refusal is a registered `apperr` answer below 500, and state machines (spent proofs, log throttle, event hub) stay within their bounds and agree with a model.
+
+| Package | Targets |
+|---|---|
+| `internal/apperr` | `FuzzWriteError`, `FuzzWriteCode`, `FuzzEdgeBody` |
+| `internal/chat` | `FuzzParseRoomInput`, `FuzzRosterDigestMatchesClient`, `FuzzMessageWindow`, `FuzzClockTrusted` |
+| `internal/contract` | `FuzzGateRequest`, `FuzzGateLoginBody`, `FuzzPattern*` (12), `FuzzIntegerLiteral` |
+| `internal/database` | `FuzzClassify` |
+| `internal/e2e` | `FuzzDecrypt`, `FuzzDecryptBindings`, `FuzzParseRoomCode`, `FuzzRoomCodeBuild`, `FuzzOpenRoomMessage`, `FuzzMutateRoomMessage`, `FuzzOpenRoomNote`, `FuzzOpenRoomCard`, `FuzzOpenRoomVault`, `FuzzRosterDigest`, `FuzzAura`, `FuzzRoomSafetyNumber` |
+| `internal/handlers` | `FuzzHealthLoopback` |
+| `internal/pow` | `FuzzValidateSolution`, `FuzzTagMutation`, `FuzzCheckSolutionWindow`, `FuzzSpentSet` |
+| `internal/realtime` | `FuzzHubOperations` |
+| `internal/server` | `FuzzRouteChain` (the production chain, differential against the mux) |
+| `internal/utils` | `FuzzScrubPeerAddresses`, `FuzzAdmitLine`, `FuzzClockSteady`, `FuzzParseProxyList`, `FuzzParseOrigins`, `FuzzDecodeExact`, `FuzzParseRoomBlob` |
+| `tests/auth` | `FuzzVerifyAccountNumberHash`, `FuzzVerifyToken`, `FuzzVerifyPendingToken`, `FuzzAccountLookup` |
+| `tests/database` | `FuzzValidateStartupConfig` |
+| `tests/encryption` | `FuzzOpenWithKeyID`, `FuzzSealRoundTrip` |
+| `tests/identity` | `FuzzDeriveFromAccountNumber`, `FuzzValidateEncodedKey` |
+| `tests/middleware` | `FuzzClientKey`, `FuzzCORS`, `FuzzRecover` |
+| `tests/utils` | `FuzzParseCanonicalUUIDv4`, `FuzzValidateInviteToken`, `FuzzValidateCiphertext` |
+
+Run one target at a time (both engines: add `openssl` to the tags for the OpenSSL build):
 
 ```bash
 cd backend
-go test -tags test -run '^$' -fuzz '^FuzzDecrypt$' -fuzztime 60s ./internal/e2e
-go test -tags test -run '^$' -fuzz '^FuzzVerifyAccountNumberHash$' -fuzztime 60s ./tests/auth
-go test -tags test -run '^$' -fuzz '^FuzzDecodeJSONRequest$' -fuzztime 60s ./tests/utils
+go test -tags test -run '^$' -fuzz '^FuzzGateRequest$' -fuzztime 60s ./internal/contract
+go test -tags 'test openssl' -run '^$' -fuzz '^FuzzOpenRoomMessage$' -fuzztime 60s ./internal/e2e
 ```
+
+CI runs every target for 10 seconds per engine (`.github/workflows/ci.yml`, "Fuzz targets (short run)"); a new target is registered there and in the table above.
 
 Any input that fails is written to `testdata/fuzz/` next to the package and becomes a permanent regression test; commit it with the fix.
 

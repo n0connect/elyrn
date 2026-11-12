@@ -1,8 +1,10 @@
 package contract
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -14,6 +16,7 @@ import (
 	"elyrn/internal/identity"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
+	"elyrn/tests/testutil"
 )
 
 // One fuzz target per pattern and validator pair: whatever a pattern accepts is canonical,
@@ -186,4 +189,122 @@ func FuzzGateLoginBody(f *testing.F) {
 			t.Fatalf("admitted the non-canonical %q", body)
 		}
 	})
+}
+
+// gateHost is the host every fuzzed request is addressed to (the gate never reads it)
+const gateHost = "elyrn.test"
+
+// addGateSeeds seeds FuzzGateRequest with every operation's canonical request and the hostile
+// shapes the gate must refuse: duplicate and case-folded keys, escapes, deep nesting, trailing
+// values, wrong content types, unknown lengths, percent-encoded paths and malformed queries.
+func addGateSeeds(f *testing.F) {
+	forEachOp(func(e *Endpoint, op *Op) {
+		path := strings.NewReplacer(paramConversation, exampleConversation, paramNote, exampleNote).Replace(e.Template)
+		body := ""
+		if op.Body != nil {
+			body = buildBody(f, op.Body.Fields, "", mutation{})
+		}
+		f.Add(op.Method, path, jsonContentType, body, false)
+		f.Add(op.Method, path+"?after=1", jsonContentType, body, true)
+	})
+	key := exampleString(f, patternKey32)
+	messages := models.PathConversations + "/" + exampleConversation + "/" + models.SubMessages
+	for _, seed := range []struct{ method, target, contentType, body string }{
+		{http.MethodPost, models.PathLogin, jsonContentType, `{"auth_key":"` + key + `","auth_key":"` + key + `"}`},
+		{http.MethodPost, models.PathLogin, jsonContentType, `{"AUTH_KEY":"` + key + `"}`},
+		{http.MethodPost, models.PathLogin, jsonContentType, `{"auth\u005fkey":"` + key + `"}`},
+		{http.MethodPost, models.PathLogin, jsonContentType, `{"auth_key":"` + key + `"} {}`},
+		{http.MethodPost, models.PathLogin, jsonContentType, `{"auth_key":"` + key + "\xff" + `"}`},
+		{http.MethodPost, models.PathLogin, jsonContentType + "; charset=utf-8", `{"auth_key":"` + key + `"}`},
+		{http.MethodPost, models.PathLogin, "APPLICATION/JSON", `{"auth_key":"` + key + `"}`},
+		{http.MethodPost, models.PathLogin, jsonContentType, strings.Repeat(`{"a":`, 64)},
+		{http.MethodPost, models.PathRegister, jsonContentType, `{"pow":{"pow":{}}}`},
+		{http.MethodPost, models.PathRegister, "", ""},
+		{http.MethodGet, messages + "?after=1&after=2", "", ""},
+		{http.MethodGet, messages + "?after=01", "", ""},
+		{http.MethodGet, messages + "?before=0", "", ""},
+		{http.MethodGet, messages + "?after=-1", "", ""},
+		{http.MethodGet, messages + "?after=9223372036854775808", "", ""},
+		{http.MethodGet, messages + "?after", "", ""},
+		{http.MethodGet, strings.ToUpper(messages), "", ""},
+		{http.MethodGet, models.PathConversations + "/%33b241101-e2bb-4255-8caf-4136c566a962/messages", "", ""},
+		{http.MethodGet, models.PathConversations + "/" + strings.ToUpper(exampleConversation) + "/messages", "", ""},
+		{http.MethodHead, models.PathLogin, "", ""},
+		{"BREW", models.PathMe, "", ""},
+		{http.MethodGet, "/", "", "\x00"},
+	} {
+		f.Add(seed.method, seed.target, seed.contentType, seed.body, false)
+	}
+}
+
+// FuzzGateRequest runs arbitrary requests through the gate. A refusal is always a registered
+// answer below 500; an admitted request is exactly one table operation on its own path, its
+// query values are declared and in range, its body is within the bound and passes the table
+// again, and its JSON re-encoded (as any client library would) is still admitted.
+func FuzzGateRequest(f *testing.F) {
+	addGateSeeds(f)
+	f.Fuzz(func(t *testing.T, method, target, contentType, body string, unknownLength bool) {
+		r, err := http.NewRequest(method, "http://"+gateHost+target, strings.NewReader(body))
+		if err != nil {
+			return // not a request net/http would hand a handler
+		}
+		if contentType != "" {
+			r.Header.Set(utils.HeaderContentType, contentType)
+		}
+		if unknownLength {
+			r.ContentLength = -1
+		}
+		var in *Input
+		rec := httptest.NewRecorder()
+		Gate(func(w http.ResponseWriter, r *http.Request) { in, _ = InputOf(r) })(rec, r)
+		if in == nil {
+			if _, ok := testutil.RegisteredAnswer(rec); !ok || rec.Code >= http.StatusInternalServerError {
+				t.Fatalf("%s %q refused with the unregistered answer %d %q", method, target, rec.Code, rec.Body.String())
+			}
+			return
+		}
+		expectAdmittedInput(t, r, in)
+	})
+}
+
+// expectAdmittedInput checks everything the gate promises about what it let through.
+func expectAdmittedInput(t *testing.T, r *http.Request, in *Input) {
+	t.Helper()
+	endpoint, params, ok := match(r.URL.Path)
+	if !ok || r.URL.EscapedPath() != r.URL.Path || endpoint.opFor(r.Method) != in.Op || params != in.params {
+		t.Fatalf("%s %q admitted as the wrong operation", r.Method, r.URL.String())
+	}
+	for name, v := range in.query {
+		if param := in.Op.queryParam(name); param == nil || !param.Int.Accepts(v) || len(in.query) > in.Op.MaxQuery {
+			t.Fatalf("%q: query %s=%d admitted", r.URL.String(), name, v)
+		}
+	}
+	if in.Op.Body == nil {
+		if len(in.body) != 0 {
+			t.Fatalf("%s %q: a body reached a bodiless operation", r.Method, r.URL.Path)
+		}
+		return
+	}
+	if len(in.body) > bodyLimit(in.Op.Body) {
+		t.Fatalf("%s %q: a %d-byte body passed the %d-byte bound", r.Method, r.URL.Path, len(in.body), bodyLimit(in.Op.Body))
+	}
+	if _, ok := checkBody(in.body, in.Op.Body); !ok {
+		t.Fatalf("%s %q: admitted %q, which the table refuses", r.Method, r.URL.Path, in.body)
+	}
+	if len(in.body) == 0 {
+		return
+	}
+	dec := json.NewDecoder(bytes.NewReader(in.body))
+	dec.UseNumber()
+	var decoded any
+	if err := dec.Decode(&decoded); err != nil {
+		t.Fatalf("%s %q: admitted %q, which is not JSON: %v", r.Method, r.URL.Path, in.body, err)
+	}
+	reencoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if _, ok := checkBody(reencoded, in.Op.Body); !ok {
+		t.Fatalf("%s %q: %q admitted but its re-encoding %q refused", r.Method, r.URL.Path, in.body, reencoded)
+	}
 }

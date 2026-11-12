@@ -63,16 +63,75 @@ jobs:
         # -race needs cgo; the native engine's production build stays CGO_ENABLED=0 (checked below)
         run: CGO_ENABLED=1 go test -p 1 -race -count=1 -tags "$GO_TAGS" ./...
       - name: Fuzz targets (short run)
+        # every server fuzz target (docs/development/testing-and-contributing.md, Option D)
+        env:
+          FUZZTIME: 10s
         run: |
-          fuzz() { go test -tags "$GO_TAGS" -run '^$' -fuzz "^$2\$" -fuzztime 20s "$1"; }
+          fuzz() { go test -tags "$GO_TAGS" -run '^$' -fuzz "^$2\$" -fuzztime "$FUZZTIME" "$1"; }
+          fuzz ./internal/apperr FuzzEdgeBody
+          fuzz ./internal/apperr FuzzWriteCode
+          fuzz ./internal/apperr FuzzWriteError
+          fuzz ./internal/chat FuzzClockTrusted
+          fuzz ./internal/chat FuzzMessageWindow
+          fuzz ./internal/chat FuzzParseRoomInput
+          fuzz ./internal/chat FuzzRosterDigestMatchesClient
+          fuzz ./internal/contract FuzzGateLoginBody
+          fuzz ./internal/contract FuzzGateRequest
+          fuzz ./internal/contract FuzzIntegerLiteral
+          fuzz ./internal/contract FuzzPatternChallenge
+          fuzz ./internal/contract FuzzPatternInviteToken
+          fuzz ./internal/contract FuzzPatternKey32
+          fuzz ./internal/contract FuzzPatternMessage
+          fuzz ./internal/contract FuzzPatternNote
+          fuzz ./internal/contract FuzzPatternPendingToken
+          fuzz ./internal/contract FuzzPatternRoomCard
+          fuzz ./internal/contract FuzzPatternRoomVault
+          fuzz ./internal/contract FuzzPatternSalt
+          fuzz ./internal/contract FuzzPatternSeqQuery
+          fuzz ./internal/contract FuzzPatternSolution
+          fuzz ./internal/contract FuzzPatternUUIDv4
+          fuzz ./internal/database FuzzClassify
+          fuzz ./internal/e2e FuzzAura
           fuzz ./internal/e2e FuzzDecrypt
           fuzz ./internal/e2e FuzzDecryptBindings
+          fuzz ./internal/e2e FuzzMutateRoomMessage
+          fuzz ./internal/e2e FuzzOpenRoomCard
+          fuzz ./internal/e2e FuzzOpenRoomMessage
+          fuzz ./internal/e2e FuzzOpenRoomNote
+          fuzz ./internal/e2e FuzzOpenRoomVault
+          fuzz ./internal/e2e FuzzParseRoomCode
+          fuzz ./internal/e2e FuzzRoomCodeBuild
+          fuzz ./internal/e2e FuzzRoomSafetyNumber
+          fuzz ./internal/e2e FuzzRosterDigest
+          fuzz ./internal/handlers FuzzHealthLoopback
+          fuzz ./internal/pow FuzzCheckSolutionWindow
+          fuzz ./internal/pow FuzzSpentSet
+          fuzz ./internal/pow FuzzTagMutation
           fuzz ./internal/pow FuzzValidateSolution
+          fuzz ./internal/realtime FuzzHubOperations
+          fuzz ./internal/server FuzzRouteChain
+          fuzz ./internal/utils FuzzAdmitLine
+          fuzz ./internal/utils FuzzClockSteady
+          fuzz ./internal/utils FuzzDecodeExact
+          fuzz ./internal/utils FuzzParseOrigins
+          fuzz ./internal/utils FuzzParseProxyList
+          fuzz ./internal/utils FuzzParseRoomBlob
+          fuzz ./internal/utils FuzzScrubPeerAddresses
+          fuzz ./tests/auth FuzzAccountLookup
           fuzz ./tests/auth FuzzVerifyAccountNumberHash
+          fuzz ./tests/auth FuzzVerifyPendingToken
+          fuzz ./tests/auth FuzzVerifyToken
+          fuzz ./tests/database FuzzValidateStartupConfig
+          fuzz ./tests/encryption FuzzOpenWithKeyID
+          fuzz ./tests/encryption FuzzSealRoundTrip
+          fuzz ./tests/identity FuzzDeriveFromAccountNumber
+          fuzz ./tests/identity FuzzValidateEncodedKey
+          fuzz ./tests/middleware FuzzCORS
+          fuzz ./tests/middleware FuzzClientKey
+          fuzz ./tests/middleware FuzzRecover
           fuzz ./tests/utils FuzzParseCanonicalUUIDv4
-          fuzz ./tests/utils FuzzValidateInviteToken
           fuzz ./tests/utils FuzzValidateCiphertext
-          fuzz ./tests/utils FuzzDecodeJSONRequest
+          fuzz ./tests/utils FuzzValidateInviteToken
       - name: Production build (same flags as the Dockerfile)
         run: |
           if [ "${{ matrix.engine }}" = openssl ]; then
