@@ -1,11 +1,13 @@
 # REST API Reference
 
 All API endpoints are mounted under the base prefix `/api/v2`.
-Requests are subject to strict JSON validation:
-- **Maximum Request Body Size:** 1 MiB (`1048576` bytes).
-- **Maximum JSON Nesting Depth:** 2 levels.
-- **Unknown Fields:** Rejected immediately.
-- **Extraneous Query Parameters:** Any query parameters other than explicitly whitelisted ones (e.g., `?after=seq` or `?before=seq` on the messages route) are rejected with `400 Bad Request`.
+Every request passes one input contract before any handler runs; the complete whitelist (each
+endpoint's methods, query parameters, body bound and every field with its pattern and refusal
+answer) is generated from the code in [input-contract.md](input-contract.md). In short:
+- **Request Body Size:** each endpoint's own bound, derived from its largest legitimate body (123 bytes for login, a few KiB for messages), never above `MAX_REQUEST_BODY_BYTES` (1 MiB).
+- **Content Type:** exactly `application/json`, no parameters (`415` otherwise).
+- **JSON:** one object, declared keys only (exact case), each once, each of its declared type; nesting only where declared (at most 2 levels); nothing after it.
+- **Query Parameters:** only the whitelisted ones (`?after=seq` or `?before=seq` on the messages route), raw and canonical; anything else is rejected with `400 Bad Request`.
 
 ---
 
