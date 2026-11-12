@@ -103,7 +103,7 @@ var tools = []tool{
 		description: "List a room's verified members under the names people see, marking this agent and the owner, and the room safety number members compare on another channel (equal numbers, equal member lists).",
 		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
 		args:        func() any { return &roomArgs{} },
-		run:         runRoom(func(ctx context.Context, b Backend, a roomArgs) (any, error) { return roomCall(ctx, a, b.Members) }),
+		run:         runRoom(func(ctx context.Context, b Backend, id uuid.UUID) (any, error) { return b.Members(ctx, id) }),
 	},
 	{
 		name:        ToolRoomSend,
@@ -143,27 +143,24 @@ var tools = []tool{
 		description: "Leave a room. If this agent owns it, leaving burns the room for everyone (the result says burned: true).",
 		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
 		args:        func() any { return &roomArgs{} },
-		run:         runRoom(func(ctx context.Context, b Backend, a roomArgs) (any, error) { return roomCall(ctx, a, b.Leave) }),
+		run:         runRoom(func(ctx context.Context, b Backend, id uuid.UUID) (any, error) { return b.Leave(ctx, id) }),
 	},
 }
 
-// runRoom adapts a tool whose only argument is the room.
-func runRoom(call func(context.Context, Backend, roomArgs) (any, error)) func(context.Context, Backend, json.RawMessage) (any, error) {
+// runRoom adapts a tool whose only argument is the room: the room is validated before the
+// backend is touched at all (a method value such as b.Members would already dereference it).
+func runRoom(call func(context.Context, Backend, uuid.UUID) (any, error)) func(context.Context, Backend, json.RawMessage) (any, error) {
 	return func(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
 		var args roomArgs
 		if err := parseArgs(raw, &args); err != nil {
 			return nil, err
 		}
-		return call(ctx, b, args)
+		id, err := roomArg(args.Room)
+		if err != nil {
+			return nil, err
+		}
+		return call(ctx, b, id)
 	}
-}
-
-func roomCall[T any](ctx context.Context, args roomArgs, call func(context.Context, uuid.UUID) (T, error)) (any, error) {
-	id, err := roomArg(args.Room)
-	if err != nil {
-		return nil, err
-	}
-	return call(ctx, id)
 }
 
 func runCreate(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
@@ -223,7 +220,17 @@ func runRead(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return b.Read(ctx, id, after)
+	before, err := beforeArg(args.Before)
+	if err != nil {
+		return nil, err
+	}
+	if before == nil {
+		return b.Read(ctx, id, after)
+	}
+	if after != nil {
+		return nil, badArgument()
+	}
+	return b.ReadBefore(ctx, id, *before)
 }
 
 func runWait(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
