@@ -125,27 +125,46 @@ func listTools(raw json.RawMessage) (any, error) {
 	return result, nil
 }
 
-// callTool validates the call, runs the tool and wraps the outcome. An unknown tool is a
-// protocol error; anything that goes wrong inside a tool is a tool result with isError, so the
-// model sees the code and the sentence.
+// callTool validates the call and runs the tool on the caller's goroutine; the server itself
+// splits the two (startCall) so that the tool runs beside the reader.
 func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, error) {
-	var params callParams
-	if err := decodeParams(raw, &params, agent.CodeRPCParams); err != nil {
+	t, args, err := prepareCall(raw)
+	if err != nil {
 		return nil, err
 	}
+	return runTool(ctx, s.backend, t, args)
+}
+
+// prepareCall validates the params of a tools/call and finds the tool. An unknown tool is a
+// protocol error.
+func prepareCall(raw json.RawMessage) (*tool, json.RawMessage, error) {
+	var params callParams
+	if err := decodeParams(raw, &params, agent.CodeRPCParams); err != nil {
+		return nil, nil, err
+	}
 	if params.Name == "" || len(params.Name) > maxToolNameChars {
-		return nil, agent.Fail(agent.CodeRPCParams, nil)
+		return nil, nil, agent.Fail(agent.CodeRPCParams, nil)
 	}
 	t := findTool(ToolName(params.Name))
 	if t == nil {
-		return nil, agent.Fail(agent.CodeUnknownTool, nil)
+		return nil, nil, agent.Fail(agent.CodeUnknownTool, nil)
 	}
-	result, err := t.run(ctx, s.backend, params.Arguments)
+	return t, params.Arguments, nil
+}
+
+// runTool runs a validated tool and wraps the outcome: anything that goes wrong inside a tool
+// is a tool result with isError, so the model sees the code and the sentence.
+func runTool(ctx context.Context, b Backend, t *tool, args json.RawMessage) (any, error) {
+	result, err := t.run(ctx, b, args)
 	if err != nil {
-		code := agent.CodeOf(err)
-		return textResult(toolErrorBody{Error: toolErrorDetail{Code: code, Message: agent.Sentence(code)}}, true)
+		return toolError(agent.CodeOf(err))
 	}
 	return textResult(result, false)
+}
+
+// toolError is the tool result that carries code and its sentence.
+func toolError(code agent.Code) (any, error) {
+	return textResult(toolErrorBody{Error: toolErrorDetail{Code: code, Message: agent.Sentence(code)}}, true)
 }
 
 func findTool(name ToolName) *tool {

@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sync"
+	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"elyrn/internal/agent"
@@ -15,16 +18,34 @@ import (
 
 var logger = utils.NewLogger("MCP")
 
-// Server answers one MCP client on one pair of streams. Requests are handled one at a time, in
-// order; a long room_wait therefore delays the next answer (at most agent.MaxWaitTimeout).
+// writeLockTimeout bounds the wait for stdout: one line takes microseconds unless the client has
+// stopped reading, and then the session is over anyway.
+const writeLockTimeout = 30 * time.Second
+
+// Server answers one MCP client on one pair of streams. Lines are read in order on one goroutine,
+// which answers initialize, ping and tools/list at once; at most one tools/call runs beside it on
+// its own goroutine (inflight.go), so a long room_wait neither freezes the session nor ignores
+// notifications/cancelled.
 type Server struct {
 	backend Backend
 	out     io.Writer
+	// outLock is the one lock of the MCP layer: it serialises writes to out, so the reader's
+	// answers and the tool goroutine's answer never interleave within a line. It is held for one
+	// Write only and never while the backend runs, so it never nests with agent.Agent's call
+	// lock. A write that cannot get it within writeLockTimeout fails; on the reader that ends
+	// the session.
+	outLock  *utils.SafeMutex
+	inflight atomic.Pointer[call] // the tool call in flight, nil when none
+	calls    sync.WaitGroup       // tool goroutines still running
 }
 
-// Serve reads newline-delimited JSON-RPC from in and writes answers to out until in ends.
+// Serve reads newline-delimited JSON-RPC from in and writes answers to out until in ends. It
+// returns only after the tool goroutine, if any, has been cancelled and has ended.
 func Serve(ctx context.Context, in io.Reader, out io.Writer, backend Backend) error {
-	s := &Server{backend: backend, out: out}
+	ctx, stop := context.WithCancel(ctx)
+	s := &Server{backend: backend, out: out, outLock: utils.NewSafeMutexWithTimeout(writeLockTimeout)}
+	defer s.calls.Wait() // deferred first, so it runs after stop
+	defer stop()
 	reader := bufio.NewReaderSize(in, MaxLineBytes)
 	for line := 0; line < maxLines && ctx.Err() == nil; line++ {
 		raw, err := agent.ReadBoundedLine(reader)
@@ -61,20 +82,20 @@ func (s *Server) write(resp *response) error {
 			return err
 		}
 	}
+	if err := s.outLock.Lock(); err != nil {
+		logger.Error("stdout stayed blocked; the answer is dropped")
+		return err
+	}
+	defer s.outLock.Unlock()
 	_, err = s.out.Write(append(raw, '\n'))
 	return err
 }
 
-// handle turns one line into its answer, or nil for a notification. It never panics on input:
-// a panic below is recovered into an internal error.
+// handle turns one line into its answer, or nil for a notification or a tool call now running.
+// It never panics on input: a panic below is recovered into an internal error.
 func (s *Server) handle(ctx context.Context, raw []byte) (resp *response) {
 	id := nullID
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			logger.Error("a request panicked and was answered with an internal error")
-			resp = errorResponse(id, agent.CodeRPCInternal)
-		}
-	}()
+	defer recoverInto(&id, &resp)
 	if !utf8.Valid(raw) || !json.Valid(raw) {
 		return errorResponse(nullID, agent.CodeRPCParse)
 	}
@@ -98,7 +119,24 @@ func (s *Server) handle(ctx context.Context, raw []byte) (resp *response) {
 	if req.JSONRPC != jsonrpcVersion || !validMethod(req.Method) {
 		return errorResponse(id, agent.CodeRPCRequest)
 	}
-	result, err := s.dispatch(ctx, &req)
+	if req.Method == MethodToolsCall {
+		return s.startCall(ctx, id, req.Params)
+	}
+	result, err := s.dispatch(&req)
+	return answerFor(id, result, err)
+}
+
+// recoverInto turns a panic of the deferring function into an internal error for *id. It must
+// be deferred directly, so that recover sees the panic.
+func recoverInto(id *json.RawMessage, resp **response) {
+	if recovered := recover(); recovered != nil {
+		logger.Error("a request panicked and was answered with an internal error")
+		*resp = errorResponse(*id, agent.CodeRPCInternal)
+	}
+}
+
+// answerFor wraps a method's outcome into the answer for id.
+func answerFor(id json.RawMessage, result any, err error) *response {
 	if err != nil {
 		return errorResponse(id, agent.CodeOf(err))
 	}
@@ -108,14 +146,17 @@ func (s *Server) handle(ctx context.Context, raw []byte) (resp *response) {
 // notify handles a notification; none is ever answered.
 func (s *Server) notify(req *request) {
 	switch req.Method {
-	case NotifyInitialized, NotifyCancelled:
+	case NotifyInitialized:
 		logger.Debug("notification received")
+	case NotifyCancelled:
+		s.cancel(req.Params)
 	default:
 		logger.Debug("unknown notification ignored")
 	}
 }
 
-func (s *Server) dispatch(ctx context.Context, req *request) (any, error) {
+// dispatch answers the methods that return at once; tools/call goes through startCall.
+func (s *Server) dispatch(req *request) (any, error) {
 	switch req.Method {
 	case MethodInitialize:
 		return initialize(req.Params)
@@ -127,8 +168,6 @@ func (s *Server) dispatch(ctx context.Context, req *request) (any, error) {
 		return struct{}{}, nil
 	case MethodToolsList:
 		return listTools(req.Params)
-	case MethodToolsCall:
-		return s.callTool(ctx, req.Params)
 	default:
 		return nil, agent.Fail(agent.CodeRPCMethod, nil)
 	}

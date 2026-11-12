@@ -44,6 +44,7 @@ const (
 	CodeUnexpectedStatus Code = "E_AGENT_UNEXPECTED_STATUS"
 	CodeProofOfWork      Code = "E_AGENT_POW"
 	CodeBusy             Code = "E_AGENT_BUSY"
+	CodeCallInFlight     Code = "E_AGENT_CALL_IN_FLIGHT"
 
 	// Rooms
 	CodeRoomUnknown   Code = "E_AGENT_ROOM_UNKNOWN"
@@ -92,6 +93,7 @@ var sentences = map[Code]string{
 	CodeUnexpectedStatus: "The server refused the request with an unexpected status; retry, and tell the server's operator if it persists.",
 	CodeProofOfWork:      "The proof of work was refused or demands more work than this agent allows; retry in a minute.",
 	CodeBusy:             "Another call of this agent is still running; wait for it to finish and call again.",
+	CodeCallInFlight:     "Another tool call is still running (this agent runs one at a time); wait for its answer, or send notifications/cancelled for it, then call again.",
 
 	CodeRoomUnknown:   "This account is in no such room (it may have expired, been burned, or failed verification); call rooms to list the rooms you are in.",
 	CodeRoomVerify:    "The server's data for this room does not match its code, so the room is hidden; do not trust this server with it.",
