@@ -63,6 +63,27 @@ const (
 	maxShuffleDraws = 64
 )
 
+// The server keeps its own copy of the room wire sizes (internal/utils/validation.go) because
+// it must not import this package. Each pair below must be equal: a difference in either
+// direction is a negative constant, which cannot be converted to uint, so a mismatch fails
+// the build.
+const (
+	_ = uint(keySize - utils.RoomLookupBytes)
+	_ = uint(utils.RoomLookupBytes - keySize)
+	_ = uint(roomCardSize - utils.RoomCardBytes)
+	_ = uint(utils.RoomCardBytes - roomCardSize)
+	_ = uint(roomVaultSize - utils.RoomVaultBytes)
+	_ = uint(utils.RoomVaultBytes - roomVaultSize)
+	_ = uint(roomHeaderSize - utils.RoomHeaderBytes)
+	_ = uint(utils.RoomHeaderBytes - roomHeaderSize)
+	_ = uint(roomWrapSize - utils.RoomWrapBytes)
+	_ = uint(utils.RoomWrapBytes - roomWrapSize)
+	_ = uint(roomVersion - utils.RoomVersion)
+	_ = uint(utils.RoomVersion - roomVersion)
+	_ = uint(offsetDigest - utils.RoomDigestOffset)
+	_ = uint(utils.RoomDigestOffset - offsetDigest)
+)
+
 var (
 	roomMessageMagic = []byte("NADR")
 	roomNoteMagic    = []byte("NADN")

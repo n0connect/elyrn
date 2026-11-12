@@ -72,8 +72,8 @@ func getArgon2Params() (argon2Params, error) {
 }
 
 // accountLookupHexLen is the length of every lookup ComputeAccountLookup returns: the hex of
-// one HMAC-SHA256 output.
-const accountLookupHexLen = 2 * 32
+// one HMAC-SHA256 output (hex spells each byte with two characters).
+const accountLookupHexLen = 2 * cryptoengine.SHA256Size
 
 // absentAccountLookup stands in for the stored lookup when no account matched, so a login for
 // an unknown key runs the same comparison on the same length as one for a known key. It is
@@ -97,7 +97,7 @@ func ComputeAccountLookup(accountNumber string) (string, error) {
 	if len(pepper) == 0 {
 		return "", errors.New("ACCOUNT_LOOKUP_PEPPER not configured")
 	}
-	if len(pepper) < 32 {
+	if len(pepper) < config.MinPepperBytes() {
 		return "", errors.New("ACCOUNT_LOOKUP_PEPPER too short")
 	}
 	mac, err := cryptoengine.HMACSHA256(pepper, []byte(accountNumber))

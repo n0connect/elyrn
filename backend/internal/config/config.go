@@ -403,6 +403,11 @@ func GetArgon2HashLength() int {
 	return getEnvIntDefault("ARGON2_HASH_LENGTH", defaultArgon2HashLength)
 }
 
+// MinPepperBytes returns the shortest account-lookup pepper accepted, in bytes.
+func MinPepperBytes() int {
+	return minPepperBytes
+}
+
 // GetAccountLookupPepper returns the pepper for account lookup HMAC: at least 32 bytes of
 // key material encoded as hex or base64. Raw text is rejected (nil), never used as bytes.
 func GetAccountLookupPepper() []byte {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/bits"
 	"sync"
 	"time"
 
@@ -19,7 +20,7 @@ const (
 	// The salt carries the challenge's MAC (mac.go), so it keeps its issued width.
 	ChallengeBytes = 16
 	SaltBytes      = 16
-	// Worker emits a decimal nonce below 10^7; 20 digits bounds any uint64.
+	// maxSolutionDigits: a nonce is a decimal uint64, which has at most 20 digits
 	maxSolutionDigits = 20
 	// Challenge rate limit per client: phase 1 + phase 2 of one registration plus retries
 	challengesPerWindow = 5
@@ -309,7 +310,7 @@ func spend(challenge string, expiresAt int64) error {
 
 // IsHexOfLen reports whether s is exactly byteLen bytes of lowercase hex, as issued.
 func IsHexOfLen(s string, byteLen int) bool {
-	if len(s) != byteLen*2 {
+	if len(s) != hex.EncodedLen(byteLen) {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
@@ -341,27 +342,12 @@ func HasLeadingZeroBits(hash []byte, n int) bool {
 	}
 
 	zeroBits := 0
-
 	for _, b := range hash {
-		if b == 0 {
-			zeroBits += 8
-		} else {
-			// Count leading zeros in this byte
-			for bit := 7; bit >= 0; bit-- {
-				if (b>>bit)&1 == 0 {
-					zeroBits++
-				} else {
-					break
-				}
-			}
-			break
-		}
-
-		if zeroBits >= n {
+		zeroBits += bits.LeadingZeros8(b)
+		if b != 0 || zeroBits >= n {
 			break
 		}
 	}
-
 	return zeroBits >= n
 }
 

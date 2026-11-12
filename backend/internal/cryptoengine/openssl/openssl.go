@@ -5,7 +5,9 @@ package openssl
 /*
 #cgo pkg-config: libcrypto
 #include <openssl/opensslv.h>
-#if OPENSSL_VERSION_NUMBER < 0x30200000L
+// NX_MIN_OPENSSL is OpenSSL 3.2.0, the first release with the ARGON2ID KDF
+#define NX_MIN_OPENSSL 0x30200000L
+#if OPENSSL_VERSION_NUMBER < NX_MIN_OPENSSL
 #error "elyrn: the OpenSSL engine needs OpenSSL >= 3.2 (EVP_KDF ARGON2ID)"
 #endif
 #include <openssl/core_names.h>
@@ -17,6 +19,15 @@ package openssl
 #include <openssl/rand.h>
 #include <openssl/thread.h>
 #include <stdint.h>
+
+// Sizes fixed by the algorithms, in bytes; the Go side reads these same macros, and
+// cryptoengine checks them against its own constants at compile time (select_openssl.go)
+#define NX_SHA256_BYTES 32
+#define NX_GCM_NONCE_BYTES 12
+#define NX_GCM_TAG_BYTES 16
+#define NX_X25519_BYTES 32
+// NX_HKDF_PARAMS: digest, key, salt, info and the end marker
+#define NX_HKDF_PARAMS 5
 
 // Every helper ends with nx_done(): the thread-local error queue is emptied on the thread
 // that filled it, so no failure detail lingers into a later call (cgo calls may land on
@@ -32,14 +43,14 @@ static int nx_random(unsigned char *out, int len) {
 
 static int nx_sha256(const unsigned char *in, size_t inlen, unsigned char *out) {
 	unsigned int outlen = 0;
-	return nx_done(EVP_Digest(in, inlen, out, &outlen, EVP_sha256(), NULL) == 1 && outlen == 32);
+	return nx_done(EVP_Digest(in, inlen, out, &outlen, EVP_sha256(), NULL) == 1 && outlen == NX_SHA256_BYTES);
 }
 
 static int nx_hmac_sha256(const unsigned char *key, size_t keylen,
                           const unsigned char *in, size_t inlen, unsigned char *out) {
 	size_t outlen = 0;
-	return nx_done(EVP_Q_mac(NULL, "HMAC", NULL, "SHA256", NULL, key, keylen, in, inlen, out, 32, &outlen) != NULL
-		&& outlen == 32);
+	return nx_done(EVP_Q_mac(NULL, "HMAC", NULL, "SHA256", NULL, key, keylen, in, inlen, out, NX_SHA256_BYTES, &outlen) != NULL
+		&& outlen == NX_SHA256_BYTES);
 }
 
 static int nx_hkdf_sha256(const unsigned char *ikm, size_t ikmlen, const unsigned char *salt, size_t saltlen,
@@ -53,7 +64,7 @@ static int nx_hkdf_sha256(const unsigned char *ikm, size_t ikmlen, const unsigne
 	if (ctx == NULL) {
 		return nx_done(0);
 	}
-	OSSL_PARAM params[5], *p = params;
+	OSSL_PARAM params[NX_HKDF_PARAMS], *p = params;
 	*p++ = OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, (char *)"SHA256", 0);
 	*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY, (void *)ikm, ikmlen);
 	if (saltlen > 0) {
@@ -80,7 +91,7 @@ static int nx_argon2id(const unsigned char *pwd, size_t pwdlen, const unsigned c
 	if (ctx == NULL) {
 		return nx_done(0);
 	}
-	uint32_t version = 0x13;
+	uint32_t version = 0x13; // Argon2 version 1.3 (RFC 9106 §3.1)
 	OSSL_PARAM params[] = {
 		OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_PASSWORD, (void *)pwd, pwdlen),
 		OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT, (void *)salt, saltlen),
@@ -97,7 +108,7 @@ static int nx_argon2id(const unsigned char *pwd, size_t pwdlen, const unsigned c
 	return nx_done(ok);
 }
 
-// out receives ptlen bytes of ciphertext followed by the 16-byte tag
+// out receives ptlen bytes of ciphertext followed by the NX_GCM_TAG_BYTES tag
 static int nx_gcm_seal(const unsigned char *key, const unsigned char *nonce,
                        const unsigned char *pt, int ptlen, const unsigned char *aad, int aadlen,
                        unsigned char *out) {
@@ -107,7 +118,7 @@ static int nx_gcm_seal(const unsigned char *key, const unsigned char *nonce,
 		return nx_done(0);
 	}
 	if (EVP_EncryptInit_ex2(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-	    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+	    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NX_GCM_NONCE_BYTES, NULL) != 1 ||
 	    EVP_EncryptInit_ex2(ctx, NULL, key, nonce, NULL) != 1) {
 		goto done;
 	}
@@ -124,7 +135,7 @@ static int nx_gcm_seal(const unsigned char *key, const unsigned char *nonce,
 		goto done;
 	}
 	total += len;
-	if (total != ptlen || EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, out + ptlen) != 1) {
+	if (total != ptlen || EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, NX_GCM_TAG_BYTES, out + ptlen) != 1) {
 		goto done;
 	}
 	ok = 1;
@@ -133,7 +144,7 @@ done:
 	return nx_done(ok);
 }
 
-// in is ctlen bytes of ciphertext followed by the 16-byte tag; out receives ctlen bytes
+// in is ctlen bytes of ciphertext followed by the NX_GCM_TAG_BYTES tag; out receives ctlen bytes
 static int nx_gcm_open(const unsigned char *key, const unsigned char *nonce,
                        const unsigned char *in, int ctlen, const unsigned char *aad, int aadlen,
                        unsigned char *out) {
@@ -143,7 +154,7 @@ static int nx_gcm_open(const unsigned char *key, const unsigned char *nonce,
 		return nx_done(0);
 	}
 	if (EVP_DecryptInit_ex2(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-	    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+	    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NX_GCM_NONCE_BYTES, NULL) != 1 ||
 	    EVP_DecryptInit_ex2(ctx, NULL, key, nonce, NULL) != 1) {
 		goto done;
 	}
@@ -156,7 +167,7 @@ static int nx_gcm_open(const unsigned char *key, const unsigned char *nonce,
 		}
 		total = len;
 	}
-	if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void *)(in + ctlen)) != 1) {
+	if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, NX_GCM_TAG_BYTES, (void *)(in + ctlen)) != 1) {
 		goto done;
 	}
 	if (EVP_DecryptFinal_ex(ctx, out + total, &len) != 1) {
@@ -170,22 +181,22 @@ done:
 }
 
 static int nx_x25519_public(const unsigned char *priv, unsigned char *pub) {
-	EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, NULL, priv, 32);
-	size_t len = 32;
+	EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, NULL, priv, NX_X25519_BYTES);
+	size_t len = NX_X25519_BYTES;
 	if (key == NULL) {
 		return nx_done(0);
 	}
-	int ok = EVP_PKEY_get_raw_public_key(key, pub, &len) == 1 && len == 32;
+	int ok = EVP_PKEY_get_raw_public_key(key, pub, &len) == 1 && len == NX_X25519_BYTES;
 	EVP_PKEY_free(key);
 	return nx_done(ok);
 }
 
 // Fails for the all-zero result of a low-order peer point (RFC 7748 §6.1), as Go does
 static int nx_x25519(const unsigned char *priv, const unsigned char *peer, unsigned char *out) {
-	EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, NULL, priv, 32);
-	EVP_PKEY *peerkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL, peer, 32);
+	EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_X25519, NULL, priv, NX_X25519_BYTES);
+	EVP_PKEY *peerkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL, peer, NX_X25519_BYTES);
 	EVP_PKEY_CTX *ctx = NULL;
-	size_t len = 32;
+	size_t len = NX_X25519_BYTES;
 	int ok = 0;
 	if (key == NULL || peerkey == NULL) {
 		goto done;
@@ -194,7 +205,7 @@ static int nx_x25519(const unsigned char *priv, const unsigned char *peer, unsig
 	if (ctx == NULL || EVP_PKEY_derive_init(ctx) != 1 || EVP_PKEY_derive_set_peer_ex(ctx, peerkey, 0) != 1) {
 		goto done;
 	}
-	ok = EVP_PKEY_derive(ctx, out, &len) == 1 && len == 32;
+	ok = EVP_PKEY_derive(ctx, out, &len) == 1 && len == NX_X25519_BYTES;
 done:
 	EVP_PKEY_CTX_free(ctx);
 	EVP_PKEY_free(peerkey);
@@ -217,7 +228,7 @@ static const char *nx_version(void) {
 // Lets Argon2id compute its lanes in parallel; returns how many threads are allowed
 static uint64_t nx_enable_threads(uint64_t wanted) {
 	if (OSSL_set_max_threads(NULL, wanted) != 1) {
-		return 1;
+		return 1; // threading refused: Argon2id runs on the calling thread alone
 	}
 	return OSSL_get_max_threads(NULL);
 }
@@ -231,16 +242,28 @@ import (
 )
 
 // minVersion is OpenSSL 3.2.0: the first release with the ARGON2ID KDF.
-const minVersion = 0x30200000
+const minVersion = C.NX_MIN_OPENSSL
 
-// maxArgon2Threads bounds the worker threads OpenSSL may start for one Argon2id call.
-const maxArgon2Threads = 8
+// maxArgon2Threads bounds the worker threads OpenSSL may start for one Argon2id call;
+// minArgon2Threads is the calling thread alone.
+const (
+	maxArgon2Threads = 8
+	minArgon2Threads = 1
+)
+
+// Algorithm sizes in bytes, from the C macros above (one home for both sides of cgo).
+const (
+	SHA256Size    = C.NX_SHA256_BYTES
+	GCMNonceSize  = C.NX_GCM_NONCE_BYTES
+	GCMTagSize    = C.NX_GCM_TAG_BYTES
+	X25519KeySize = C.NX_X25519_BYTES
+)
 
 var (
 	errFailed     = errors.New("openssl: operation failed")
 	errOldOpenSSL = errors.New("openssl: the linked libcrypto is older than 3.2.0")
 	threadsOnce   sync.Once
-	argon2Threads uint32 = 1
+	argon2Threads uint32 = minArgon2Threads
 )
 
 // Engine implements the primitives with OpenSSL's EVP interfaces (libcrypto >= 3.2).
@@ -286,7 +309,7 @@ func (Engine) Random(out []byte) error {
 
 // SHA256 returns the SHA-256 digest of data.
 func (Engine) SHA256(data []byte) ([]byte, error) {
-	out := make([]byte, 32)
+	out := make([]byte, SHA256Size)
 	if err := done(C.nx_sha256(ptr(data), C.size_t(len(data)), ptr(out))); err != nil {
 		return nil, err
 	}
@@ -295,7 +318,7 @@ func (Engine) SHA256(data []byte) ([]byte, error) {
 
 // HMACSHA256 returns HMAC-SHA256(key, data).
 func (Engine) HMACSHA256(key, data []byte) ([]byte, error) {
-	out := make([]byte, 32)
+	out := make([]byte, SHA256Size)
 	if err := done(C.nx_hmac_sha256(ptr(key), C.size_t(len(key)), ptr(data), C.size_t(len(data)), ptr(out))); err != nil {
 		return nil, err
 	}
@@ -318,7 +341,7 @@ func (Engine) Argon2id(password, salt []byte, timeCost, memoryKiB, lanes, keyLen
 	threadsOnce.Do(func() {
 		argon2Threads = uint32(C.nx_enable_threads(maxArgon2Threads))
 		if argon2Threads == 0 {
-			argon2Threads = 1
+			argon2Threads = minArgon2Threads
 		}
 	})
 	threads := lanes
@@ -346,9 +369,9 @@ func (Engine) HKDFSHA256(ikm, salt, info []byte, length int) ([]byte, error) {
 	return out, nil
 }
 
-// SealAES256GCM returns ciphertext || 16-byte tag for the given 12-byte nonce.
+// SealAES256GCM returns ciphertext || tag (GCMTagSize) for the given GCMNonceSize nonce.
 func (Engine) SealAES256GCM(key, nonce, plaintext, aad []byte) ([]byte, error) {
-	out := make([]byte, len(plaintext)+16)
+	out := make([]byte, len(plaintext)+GCMTagSize)
 	ok := C.nx_gcm_seal(ptr(key), ptr(nonce), ptr(plaintext), C.int(len(plaintext)), ptr(aad), C.int(len(aad)), ptr(out))
 	if err := done(ok); err != nil {
 		return nil, err
@@ -358,10 +381,10 @@ func (Engine) SealAES256GCM(key, nonce, plaintext, aad []byte) ([]byte, error) {
 
 // OpenAES256GCM authenticates and decrypts ciphertext || tag.
 func (Engine) OpenAES256GCM(key, nonce, sealed, aad []byte) ([]byte, error) {
-	if len(sealed) < 16 {
+	if len(sealed) < GCMTagSize {
 		return nil, errFailed
 	}
-	ctLen := len(sealed) - 16
+	ctLen := len(sealed) - GCMTagSize
 	out := make([]byte, ctLen)
 	ok := C.nx_gcm_open(ptr(key), ptr(nonce), ptr(sealed), C.int(ctLen), ptr(aad), C.int(len(aad)), ptr(out))
 	if err := done(ok); err != nil {
@@ -370,9 +393,9 @@ func (Engine) OpenAES256GCM(key, nonce, sealed, aad []byte) ([]byte, error) {
 	return out, nil
 }
 
-// X25519PublicKey returns the public key of a 32-byte private scalar (clamped per RFC 7748).
+// X25519PublicKey returns the public key of an X25519KeySize private scalar (clamped per RFC 7748).
 func (Engine) X25519PublicKey(privateKey []byte) ([]byte, error) {
-	out := make([]byte, 32)
+	out := make([]byte, X25519KeySize)
 	if err := done(C.nx_x25519_public(ptr(privateKey), ptr(out))); err != nil {
 		return nil, err
 	}
@@ -381,7 +404,7 @@ func (Engine) X25519PublicKey(privateKey []byte) ([]byte, error) {
 
 // X25519 returns the shared secret; the all-zero result of a low-order peer is refused.
 func (Engine) X25519(privateKey, peerPublicKey []byte) ([]byte, error) {
-	out := make([]byte, 32)
+	out := make([]byte, X25519KeySize)
 	if err := done(C.nx_x25519(ptr(privateKey), ptr(peerPublicKey), ptr(out))); err != nil {
 		return nil, err
 	}

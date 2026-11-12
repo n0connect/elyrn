@@ -22,7 +22,9 @@ const (
 	// macLabel separates this MAC from any other use of the secret (domain separation)
 	macLabel = "elyrn/pow-challenge/v1"
 	// secretBytes: an HMAC-SHA256 key of the hash's own output length (RFC 2104 §3)
-	secretBytes = 32
+	secretBytes = cryptoengine.SHA256Size
+	// sealedIntFields: timestamp, ttl and difficulty, each a big-endian int64
+	sealedIntFields = 3
 )
 
 var (
@@ -47,7 +49,7 @@ func challengeSecret() ([]byte, error) {
 
 // challengeTag computes the salt for one challenge under key, as lowercase hex.
 func challengeTag(key []byte, challenge string, timestamp, ttl int64, difficulty int) (string, error) {
-	input := make([]byte, 0, len(macLabel)+len(challenge)+3*binary.Size(int64(0)))
+	input := make([]byte, 0, len(macLabel)+len(challenge)+sealedIntFields*binary.Size(int64(0)))
 	input = append(input, macLabel...)
 	input = append(input, challenge...)
 	input = binary.BigEndian.AppendUint64(input, uint64(timestamp))
