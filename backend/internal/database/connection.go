@@ -149,7 +149,12 @@ func ValidateStartupConfig() error {
 	if config.IsProductionMode() {
 		argon2Floor = config.ProductionMinArgon2MemoryKiB
 	}
-	port, _ := strconv.Atoi(config.GetBackendPort())
+	// A value that is not a number fails the BACKEND_PORT bound below, whose message already
+	// says "must be an integer between 1 and 65535"; the parse error adds nothing to it
+	port, err := strconv.Atoi(config.GetBackendPort())
+	if err != nil {
+		port = 0
+	}
 	if err := checkBounds([]bounded{
 		{"JWT_SECRET_MIN_LEN", minJWTLen, 32, 1024},
 		{"JWT_EXPIRATION_MINUTES", int(config.GetJWTExpiration() / time.Minute), 1, 1440},

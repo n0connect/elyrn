@@ -49,6 +49,8 @@ func (s *Slots) Release() {
 	select {
 	case s.free <- struct{}{}:
 	default:
+		// More releases than acquisitions: the bound is already broken and cannot be repaired
+		// here (RULES.md §6.2: a logic error with no recovery), so abort
 		panic("utils.Slots: Release without Acquire")
 	}
 }

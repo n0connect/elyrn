@@ -47,6 +47,8 @@ func (m *SafeMutex) Unlock() {
 	select {
 	case <-m.slot:
 	default:
+		// The lock state no longer matches the code holding it: continuing could run two
+		// critical sections at once (RULES.md §4.1, §6.2), so abort
 		panic("utils: unlock of unlocked SafeMutex")
 	}
 }

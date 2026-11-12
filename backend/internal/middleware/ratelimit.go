@@ -170,7 +170,12 @@ func RateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		bucket := globalRateLimiter.getBucket("ip:" + ClientKey(r))
+		client, err := ClientKey(r)
+		if err != nil {
+			apperr.WriteError(w, "RateLimitMiddleware: ClientKey", err)
+			return
+		}
+		bucket := globalRateLimiter.getBucket("ip:" + client)
 
 		if !bucket.Allow() {
 			apperr.Write(w, "RateLimitMiddleware", apperr.RateLimited)

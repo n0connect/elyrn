@@ -13,6 +13,8 @@ var ErrSelfTest = errors.New("cryptoengine: known-answer self-test failed")
 func mustHex(s string) []byte {
 	b, err := hex.DecodeString(s)
 	if err != nil {
+		// Vectors are source literals, never input: a bad one is a build defect that the first
+		// startup reveals, before any key or user data is touched (RULES.md §6.2)
 		panic("cryptoengine: bad self-test vector")
 	}
 	return b

@@ -291,7 +291,12 @@ func PoWChallengeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Rate-limit key: HMAC(client IP) with a per-boot secret (forwarded headers trusted only from TRUSTED_PROXIES)
 	// ErrRateLimited answers 429, ErrCapacity 503 (apperr sentinel table), anything else 500
-	challenge, err := pow.GenerateChallenge(middleware.ClientKey(r))
+	client, err := middleware.ClientKey(r)
+	if err != nil {
+		apperr.WriteError(w, "ClientKey", err)
+		return
+	}
+	challenge, err := pow.GenerateChallenge(client)
 	if err != nil {
 		apperr.WriteError(w, "GenerateChallenge", err)
 		return

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/hex"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -168,22 +169,24 @@ func IsRequestHTTPS(r *http.Request) bool {
 var (
 	clientKeyOnce   sync.Once
 	clientKeySecret []byte
+	clientKeyErr    error
 )
 
 // ClientKey returns an opaque, per-boot pseudonym for the client's network (IPv4 address or
-// IPv6 /64). Rate limiters key on this instead of the raw IP. Panics if the CSPRNG fails
-// (RULES.md §1.3).
-func ClientKey(r *http.Request) string {
+// IPv6 /64). Rate limiters key on this instead of the raw IP. A CSPRNG or HMAC failure is
+// returned so the caller answers 500: a panic inside a request is recovered by net/http, so it
+// would not abort the process (RULES.md §1.3) and would only drop the connection. A failed
+// secret draw is remembered, so no key is ever computed without a secret.
+func ClientKey(r *http.Request) (string, error) {
 	clientKeyOnce.Do(func() {
-		secret, err := cryptoengine.RandomBytes(32)
-		if err != nil {
-			panic("CSPRNG unavailable: " + err.Error())
-		}
-		clientKeySecret = secret
+		clientKeySecret, clientKeyErr = cryptoengine.RandomBytes(32)
 	})
+	if clientKeyErr != nil {
+		return "", fmt.Errorf("client key secret: %w", clientKeyErr)
+	}
 	mac, err := cryptoengine.HMACSHA256(clientKeySecret, []byte(clientNetwork(ClientIP(r))))
 	if err != nil {
-		panic("HMAC unavailable: " + err.Error())
+		return "", fmt.Errorf("client key: %w", err)
 	}
-	return hex.EncodeToString(mac[:16])
+	return hex.EncodeToString(mac[:16]), nil
 }

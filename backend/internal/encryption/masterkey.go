@@ -91,6 +91,8 @@ func loadMasterKeys() (masterKeySet, error) {
 
 func ActiveMasterKey() []byte {
 	if err := InitMasterKeys(); err != nil {
+		// Unreachable in a running server: the result is cached once and startup refuses to run
+		// on it (ValidateStartupConfig); getting here means encrypting without a key, so abort
 		panic(err)
 	}
 	return masterKeys.active
@@ -98,6 +100,8 @@ func ActiveMasterKey() []byte {
 
 func ActiveMasterKeyID() string {
 	if err := InitMasterKeys(); err != nil {
+		// Unreachable in a running server (see ActiveMasterKey): a record must never be
+		// labelled with an empty key id, so abort
 		panic(err)
 	}
 	return masterKeys.activeID

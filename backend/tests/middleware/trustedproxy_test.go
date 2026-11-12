@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -79,7 +80,7 @@ func TestClientKey_GroupsIPv6ByPrefix(t *testing.T) {
 	key := func(remote string) string {
 		req := httptest.NewRequest("GET", "/api/v2/me", nil)
 		req.RemoteAddr = remote
-		return middleware.ClientKey(req)
+		return clientKey(t, req)
 	}
 	if key("[2001:db8:1:2::1]:443") != key("[2001:db8:1:2:ffff:ffff:ffff:9]:443") {
 		t.Error("two addresses in one IPv6 /64 got different rate-limit keys")
@@ -109,7 +110,7 @@ func TestClientKey_SeparatesTorCircuits(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/v2/me", nil)
 		req.RemoteAddr = "203.0.113.10:12345"
 		req.Header.Set("X-Forwarded-For", client)
-		return middleware.ClientKey(req)
+		return clientKey(t, req)
 	}
 	circuit := viaProxy("fc00:dead:beef:4dad::1:2c3d")
 	if circuit == viaProxy("fc00:dead:beef:4dad::1:2c3e") {
@@ -122,4 +123,14 @@ func TestClientKey_SeparatesTorCircuits(t *testing.T) {
 	if viaProxy("fc00:dead:beef:4dae::1") != viaProxy("fc00:dead:beef:4dae::2") {
 		t.Error("an ordinary IPv6 /64 is no longer grouped")
 	}
+}
+
+// clientKey is middleware.ClientKey for tests: a key the server could not compute fails the test.
+func clientKey(t *testing.T, r *http.Request) string {
+	t.Helper()
+	key, err := middleware.ClientKey(r)
+	if err != nil {
+		t.Fatalf("ClientKey: %v", err)
+	}
+	return key
 }
