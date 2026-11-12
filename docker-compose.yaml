@@ -37,7 +37,14 @@ services:
       - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./certs/postgres:/etc/elyrn/tls:ro
+      # Long syntax: a missing certs/ (make certs not run) fails the start instead of Docker
+      # creating an empty, root-owned directory in its place
+      - type: bind
+        source: ./certs/postgres
+        target: /etc/elyrn/tls
+        read_only: true
+        bind:
+          create_host_path: false
       - ./postgres/entrypoint.sh:/etc/elyrn/entrypoint.sh:ro
       - ./postgres/pg_hba.conf:/etc/elyrn/pg_hba.conf:ro
     # Like every other service: after a crash or a host reboot the database comes back too,
@@ -124,7 +131,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
     # The database CA only (public); a renewed CA changes the label and recreates the backend
     volumes:
-      - ./certs/ca:/etc/elyrn/db-ca:ro
+      - type: bind
+        source: ./certs/ca
+        target: /etc/elyrn/db-ca
+        read_only: true
+        bind:
+          create_host_path: false
     labels:
       elyrn.db-ca-sha256: ${DB_CA_SHA256:-}
     # Loopback only: browsers must go through nginx (CSP, same-origin); local debugging still works
