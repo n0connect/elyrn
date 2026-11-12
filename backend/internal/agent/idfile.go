@@ -190,10 +190,15 @@ func parseIdentity(raw []byte) (*identityFile, error) {
 	if err := decoder.Decode(&id); err != nil || decoder.More() {
 		return nil, fail(CodeIdentityFile, err)
 	}
-	if _, kind := ClassifyServerURL(id.Server); kind == URLRefused || !utils.ValidateAccountNumber(id.AccountNumber) ||
+	origin, kind := ClassifyServerURL(id.Server)
+	if kind == URLRefused || !utils.ValidateAccountNumber(id.AccountNumber) ||
 		(id.PendingToken != "" && !validPendingToken(id.PendingToken)) {
 		return nil, fail(CodeIdentityFile, nil)
 	}
+	// The stored address is used as the origin of every request and compared with --server, so
+	// it is kept in its canonical form (a hand-edited "HTTPS://Host/" would otherwise yield
+	// "HTTPS://Host//api/..." and a false E_AGENT_SERVER_MISMATCH)
+	id.Server = origin
 	return &id, nil
 }
 

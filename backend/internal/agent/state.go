@@ -71,20 +71,32 @@ func loadCounterState(path string, existed bool) (*counterState, error) {
 		}
 		return state, nil
 	}
+	rooms, err := decodeCounterRooms(raw)
+	if err != nil {
+		return nil, err
+	}
+	state.rooms = rooms
+	return state, nil
+}
+
+// decodeCounterRooms parses the content of a counter file: one object of the current version,
+// no unknown field, at most maxStateRooms valid records under canonical room ids.
+func decodeCounterRooms(raw []byte) (map[uuid.UUID]*counterRecord, error) {
 	var file stateFile
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&file); err != nil || decoder.More() || file.Version != stateVersion || len(file.Rooms) > maxStateRooms {
 		return nil, fail(CodeStateFile, err)
 	}
+	rooms := make(map[uuid.UUID]*counterRecord, len(file.Rooms))
 	for key, record := range file.Rooms {
 		id, ok := utils.ParseCanonicalUUIDv4(key)
 		if !ok || !validRecord(record) {
 			return nil, fail(CodeStateFile, nil)
 		}
-		state.rooms[id] = record
+		rooms[id] = record
 	}
-	return state, nil
+	return rooms, nil
 }
 
 func validRecord(r *counterRecord) bool {
@@ -164,15 +176,25 @@ func (s *counterState) evict(held map[uuid.UUID]*roomState) {
 func (s *counterState) save(held map[uuid.UUID]*roomState) error {
 	s.pruneExpired(time.Now())
 	s.evict(held)
+	raw, err := s.encode()
+	if err != nil {
+		return err
+	}
+	return writePrivate(s.path, raw, true, CodeStateFile)
+}
+
+// encode is the content of the counter file for the records held now (decodeCounterRooms reads
+// it back).
+func (s *counterState) encode() ([]byte, error) {
 	file := stateFile{Version: stateVersion, Rooms: make(map[string]*counterRecord, len(s.rooms))}
 	for id, record := range s.rooms {
 		file.Rooms[id.String()] = record
 	}
 	raw, err := json.Marshal(&file)
 	if err != nil {
-		return fail(CodeStateFile, err)
+		return nil, fail(CodeStateFile, err)
 	}
-	return writePrivate(s.path, raw, true, CodeStateFile)
+	return raw, nil
 }
 
 // drop forgets one room's record, only once this agent left or burned the room itself; it

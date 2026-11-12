@@ -23,6 +23,7 @@ const (
 	schemeHTTPS        = "https"
 	schemeHTTP         = "http"
 	onionSuffix        = ".onion"
+	portSeparator      = ":"
 	maxServerURLChars  = 256
 	maxHostLabelChars  = 63
 	maxPort            = 65535
@@ -56,7 +57,9 @@ func ClassifyServerURL(raw string) (string, URLKind) {
 	if !validHost(host) || !validPort(u.Port()) {
 		return "", URLRefused
 	}
-	origin := strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+	// An empty port ("host:") names the scheme's default one: it is dropped, so both spellings
+	// give one origin (the identity file's server is compared with --server by that origin)
+	origin := strings.ToLower(u.Scheme) + "://" + strings.TrimSuffix(strings.ToLower(u.Host), portSeparator)
 	switch strings.ToLower(u.Scheme) {
 	case schemeHTTPS:
 		return origin, URLHTTPS

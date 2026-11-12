@@ -17,6 +17,9 @@ const RobotDoor = (() => {
 
     // The trail keeps this many pointer moves (x, y, t), the oldest dropped first
     const TRAIL_CAPACITY = 256;
+    // No screen is this wide: a coordinate beyond it is not a pointer's, and the path length
+    // over TRAIL_CAPACITY such moves stays finite (no "Infinity" on the verdict screen)
+    const MAX_COORDINATE_PX = 1e9;
     // A click counts as a person's when at least this many moves happened ...
     const MIN_TRAIL_POINTS = 8;
     // ... within this long before it
@@ -65,7 +68,8 @@ const RobotDoor = (() => {
 
     // ---------- the trail ----------
 
-    // A ring buffer of the last TRAIL_CAPACITY moves; non-finite values are ignored
+    // A ring buffer of the last TRAIL_CAPACITY moves; non-finite values and coordinates beyond
+    // MAX_COORDINATE_PX are ignored
     function createTrail(capacity = TRAIL_CAPACITY) {
         const xs = new Float64Array(capacity);
         const ys = new Float64Array(capacity);
@@ -74,7 +78,8 @@ const RobotDoor = (() => {
         let size = 0;
 
         function push(x, y, t) {
-            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(t)) return;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(t) ||
+                Math.abs(x) > MAX_COORDINATE_PX || Math.abs(y) > MAX_COORDINATE_PX) return;
             xs[next] = x;
             ys[next] = y;
             ts[next] = t;
@@ -187,7 +192,7 @@ const RobotDoor = (() => {
     }
 
     return Object.freeze({
-        TRAIL_CAPACITY, MIN_TRAIL_POINTS, RECENT_WINDOW_MS, MIN_STRAIGHT_PX, STRAIGHT_DETOUR_MAX,
+        TRAIL_CAPACITY, MAX_COORDINATE_PX, MIN_TRAIL_POINTS, RECENT_WINDOW_MS, MIN_STRAIGHT_PX, STRAIGHT_DETOUR_MAX,
         LONG_PAUSE_MS, NONCE_BYTES, ANSWER_HEX_CHARS, MODE, REASON, LINES,
         createTrail, measure, classify, verdictLine, measurementLines,
         newNonce, expectedAnswer, checkAnswer,
