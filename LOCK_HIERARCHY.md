@@ -10,7 +10,8 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
 - `rateLimiterMutex` - PoW per-client limiters map (never held together with `spentMutex`)
 - `spentMutex` - PoW spent (solved, unexpired) challenges map; leaf lock. Issued challenges are
   no longer stored (S-03)
-- `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map; leaf lock, channel sends under it never block
+- `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map and the per-client (network) stream
+  counts (S-04); leaf lock, channel sends under it never block
 - `pendingStore.mu` - Pending registration map (leaf lock)
 
 ### Priority Level 2 - Per-Resource Locks

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"elyrn/internal/apperr"
+	"elyrn/internal/middleware"
 	"elyrn/internal/realtime"
 )
 
@@ -46,10 +47,16 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, cancel, err := realtime.Default.Subscribe(me.StreamTag)
+	// The stream counts against this network's share as well as the account's (S-04)
+	client, err := middleware.ClientKey(r)
 	if err != nil {
-		// Every Subscribe failure answers 429, as it always has: the subscriber cap, or a hub
-		// lock timeout under contention (both mean "retry later")
+		apperr.WriteError(w, "EventsHandler: ClientKey", err)
+		return
+	}
+	events, cancel, err := realtime.Default.Subscribe(me.StreamTag, client)
+	if err != nil {
+		// Every Subscribe failure answers 429, as it always has: a subscriber cap (account,
+		// network or hub), or a hub lock timeout under contention (all mean "retry later")
 		apperr.Write(w, "EventsHandler", apperr.SubscriberLimit)
 		return
 	}
