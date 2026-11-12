@@ -25,7 +25,7 @@ identity and recorded in Sigstore's public transparency log.
 
    ```bash
    cosign verify-blob --bundle frontend.sha256.sigstore.json \
-     --certificate-identity-regexp '^https://github\.com/n0connect/noaddx/\.github/workflows/release\.yml@refs/tags/elyrn-' \
+     --certificate-identity-regexp '^https://github\.com/n0connect/elyrn/\.github/workflows/release\.yml@refs/tags/elyrn-' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
      frontend.sha256
    ```
