@@ -20,13 +20,13 @@ backend/tests/
 |   |-- db_helper.go           # Database env setup
 |   |-- env.go                 # Environment setup (secrets drawn from the CSPRNG per run)
 |   `-- values.go              # Real generators: AccountNumber, auth key, ids
-`-- utils/                     # Utils, SafeMutex, supervised goroutines, logger (22 test)
+`-- utils/                     # Utils, SafeMutex, supervised goroutines, logger (9 test)
 ```
 
-Paket ici testler: `internal/pow` (13, gercek cozum/gercek sure dolumu, bosta kalan istemcinin unutulmasi), `internal/realtime` (3, SSE hub), `internal/handlers` (2, rota/sorgu beyaz listesi), `internal/e2e` (22, Go istemci protokolu + tarayici ciphertext'i + bes padding boyutu + oda protokolu ve tarayici oda vektorleri).
+Paket ici testler: `internal/pow` (13, gercek cozum/gercek sure dolumu, bosta kalan istemcinin unutulmasi), `internal/realtime` (3, SSE hub), `internal/contract` (12, girdi sozlesmesi: her endpoint'in kanonik istegi kabul, her turetilmis mutasyon kayitli cevapla ret, yol/sorgu/metot beyaz listesi, uretilmis belge esitligi), `internal/e2e` (22, Go istemci protokolu + tarayici ciphertext'i + bes padding boyutu + oda protokolu ve tarayici oda vektorleri).
 Frontend testleri: `frontend/tests/` (crypto.test.mjs 10, room-crypto.test.mjs 14, validation.test.mjs 3, pow-worker.test.mjs 3) -> `node --test frontend/tests/*.test.mjs`
 Kripto motoru: `internal/cryptoengine` (10, bilinen-cevap vektorleri, secili motorda), `internal/cryptoengine/equivalence` (9, iki motoru ayni binary'de karsilastirir; `-tags openssl` ile).
-Fuzz hedefleri: `internal/e2e`, `internal/pow`, `tests/auth`, `tests/utils` (`go test -tags test -run '^$' -fuzz '^FuzzX$' -fuzztime 30s <paket>`).
+Fuzz hedefleri: `internal/contract` (her desen/dogrulayici cifti icin bir hedef: kabul ⇒ kanonik yeniden kodlama esitligi), `internal/e2e`, `internal/pow`, `tests/auth`, `tests/utils` (`go test -tags test -run '^$' -fuzz '^FuzzX$' -fuzztime 30s <paket>`).
 
 ## Test Calistirma Sirasi
 
