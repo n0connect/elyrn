@@ -60,10 +60,11 @@ type RegisterResponse struct {
 // ---- messaging ----
 
 type MeResponse struct {
-	PublicKey       string `json:"public_key"`
-	MessageTTLDays  int    `json:"message_ttl_days"`   // ciphertext is deleted after this many days
-	RoomMaxMembers  int    `json:"room_max_members"`   // largest room a member may create
-	RoomMaxTTLHours int    `json:"room_max_ttl_hours"` // longest room lifetime, in hours
+	PublicKey        string `json:"public_key"`
+	MessageTTLDays   int    `json:"message_ttl_days"`   // ciphertext is deleted after this many days
+	RoomMaxMembers   int    `json:"room_max_members"`   // largest room a member may create
+	RoomMaxTTLHours  int    `json:"room_max_ttl_hours"` // longest room lifetime, in hours
+	MessagePageLimit int    `json:"message_page_limit"` // most messages per page: a shorter page is the last
 }
 
 type CreateInviteRequest struct {

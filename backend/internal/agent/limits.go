@@ -27,6 +27,7 @@ const (
 	pathMembers       = "/members"
 	pathRead          = "/read"
 	queryAfter        = "after"
+	queryBefore       = "before"
 )
 
 // Timeouts: every exchange is bounded (RULES.md §17.1).

@@ -24,6 +24,13 @@
 // the remembered counter if the message is new, otherwise none (older messages may have
 // expired, so the first one visible starts the count).
 //
+// EARLIER PAGES. Paging back loads messages below everything already loaded. Each such page is
+// judged on its own ledger (history()): rule 1 inside the page, rule 2 against the record read
+// at open, and, from rule 1 across pages, each sender's counter must stay below the lowest one
+// already loaded above it (the page's ceiling). A gap is measured inside the page only: the
+// messages between the record and the page may sit on a page not loaded yet. A history ledger
+// is never snapshotted, so an earlier page can neither lower nor raise what the device stores.
+//
 // WHAT IT CANNOT SEE. A device with no record (first open on this device, after a logout or a
 // wiped or private browser storage) has only rule 1. A record is per device, so another
 // device's view is not checked. A replay given a seq at or below the remembered one is shown
@@ -85,8 +92,23 @@ const Counters = (() => {
     }
 
     // The state of one loaded sequence: the record it started from and what it has seen since
+    // (run: each sender's last counter; first: their first, the lowest in ascending seq)
     function ledger(record) {
-        return { record: record, seq: record.seq, stored: new Map(record.senders), run: new Map() };
+        return { record: record, seq: record.seq, stored: new Map(record.senders), run: new Map(), first: new Map(), ceiling: null };
+    }
+
+    // The state of one earlier page: `above` holds each sender's lowest counter loaded above it
+    function history(record, above) {
+        return Object.assign(ledger(record), { ceiling: new Map(above) });
+    }
+
+    // Each sender's lowest counter across `above` and what `state` admitted: the next page's ceiling
+    function lowest(above, state) {
+        const merged = new Map(above);
+        for (const [key, counter] of state.first) {
+            merged.set(key, Math.min(merged.has(key) ? merged.get(key) : counter, counter));
+        }
+        return merged;
     }
 
     // The verdict on one authenticated message, without changing the ledger
@@ -94,16 +116,20 @@ const Counters = (() => {
         const run = state.run.get(sender);
         const isNew = seq > state.seq;
         const stored = state.stored.get(sender) || 0;
-        if ((run !== undefined && counter <= run) || (isNew && counter <= stored)) {
+        const ceiling = state.ceiling ? state.ceiling.get(sender) : undefined;
+        if ((run !== undefined && counter <= run) || (isNew && counter <= stored) ||
+            (ceiling !== undefined && counter >= ceiling)) {
             return REPLAY;
         }
-        const last = run !== undefined ? run : (isNew ? stored : 0);
+        // An earlier page measures gaps from inside itself only (see EARLIER PAGES)
+        const last = run !== undefined ? run : (isNew && !state.ceiling ? stored : 0);
         return last > 0 && counter > last + 1 ? Object.freeze({ replay: false, gap: counter - last - 1 }) : IN_ORDER;
     }
 
     // Records a message judge() did not call a replay, so its counter is above the sender's last
     function admit(state, sender, counter) {
         state.run.set(sender, counter);
+        if (!state.first.has(sender)) state.first.set(sender, counter);
     }
 
     // What to remember: the starting record raised by this sequence, up to `seq` processed
@@ -111,5 +137,5 @@ const Counters = (() => {
         return merge(state.record, freeze(seq, mine, state.run));
     }
 
-    return Object.freeze({ EMPTY, parse, merge, same, ledger, judge, admit, snapshot });
+    return Object.freeze({ EMPTY, parse, merge, same, ledger, history, lowest, judge, admit, snapshot });
 })();

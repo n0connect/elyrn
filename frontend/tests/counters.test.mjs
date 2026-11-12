@@ -117,3 +117,40 @@ test('a malformed stored record counts as none', () => {
         assert.equal(Counters.parse(raw), Counters.EMPTY);
     }
 });
+
+// Paging back: the latest page is loaded, then an earlier page judged on its own ledger
+function earlierPage(record, loaded, page) {
+    const latest = Counters.ledger(record);
+    play(latest, loaded);
+    const before = Counters.snapshot(latest, loaded[loaded.length - 1][2], 0);
+    const state = Counters.history(record, Counters.lowest(new Map(), latest));
+    const verdicts = play(state, page);
+    return { verdicts, latest, state, before };
+}
+
+test('earlier page: old counters below the loaded ones pass, with no gap from the record', () => {
+    // The device remembers seq 10 (Alice at 5); seqs 11..299 are on pages not loaded yet
+    const record = Counters.parse({ seq: 10, mine: 0, senders: [[ALICE, 5]] });
+    const run = earlierPage(record, [[ALICE, 200, 300], [ALICE, 201, 301]], [[ALICE, 50, 100], [ALICE, 51, 101]]);
+    assert.deepEqual(run.verdicts, ['ok', 'ok']);
+});
+
+test('earlier page: a gap inside the page is reported, a counter at or above the loaded ones is a replay', () => {
+    const record = Counters.parse({ seq: 10, mine: 0, senders: [[ALICE, 5]] });
+    const loaded = [[ALICE, 200, 300]];
+    assert.deepEqual(earlierPage(record, loaded, [[ALICE, 50, 100], [ALICE, 53, 101]]).verdicts, ['ok', 'gap 2']);
+    assert.deepEqual(earlierPage(record, loaded, [[ALICE, 200, 100]]).verdicts, ['replay']);
+    assert.deepEqual(earlierPage(record, loaded, [[ALICE, 250, 100]]).verdicts, ['replay']);
+    // Rule 2 still holds: above the remembered seq, a counter at or below the record's is a replay
+    assert.deepEqual(earlierPage(record, loaded, [[ALICE, 5, 20]]).verdicts, ['replay']);
+});
+
+test('earlier page: the loaded sequence and its snapshot are left as they were', () => {
+    const record = Counters.parse({ seq: 10, mine: 0, senders: [[ALICE, 5], [BOB, 9]] });
+    const run = earlierPage(record, [[ALICE, 200, 300]], [[ALICE, 50, 100], [BOB, 20, 101]]);
+    assert.deepEqual(new Map(run.latest.run), new Map([[ALICE, 200]]));
+    const after = Counters.snapshot(run.latest, 300, 0);
+    assert.ok(Counters.same(after, run.before));
+    // The next page down is bounded by the lowest counters of everything above it
+    assert.deepEqual(new Map(Counters.lowest(Counters.lowest(new Map(), run.latest), run.state)), new Map([[ALICE, 50], [BOB, 20]]));
+});

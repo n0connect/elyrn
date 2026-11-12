@@ -103,10 +103,11 @@ func MeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	utils.EncodeJSONResponse(w, models.MeResponse{
-		PublicKey:       me.PublicKey,
-		MessageTTLDays:  config.GetMessageTTLDays(),
-		RoomMaxMembers:  config.GetRoomMaxMembers(),
-		RoomMaxTTLHours: config.GetRoomMaxTTLHours(),
+		PublicKey:        me.PublicKey,
+		MessageTTLDays:   config.GetMessageTTLDays(),
+		RoomMaxMembers:   config.GetRoomMaxMembers(),
+		RoomMaxTTLHours:  config.GetRoomMaxTTLHours(),
+		MessagePageLimit: config.GetMessagePageLimit(),
 	}, http.StatusOK)
 }
 

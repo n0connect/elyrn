@@ -368,6 +368,7 @@ function showChatView(aura, room) {
     burnButton.textContent = room && !room.owner ? 'leave' : 'burn';
     burnButton.title = room && !room.owner ? 'Leave room' : (room ? 'Burn room for everyone' : 'Burn conversation');
     clearChildren(document.getElementById('messageList'));
+    setEarlierControl(false, false);
     document.getElementById('homeView').style.display = 'none';
     document.getElementById('chatView').style.display = 'block';
 }
@@ -459,18 +460,42 @@ function createMessageElement(message) {
     return item;
 }
 
-// Appends messages (already sorted by seq) and keeps the view pinned to the bottom
-function appendMessages(messages) {
-    const list = document.getElementById('messageList');
-    const pinned = list.scrollHeight - list.scrollTop - list.clientHeight < PINNED_SLACK_PX;
+// The "say hello" line goes once there is something to show
+function dropEmptyNotice(list, messages) {
     const empty = list.querySelector('.empty-message');
     if (empty && messages.length > 0) {
         empty.remove();
     }
+}
+
+// Appends messages (already sorted by seq) and keeps the view pinned to the bottom
+function appendMessages(messages) {
+    const list = document.getElementById('messageList');
+    const pinned = list.scrollHeight - list.scrollTop - list.clientHeight < PINNED_SLACK_PX;
+    dropEmptyNotice(list, messages);
     messages.forEach(message => list.appendChild(createMessageListItem(message)));
     if (pinned || messages.some(m => m.mine)) {
         list.scrollTop = list.scrollHeight;
     }
+}
+
+// Puts an earlier page (sorted by seq) above what is shown; the distance from the bottom is
+// kept, so the messages being read stay where they were instead of jumping down
+function prependMessages(messages) {
+    const list = document.getElementById('messageList');
+    const fromBottom = list.scrollHeight - list.scrollTop;
+    dropEmptyNotice(list, messages);
+    const page = document.createDocumentFragment();
+    messages.forEach(message => page.appendChild(createMessageListItem(message)));
+    list.insertBefore(page, list.firstChild);
+    list.scrollTop = list.scrollHeight - fromBottom;
+}
+
+// The "earlier messages" control: shown while more history may exist, disabled while loading
+function setEarlierControl(shown, busy) {
+    const button = document.getElementById('earlierBtn');
+    button.style.display = shown ? 'block' : 'none';
+    button.disabled = Boolean(busy);
 }
 
 function renderEmptyConversation(ttlDays, room) {

@@ -183,6 +183,7 @@ function setupConversationListeners() {
     document.getElementById('burnNoBtn').addEventListener('click', () => Chat.askBurn(false));
     document.getElementById('burnYesBtn').addEventListener('click', () => Chat.burn());
     document.getElementById('sendBtn').addEventListener('click', () => Chat.send());
+    document.getElementById('earlierBtn').addEventListener('click', () => Chat.earlier());
 }
 
 // Composer: Enter to send, Shift+Enter for a new line

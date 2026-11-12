@@ -1116,6 +1116,17 @@ header {
     scrollbar-width: thin;
 }
 
+/* Pages back through history; sits above the list so loading a page never moves it */
+.earlier-opt {
+    width: 100%;
+    margin-bottom: 8px;
+}
+
+.earlier-opt:disabled {
+    cursor: wait;
+    opacity: 0.6;
+}
+
 .message-list .empty-message {
     margin: auto;
     padding: 0;

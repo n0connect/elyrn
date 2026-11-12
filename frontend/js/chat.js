@@ -109,7 +109,8 @@ const Chat = (() => {
             roomsRoot: identity.roomsRoot,
             aura: await ElyrnCrypto.aura(identity.publicKey),
             ttlDays: ttlDays,
-            limits: limits
+            limits: limits,
+            pageLimit: limits.pageLimit  // 0: the server did not say, so no paging back
         };
         renderMe(me.aura);
         setComposerHint(ttlDays);
@@ -261,6 +262,9 @@ const Chat = (() => {
             lastSeq: item.last_seq,
             readSeq: item.read_seq,
             maxSeq: 0,
+            firstSeq: 0,                // the lowest seq loaded since open: where paging back starts
+            earlier: false,             // the server may hold messages below firstSeq
+            above: new Map(),           // senders' lowest counters on the earlier pages loaded
             seqs: new Set(),
             ids: new Set(),
             loaded: false,
@@ -300,6 +304,9 @@ const Chat = (() => {
         conv.seqs = new Set();
         conv.ids = new Set();
         conv.maxSeq = 0;
+        conv.firstSeq = 0;
+        conv.earlier = false;
+        conv.above = new Map();
         // myMaxN is kept: this device's counter only ever grows
         conv.loaded = false;
         // Read now, before any await, so every sync and send of this open waits for the same record
@@ -357,44 +364,106 @@ const Chat = (() => {
             conv.ledger = Counters.ledger(record);
             conv.myMaxN = Math.max(conv.myMaxN, record.mine);
         }
+        const first = !conv.loaded;
         conv.loaded = true;
 
-        const fresh = await admitMessages(conv, result.data.messages);
+        const page = await admitMessages(conv, result.data.messages, { ledger: conv.ledger, after: conv.maxSeq, before: Infinity });
+        conv.maxSeq = page.last;
+        if (first) {
+            // The latest page: anything below it is reached by paging back
+            conv.firstSeq = page.first;
+            conv.earlier = mayHaveEarlier(result.data.messages.length, page.first);
+        }
         // Once per sync, never per message; kept even if the user moved on meanwhile
         await saveMark(conv);
         if (activeId !== conv.id) return;
 
-        appendMessages(fresh);
+        appendMessages(page.fresh);
+        if (first) setEarlierControl(conv.earlier, false);
         if (conv.room) checkLookalikes(conv);
         conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
         await markRead(conv);
     }
 
-    // Opens each well-formed message not seen before, in sequence order, and judges its counter.
-    // Returns what to show: messages, gap notices, and replay warnings in place of replays.
-    async function admitMessages(conv, messages) {
+    // A page that came back full may have more below it; a shorter one is the beginning
+    function mayHaveEarlier(served, first) {
+        return me.pageLimit > 0 && served >= me.pageLimit && first > 1;
+    }
+
+    // Opens each well-formed message not seen before, in ascending seq inside the range
+    // (after < seq < before), and judges its counter on range.ledger. Returns what to show
+    // (messages, gap notices, replay warnings in place of replays) and the lowest and highest
+    // seq taken (0 and range.after when none was).
+    async function admitMessages(conv, messages, range) {
         const key = conv.room ? null : await conversationKey(conv);
         const fresh = [];
         let replayed = false;
+        let first = 0;
+        let last = range.after;
         for (const raw of messages) {
             if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || !isSeq(raw.seq) || raw.seq === 0 ||
                 typeof raw.mine !== 'boolean' || typeof raw.ciphertext !== 'string' ||
-                raw.ciphertext.length > MAX_CIPHERTEXT_CHARS || conv.seqs.has(raw.seq) || raw.seq <= conv.maxSeq ||
-                conv.ids.has(raw.id)) {
-                // Unknown shape, or a message id seen before (a server re-serving an old ciphertext)
+                raw.ciphertext.length > MAX_CIPHERTEXT_CHARS || conv.seqs.has(raw.seq) || raw.seq <= last ||
+                raw.seq >= range.before || conv.ids.has(raw.id)) {
+                // Unknown shape, out of order or range, or a message id seen before (a server
+                // re-serving an old ciphertext)
                 continue;
             }
             const message = await openMessage(conv, key, raw);
             conv.seqs.add(raw.seq);
             conv.ids.add(raw.id);
-            conv.maxSeq = raw.seq;
+            first = first || raw.seq;
+            last = raw.seq;
             if (!message.broken) {
-                replayed = checkCounter(conv, message, fresh) || replayed;
+                replayed = checkCounter(conv, range.ledger, message, fresh) || replayed;
             }
             if (!message.replayed) fresh.push(message);
         }
         if (replayed) Log.warn(Errors.CODES.W_MESSAGE_REPLAYED);
-        return fresh;
+        return { fresh: fresh, first: first, last: last };
+    }
+
+    // ---------- earlier messages (paging back) ----------
+
+    // Loads the page just below the lowest message shown, queued with the syncs
+    function earlier() {
+        const conv = conversations.get(activeId);
+        if (!conv || !conv.earlier) return Promise.resolve();
+        setEarlierControl(true, true);
+        conv.syncChain = conv.syncChain.then(() => earlierNow(conv)).catch(error => {
+            // The control is shared by every conversation: only the one still open gets it back
+            if (activeId === conv.id) setEarlierControl(conv.earlier, false);
+            Log.error(Errors.INTERNAL.E_SYNC_FAILED, error);
+        });
+        return conv.syncChain;
+    }
+
+    // An earlier page is history: judged on its own ledger (counters.js, EARLIER PAGES), so it
+    // never moves conv.ledger, conv.maxSeq or the stored record; only firstSeq moves down
+    async function earlierNow(conv) {
+        const opened = conv.markLoad;  // a new open replaces it: this page then belongs to nobody
+        if (!conv.earlier || activeId !== conv.id) return;
+        const before = conv.firstSeq;
+        const result = await api('GET', `/conversations/${conv.id}/messages?before=${before}`);
+        if (!me || activeId !== conv.id || conv.markLoad !== opened) return;
+        if (result.status === 404) {
+            scheduleRefresh();
+            return;
+        }
+        if (!result.ok || !result.data || !Array.isArray(result.data.messages)) {
+            setEarlierControl(true, false);
+            if (result.status !== 401) Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
+            return;
+        }
+        const ledger = Counters.history(await opened, Counters.lowest(conv.above, conv.ledger));
+        const page = await admitMessages(conv, result.data.messages, { ledger: ledger, after: 0, before: before });
+        if (activeId !== conv.id || conv.markLoad !== opened) return;
+        conv.above = Counters.lowest(conv.above, ledger);
+        conv.firstSeq = page.first || before;
+        conv.earlier = mayHaveEarlier(result.data.messages.length, page.first);
+        prependMessages(page.fresh);
+        if (conv.room) checkLookalikes(conv);
+        setEarlierControl(conv.earlier, false);
     }
 
     // Decrypts and authenticates one message: { seq, mine, text, sentAt, sender, counter, from? },
@@ -432,17 +501,17 @@ const Chat = (() => {
         return Object.assign(message, { from: aura, left: !entry });
     }
 
-    // Judges an authenticated message's counter (counters.js), the same way for pairs and rooms.
-    // A replay is marked so the caller shows a warning in its place; a gap is pushed before it.
-    // Returns whether it was a replay.
-    function checkCounter(conv, message, fresh) {
-        const verdict = Counters.judge(conv.ledger, message.sender, message.counter, message.seq);
+    // Judges an authenticated message's counter on a ledger (counters.js), the same way for pairs
+    // and rooms. A replay is marked so the caller shows a warning in its place; a gap is pushed
+    // before it. Returns whether it was a replay. myMaxN only ever rises, from any page.
+    function checkCounter(conv, ledger, message, fresh) {
+        const verdict = Counters.judge(ledger, message.sender, message.counter, message.seq);
         if (verdict.replay) {
             message.replayed = true;
             fresh.push({ replay: true, mine: message.mine, from: message.from });
             return true;
         }
-        Counters.admit(conv.ledger, message.sender, message.counter);
+        Counters.admit(ledger, message.sender, message.counter);
         if (message.mine) {
             conv.myMaxN = Math.max(conv.myMaxN, message.counter);
         } else if (verdict.gap > 0) {
@@ -1029,7 +1098,7 @@ const Chat = (() => {
     }
 
     return Object.freeze({
-        start, stop, open, backToList, send, createInvite, join, createRoom,
+        start, stop, open, backToList, send, earlier, createInvite, join, createRoom,
         toggleMembers, toggleRoomCode, copyRoomCode,
         showSafety, toggleVerified, askBurn, burn, onVisible,
         isActive: () => me !== null,

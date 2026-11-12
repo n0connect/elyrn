@@ -20,6 +20,8 @@ const powWorkerPolicy = window.trustedTypes
 // outside these is refused like a mismatched identity
 const MAX_MESSAGE_TTL_DAYS = 365;
 const MAX_ROOM_TTL_HOURS = 720;
+// The largest message page this client takes from /me (the agent bounds a served page alike)
+const MAX_MESSAGE_PAGE_LIMIT = 1000;
 
 function powWorkerURL() {
     return powWorkerPolicy ? powWorkerPolicy.createScriptURL(POW_WORKER_PATH) : POW_WORKER_PATH;
@@ -93,7 +95,14 @@ function roomLimits(data) {
         !Number.isSafeInteger(hours) || hours < 1 || hours > MAX_ROOM_TTL_HOURS) {
         return null;
     }
-    return { maxMembers: members, maxTTLHours: hours };
+    return { maxMembers: members, maxTTLHours: hours, pageLimit: pageLimit(data) };
+}
+
+// A server that does not say its page size (older than paging back) gets no "earlier
+// messages" control instead of a refused login: 0 turns the control off
+function pageLimit(data) {
+    const limit = data && data.message_page_limit;
+    return Number.isSafeInteger(limit) && limit >= 1 && limit <= MAX_MESSAGE_PAGE_LIMIT ? limit : 0;
 }
 
 async function enterApp(identity, persist) {
