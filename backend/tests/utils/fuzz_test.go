@@ -3,7 +3,6 @@ package utils
 import (
 	"bytes"
 	"encoding/base64"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -57,30 +56,6 @@ func FuzzValidateCiphertext(f *testing.F) {
 		raw, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
 		if err != nil || len(raw) < 29 || len(raw) > 8192 || base64.RawURLEncoding.EncodeToString(raw) != encoded {
 			t.Fatalf("%q accepted as ciphertext", encoded)
-		}
-	})
-}
-
-// The request decoder never panics, never accepts more than one JSON value, and never
-// accepts nesting beyond MAX_JSON_DEPTH.
-func FuzzDecodeJSONRequest(f *testing.F) {
-	testutil.SetupTestEnv(f)
-	f.Cleanup(func() { testutil.TeardownTestEnv(f) })
-	f.Add(`{"auth_key":"x"}`)
-	f.Add(`{"auth_key":"x"} {}`)
-	f.Add(`{"a":{"b":{"c":1}}}`)
-	f.Add(`[[[[]]]]`)
-	f.Add(strings.Repeat("[", 100000))
-	f.Add("")
-	f.Fuzz(func(t *testing.T, body string) {
-		var target struct {
-			AuthKey string `json:"auth_key"`
-		}
-		req := httptest.NewRequest("POST", "/api/v2/login", strings.NewReader(body))
-		err := utils.DecodeJSONRequest(req, &target)
-		if err == nil && strings.Count(body, "{")+strings.Count(body, "[") > 2 {
-			// more than MAX_JSON_DEPTH (2) opening brackets means nesting > 2 or a trailing value
-			t.Fatalf("body %q accepted", body)
 		}
 	})
 }

@@ -40,12 +40,11 @@ func formatEvent(ev realtime.Event) string {
 
 // EventsHandler streams content-free change notifications (GET /api/v2/events).
 func EventsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		apperr.Write(w, "EventsHandler", apperr.MethodNotAllowed)
+	if _, ok := admitted(w, r, "EventsHandler"); !ok {
 		return
 	}
 	me, ok := resolveMe(w, r)
-	if !ok || rejectQuery(w, r) {
+	if !ok {
 		return
 	}
 

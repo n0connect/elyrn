@@ -31,8 +31,6 @@ const (
 	roomRosterPrefix = "noaddx/room/roster/v1"
 	// expirySkew tolerates a client clock this far off when it proposes a room's expiry
 	expirySkew = 10 * time.Minute
-	// Expiries are whole hours since the Unix epoch
-	hourSeconds = int64(time.Hour / time.Second)
 	// newRoomMembers is the creator alone: a fresh room has no notes and no messages yet
 	newRoomMembers = 1
 	// noteWraps: a note is sealed for exactly one addressee
@@ -49,7 +47,9 @@ type RoomInput struct {
 	ExpiresAt  time.Time // create only
 }
 
-// ParseRoomInput whitelists the client-derived room fields by type, exact length and alphabet.
+// ParseRoomInput converts the client-derived room fields into their parsed forms. The input
+// contract (internal/contract) refused every malformed value before the handler ran; the same
+// parsers run here because they produce the id and lookup, so a failure is a wiring fault.
 func ParseRoomInput(id, lookup, card, vault string) (*RoomInput, error) {
 	roomID, okID := utils.ParseCanonicalUUIDv4(id)
 	rawLookup, okLookup := utils.DecodeExact(lookup, utils.RoomLookupBytes)
@@ -61,10 +61,12 @@ func ParseRoomInput(id, lookup, card, vault string) (*RoomInput, error) {
 	return &RoomInput{ID: roomID, Lookup: rawLookup, Card: card, Vault: vault}, nil
 }
 
-// checkLimits validates what only a creator sends: the member limit and an hour-aligned expiry
-// one hour to ROOM_MAX_TTL_HOURS (+1, the rounding) ahead.
+// checkLimits validates what only a creator sends against this server's settings and clock:
+// at most ROOM_MAX_MEMBERS, and an expiry one hour to ROOM_MAX_TTL_HOURS (+1, the rounding)
+// ahead. The fixed bounds (at least two members, an expiry on the hour) are the input
+// contract's (internal/contract), checked before any handler runs.
 func checkLimits(in *RoomInput, now time.Time) error {
-	if in.MaxMembers < config.MinRoomMembers || in.MaxMembers > config.GetRoomMaxMembers() || in.ExpiresAt.Unix()%hourSeconds != 0 {
+	if in.MaxMembers > config.GetRoomMaxMembers() {
 		return ErrInvalidInput
 	}
 	earliest := now.Add(config.MinRoomTTLHours*time.Hour - expirySkew)

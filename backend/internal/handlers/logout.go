@@ -20,11 +20,10 @@ var logoutLogger = utils.NewLogger("LOGOUT")
 // closes live event streams. Only a live session may do that: a token revoked earlier
 // cannot end the sessions created after it. A failed revocation is reported, never hidden.
 func LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		apperr.Write(w, "LogoutHandler", apperr.MethodNotAllowed)
+	if _, ok := admitted(w, r, "LogoutHandler"); !ok {
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(utils.HeaderCacheControl, utils.CacheNoStore)
 	// The cookie goes in every case: absent, expired, revoked or live
 	auth.ClearAuthCookie(w)
 

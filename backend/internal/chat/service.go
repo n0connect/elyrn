@@ -820,11 +820,9 @@ func (s *Service) SendMessage(me *Member, conversationID uuid.UUID, rawID, ciphe
 	return seq, streams, nil
 }
 
-// MarkRead advances the caller's read marker (never backwards, never past the end).
+// MarkRead advances the caller's read marker (never backwards, never past the end). seq is at
+// least FirstSeq: the input contract refuses anything lower before a handler runs.
 func (s *Service) MarkRead(me *Member, conversationID uuid.UUID, seq int64) error {
-	if seq <= 0 {
-		return ErrInvalidInput
-	}
 	member, err := s.requireMembership(s.chats, me, conversationID)
 	if err != nil {
 		return err

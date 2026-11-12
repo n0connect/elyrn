@@ -26,27 +26,13 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	authLogger.LogRequest(r.Method)
 	authLogger.Debug("Starting RegisterHandler")
 
-	// Handle HEAD requests (used by browsers/tools for link previews, health checks, etc.)
-	if r.Method == http.MethodHead {
-		authLogger.Debug("Handling HEAD request for registration endpoint")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		apperr.Write(w, "RegisterHandler", apperr.MethodNotAllowed)
-		return
-	}
-
 	// Prevent caching of sensitive responses
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(utils.HeaderCacheControl, utils.CacheNoStore)
 
-	// Parse request body
+	// The gate admitted the body (an empty one stands for {}, phase 1) and every field in it
 	var req models.RegisterRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		// Empty body is OK - treat as generate AccountNumber only (confirm=false)
-		authLogger.Debug("Empty or invalid body, treating as AccountNumber generation request")
-		req.Confirm = false
+	if !bindInput(w, r, &req, "RegisterHandler") {
+		return
 	}
 
 	// SECURITY: PoW is validated here and only here, for both phases, on the exact struct
@@ -260,13 +246,10 @@ func newAccountRecord(lookup, authKey, publicKey string) (*models.User, error) {
 }
 
 // requireProofOfWork admits a request only with an issued, unused, unexpired solution at the
-// issued difficulty (consuming it), and otherwise writes 412 (missing), 403 (invalid), 503 (the
-// spent set is full) or 500 (no challenge secret).
+// issued difficulty (consuming it), and otherwise writes 403 (invalid), 503 (the spent set is
+// full) or 500 (no challenge secret). A missing or malformed solution never gets here: the
+// gate answered it (412, 403) from the contract's "pow" field.
 func requireProofOfWork(w http.ResponseWriter, solution *models.PoWSolution, action string) bool {
-	if solution == nil {
-		apperr.Write(w, "requireProofOfWork:"+action, apperr.PoWRequired)
-		return false
-	}
 	if err := pow.ValidateSolution(solution); err != nil {
 		apperr.WriteError(w, "requireProofOfWork:"+action, err)
 		return false
@@ -277,21 +260,12 @@ func requireProofOfWork(w http.ResponseWriter, solution *models.PoWSolution, act
 func PoWChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	authLogger.LogRequest(r.Method)
 	authLogger.Debug("Starting PoWChallengeHandler")
-
-	// Handle HEAD requests
-	if r.Method == http.MethodHead {
-		authLogger.Debug("Handling HEAD request for PoW challenge endpoint")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		apperr.Write(w, "PoWChallengeHandler", apperr.MethodNotAllowed)
+	if _, ok := admitted(w, r, "PoWChallengeHandler"); !ok {
 		return
 	}
 
 	// Prevent caching of sensitive responses
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(utils.HeaderCacheControl, utils.CacheNoStore)
 
 	// Rate-limit key: HMAC(client IP) with a per-boot secret (forwarded headers trusted only from TRUSTED_PROXIES)
 	// ErrRateLimited answers 429, ErrCapacity 503 (apperr sentinel table), anything else (no
@@ -323,30 +297,14 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	authLogger.LogRequest(r.Method)
 	authLogger.Debug("Starting LoginHandler")
 
-	// Handle HEAD requests (used by browsers/tools for link previews, health checks, etc.)
-	if r.Method == http.MethodHead {
-		authLogger.Debug("Handling HEAD request for login endpoint")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		apperr.Write(w, "LoginHandler", apperr.MethodNotAllowed)
-		return
-	}
-
 	// Prevent caching of sensitive responses
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(utils.HeaderCacheControl, utils.CacheNoStore)
 
+	// SECURITY: the gate admitted the auth key as canonical base64url of exactly 32 bytes
+	// before any database operation (contract: login, auth_key). The client sends
+	// HKDF(AccountNumber, "noaddx/auth"); the AccountNumber itself never leaves the browser
 	var req models.LoginRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		apperr.Write(w, "LoginHandler: DecodeJSONRequest", apperr.LoginBodyInvalid)
-		return
-	}
-	// SECURITY: Validate auth key format (exactly 32 bytes, base64url) before any database operations
-	// The client sends HKDF(AccountNumber, "noaddx/auth"); the AccountNumber itself never leaves the browser
-	if !identity.ValidateEncodedKey(req.AuthKey) {
-		apperr.Write(w, "LoginHandler: ValidateEncodedKey", apperr.LoginKeyMalformed)
+	if !bindInput(w, r, &req, "LoginHandler") {
 		return
 	}
 
