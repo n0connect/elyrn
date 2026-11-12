@@ -28,6 +28,10 @@ const (
 	maxPort            = 65535
 	envAllProxy        = "ALL_PROXY"
 	envAllProxyLower   = "all_proxy"
+	envHTTPSProxy      = "HTTPS_PROXY"
+	envHTTPSProxyLower = "https_proxy"
+	envHTTPProxy       = "HTTP_PROXY"
+	envHTTPProxyLower  = "http_proxy"
 	proxySchemeSOCKS5  = "socks5"
 	proxySchemeSOCKS5H = "socks5h"
 )
@@ -107,24 +111,43 @@ func isOnionHost(origin string) bool {
 	return err == nil && strings.HasSuffix(strings.ToLower(u.Hostname()), onionSuffix)
 }
 
-// proxyFunc honours HTTPS_PROXY / HTTP_PROXY / NO_PROXY (http.ProxyFromEnvironment) and, when
-// those name no proxy, ALL_PROXY (curl's variable, which net/http does not read): so
-// ALL_PROXY=socks5h://127.0.0.1:9050 reaches an onion service. Loopback is never proxied.
+// proxyFunc picks the proxy of each request as curl does, with one documented difference.
+//   - HTTPS_PROXY (https requests) or HTTP_PROXY (http requests), upper or lower case, when set:
+//     http.ProxyFromEnvironment decides, NO_PROXY and its matching included.
+//   - Otherwise ALL_PROXY (curl's variable, which net/http does not read), so that
+//     ALL_PROXY=socks5h://127.0.0.1:9050 reaches an onion service. NO_PROXY does NOT apply to it:
+//     its matching lives in golang.org/x/net/http/httpproxy, a dependency this program does not
+//     take and whose rules it will not copy. Only localhost, 127.0.0.1 and ::1 bypass ALL_PROXY.
+//
+// The environment is read once, as net/http itself caches it.
 func proxyFunc() (func(*http.Request) (*url.URL, error), error) {
 	all, err := allProxy()
 	if err != nil {
 		return nil, err
 	}
+	schemeProxySet := map[string]bool{
+		schemeHTTPS: envSet(envHTTPSProxy, envHTTPSProxyLower),
+		schemeHTTP:  envSet(envHTTPProxy, envHTTPProxyLower),
+	}
 	return func(req *http.Request) (*url.URL, error) {
-		proxy, err := http.ProxyFromEnvironment(req)
-		if err != nil || proxy != nil {
-			return proxy, err
+		if all == nil || schemeProxySet[strings.ToLower(req.URL.Scheme)] {
+			return http.ProxyFromEnvironment(req)
 		}
 		if _, loopback := loopbackHosts[strings.ToLower(req.URL.Hostname())]; loopback {
 			return nil, nil
 		}
 		return all, nil
 	}, nil
+}
+
+// envSet reports whether any of the named environment variables is non-empty.
+func envSet(names ...string) bool {
+	for _, name := range names {
+		if os.Getenv(name) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // allProxy parses ALL_PROXY (or all_proxy); unset is no proxy, malformed is refused.
