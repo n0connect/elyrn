@@ -48,6 +48,8 @@ const (
 	Argon2Busy
 	PendingStoreFull
 	StoreUnavailable
+	ShuttingDown
+	HealthUnavailable
 
 	// Chat service outcomes
 	InvalidInput
@@ -154,6 +156,12 @@ var registry = map[Code]entry{
 	Argon2Busy:       {"E_ARGON2_BUSY", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
 	PendingStoreFull: {"E_PENDING_STORE_FULL", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
 	StoreUnavailable: {"E_STORE_UNAVAILABLE", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelERROR, shapeText},
+	// MERGE: a request that reached the server while it closes its master keys (shutdown) is
+	// refused like an outage, never sealed under a zeroized key (encryption.ErrClosing)
+	ShuttingDown: {"E_SHUTTING_DOWN", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
+	// The container healthcheck (loopback only): the database did not answer SELECT 1 in time,
+	// or retention stopped cycling; a status line only, no detail
+	HealthUnavailable: {"E_HEALTH_UNAVAILABLE", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeEmpty},
 
 	// InvalidInput is the service-side twin of InvalidRequest (same answer, separate log id)
 	InvalidInput: {"E_INVALID_INPUT", http.StatusBadRequest, sayInvalidRequest, utils.LogLevelWARN, shapeText},
@@ -209,7 +217,8 @@ func Describe(code Code) (id string, status int) {
 }
 
 // Write logs the failure once (operation name and code id, at the code's level; never
-// request data) and answers with the registered status and sentence.
+// request data; at most utils.LogBurst lines per code per utils.LogWindow, so a flood of free
+// requests cannot fill the disk) and answers with the registered status and sentence.
 func Write(w http.ResponseWriter, op string, code Code) {
 	e := lookup(code)
 	logAt(e.level, op, e.id)
@@ -260,16 +269,8 @@ func sendJSON(w http.ResponseWriter, e entry) {
 	utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: e.body}, e.status)
 }
 
-// logAt is the one place a failure line is formatted.
+// logAt is the one place a failure line is formatted, at any level under the flood bound of its
+// code id (utils.LogBurst lines per utils.LogWindow; LogError lines are bounded per operation).
 func logAt(level utils.LogLevel, op, id string) {
-	switch level {
-	case utils.LogLevelDEBUG:
-		logger.Debug("%s: %s", op, id)
-	case utils.LogLevelINFO:
-		logger.Info("%s: %s", op, id)
-	case utils.LogLevelWARN:
-		logger.Warn("%s: %s", op, id)
-	default:
-		logger.Error("%s: %s", op, id)
-	}
+	logger.At(level, id, "%s: %s", op, id)
 }

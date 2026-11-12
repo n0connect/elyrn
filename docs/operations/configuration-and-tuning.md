@@ -14,15 +14,15 @@ All settings can be configured via `.env` or injected directly as environment va
 |---|---|---|---|
 | `JWT_SECRET` | string | *Generated* | HMAC-SHA256 signing secret for session tokens (must be >= `JWT_SECRET_MIN_LEN`). |
 | `JWT_SECRET_MIN_LEN` | int | `32` | Minimum length for `JWT_SECRET` (32-1024; cannot be lowered below 32). |
-| `JWT_ISSUER` | string | `elyrn-backend` | `iss` claim checked on every JWT validation. |
-| `JWT_AUDIENCE` | string | `elyrn-web` | `aud` claim checked on every JWT validation. |
+| `JWT_ISSUER` | string | `noaddx-backend` | `iss` claim checked on every JWT validation. |
+| `JWT_AUDIENCE` | string | `noaddx-web` | `aud` claim checked on every JWT validation. |
 | `JWT_EXPIRATION_MINUTES` | int | `15` | Session lifespan (1-1440). Active sessions sliding-refresh past half-life. The token lives only in the HttpOnly cookie. |
 | `MASTER_KEY_ACTIVE` | hex/base64 | *Generated* | Active 256-bit key: exactly 32 bytes as 64 hex characters or base64. Text passphrases are rejected. |
 | `MASTER_KEY_ACTIVE_ID` | string | *Generated* | Key id stored next to every record (`[A-Za-z0-9._-]`, 1-32 chars, e.g. `key-2026-01`). |
 | `MASTER_KEY_OLD` | string | *Empty* | Previous keys as `id1:key1,id2:key2`. Any malformed entry, repeated id or reuse of the active key stops startup. Records still under an old key are re-wrapped to the active key in the background; see the [rotation runbook](#master-key-rotation-runbook). |
 | `ACCOUNT_LOOKUP_PEPPER` | hex/base64 | *Generated* | HMAC pepper (>= 32 bytes, hex or base64) for account lookups and pseudonymous tags. **It can never change**: every account is found through it. The database pins a commitment to it, and startup refuses any other pepper. |
 
-At startup the backend checks these keys against the database before it serves anything: every master key id that encrypts records must be configured and must open them, and the pepper must be the one the database was created with. A regenerated `.env`, or an old key removed too early, stops startup with a message naming the key (see [Disaster Recovery](disaster-recovery.md)).
+At startup the backend checks these keys against the database before it serves anything: every master key id that encrypts records must be configured and must open them, and the pepper must be the one the database was created with. A regenerated `.env`, or an old key removed too early, stops startup with `E_KEY_CHECK` naming the variable to restore (see [Disaster Recovery](disaster-recovery.md)).
 
 ---
 
@@ -30,12 +30,13 @@ At startup the backend checks these keys against the database before it serves a
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `DB_HOST` | string | `localhost` | Database host when connecting from host machine (e.g. `go test`). |
+| `DB_HOST` | string | `postgres` | Database host. `.env.example` sets `localhost` for host-side tools (e.g. `go test`); the Compose backend uses `DOCKER_DB_HOST` instead. |
 | `DOCKER_DB_HOST` | string | `postgres` | Database host inside Docker network (resolves to PostgreSQL container). |
 | `DB_PORT` | int | `5432` | PostgreSQL listening port. |
 | `DB_USER` | string | `postgres` | Database user. |
 | `DB_PASSWORD` | string | *Generated* | Database password (no default; `make setup` generates one; >= 16 characters in production). |
-| `DB_NAME` | string | `elyrn` | Database name. |
+| `DB_NAME` | string | `noaddx` | Database name (a stored name, kept across the rename to elyrn). |
+| `PGSSLROOTCERT` | path | *unset* | CA that verifies the database server (libpq's variable, read by the driver). The Compose backend sets `/etc/elyrn/db-ca/ca.crt`; when set, it must be a readable PEM certificate. |
 | `DB_SSL_MODE` | string | `disable` | libpq sslmode. Production requires `verify-ca` or `verify-full` (an unauthenticated `require` link can be intercepted). The Compose backend ignores this value and always uses `verify-full` against the CA from `make certs` ([Database TLS](#database-tls-make-certs)); the `.env` value serves host-side tools only. |
 | `APP_ENV` | string | `development` | `development` (plain `http://localhost`), `test` or `production`; see [Production Mode](#production-mode). The shell's value wins over `.env`. |
 | `LOG_LEVEL` | string | `info` | `debug`, `info`, `warn` or `error`; `debug` is refused in production. |
@@ -46,7 +47,7 @@ At startup the backend checks these keys against the database before it serves a
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `BACKEND_PORT` | int | `8080` | Port the Go HTTP server listens on. |
+| `BACKEND_PORT` | int | `8080` | Port the Go HTTP server listens on (1-65535). Pinned to `8080` in `docker-compose.yaml`: nginx, the healthcheck and the development port mapping all name 8080 inside the container, so the `.env` value only matters for a backend run outside Compose. |
 | `MAX_REQUEST_BODY_BYTES` | int | `1048576` | Hard ceiling for HTTP request payloads (1 MiB). |
 | `MAX_JSON_DEPTH` | int | `2` | Maximum JSON nesting depth to defeat recursive parsing attacks. |
 | `INVITE_TTL_SEC` | int | `86400` | Lifetime of unredeemed invites (default 24 hours). |
@@ -84,7 +85,80 @@ At startup the backend checks these keys against the database before it serves a
 | `DB_HOST_PORT` | int | `5432` | Loopback port PostgreSQL is published on, in development only (`docker-compose.dev.yaml`). The backend's 8080 likewise. |
 | `BACKEND_MEM_LIMIT` | size | `512m` | The backend container's memory (no swap). Keep it at least `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` + 128 MiB; `make check-hardening` checks it. |
 | `BACKEND_GOMEMLIMIT` | size | `448MiB` | Go runtime soft limit; keep it about 64 MiB under `BACKEND_MEM_LIMIT`. |
-| `SEC_HEADER_COOP` / `SEC_HEADER_CORP` / `SEC_HEADER_COEP` | string | `same-origin` / `same-origin` / `require-corp` | API isolation headers; `off` disables one. |
+| `SEC_HEADER_COOP` / `SEC_HEADER_CORP` / `SEC_HEADER_COEP` | string | `same-origin` / `same-origin` / `require-corp` | API isolation headers; `off` disables one (refused in production). Whitelisted values only (below). |
+| `HSTS_MAX_AGE` | int | *unset* | HSTS `max-age` in seconds on HTTPS API answers in production (0-63072000; a malformed value is refused, it no longer reads as 0). |
+| `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD` | bool | `false` | `true`/`false` (`1`/`0`, `yes`/`no`); anything else is refused. |
+
+---
+
+### Startup validation: every variable and its rule
+
+The backend checks every variable it reads, in one place (`backend/internal/database/validate.go`),
+before it touches the database. A refusal is one log line with the code `E_CONFIG_INVALID`, the
+variable's **name** and its rule, never its value, and the process exits with status 78:
+
+```text
+[STARTUP] E_CONFIG_INVALID: an environment variable is missing, malformed or outside its rule; ... [variable HSTS_MAX_AGE] [must be an integer between 0 and 63072000 seconds]
+```
+
+| Variable | Rule |
+|---|---|
+| `APP_ENV` | `development`, `test`, `production` (`prod`) |
+| `LOG_LEVEL` | `debug`, `info`, `warn`, `error`; not `debug` in production |
+| `JWT_SECRET_MIN_LEN` | 32-1024 |
+| `JWT_SECRET` | at least `JWT_SECRET_MIN_LEN` characters |
+| `JWT_ISSUER`, `JWT_AUDIENCE` | non-empty |
+| `JWT_EXPIRATION_MINUTES` | 1-1440 |
+| `MASTER_KEY_ACTIVE` | 32 bytes, hex or base64 |
+| `MASTER_KEY_ACTIVE_ID` | `[A-Za-z0-9._-]{1,32}` |
+| `MASTER_KEY_OLD` | `id:key` entries, ids as above, no repeat, not the active id or key |
+| `ACCOUNT_LOOKUP_PEPPER` | at least 32 bytes, hex or base64 |
+| `MAX_REQUEST_BODY_BYTES` | 1024-16777216 |
+| `MAX_JSON_DEPTH` | 1-8 |
+| `INVITE_TTL_SEC` | 60-604800 |
+| `MAX_ACTIVE_INVITES` | 1-100 |
+| `MAX_CONVERSATIONS_PER_USER` | 1-4096 |
+| `MAX_MESSAGE_BYTES` | 512-65536, and fits (base64) in `MAX_REQUEST_BODY_BYTES` |
+| `MESSAGE_PAGE_LIMIT` | 1-1000 |
+| `MESSAGE_TTL_DAYS` | 1-365 |
+| `ROOM_MAX_MEMBERS` | 2-32, and a message to a full room fits in `MAX_REQUEST_BODY_BYTES` |
+| `ROOM_MAX_TTL_HOURS` | 1-720 |
+| `POW_CHALLENGE_TTL_SEC` | 1-3600 |
+| `POW_DIFFICULTY` | 18-24 |
+| `INTERNAL_ID_LENGTH` | 16-24 |
+| `ARGON2_MEMORY_KIB` | 8192-1048576 (production: from 19456) |
+| `ARGON2_TIME` | 1-16 |
+| `ARGON2_PARALLELISM` | 1-255 |
+| `ARGON2_SALT_LENGTH`, `ARGON2_HASH_LENGTH` | 16-64 |
+| `ARGON2_MAX_CONCURRENT` | 1-64 |
+| `PENDING_TOKEN_TTL_SEC` | 30-3600 |
+| `PENDING_CLEANUP_INTERVAL_SEC` | 1-3600 |
+| `PENDING_ID_BYTES` | 16-64 |
+| `RATE_LIMIT_MAX_TOKENS` | 1-10000 |
+| `RATE_LIMIT_REFILL_INTERVAL_SEC` | 1-3600 |
+| `RATE_LIMIT_CLEANUP_INTERVAL_SEC` | 1-86400 |
+| `RATE_LIMIT_MAX_BUCKETS` | 100-1000000 |
+| `BACKEND_PORT`, `DB_PORT` | 1-65535 |
+| `SERVER_READ_HEADER_TIMEOUT_SEC` | 1-60 |
+| `SERVER_READ_TIMEOUT_SEC`, `SERVER_WRITE_TIMEOUT_SEC` | 1-300 |
+| `SERVER_IDLE_TIMEOUT_SEC` | 1-600 |
+| `SERVER_MAX_HEADER_BYTES` | 1024-1048576 |
+| `DB_HOST`, `DB_USER`, `DB_NAME` | non-empty |
+| `DB_PASSWORD` | non-empty; production: at least 16 characters |
+| `DB_SSL_MODE` | a libpq sslmode; production: `verify-ca` or `verify-full` |
+| `PGSSLROOTCERT` | when set: a readable file holding a PEM certificate |
+| `ALLOWED_ORIGINS` | comma-separated exact origins `scheme://host[:port]` (http or https), no wildcard, path, query or credentials; at least one. A bad entry is reported by its position |
+| `TRUSTED_PROXIES` | comma-separated IP addresses or CIDR ranges (may be empty); a bad entry is reported by its position |
+| `HSTS_MAX_AGE` | when set: 0-63072000 |
+| `HSTS_INCLUDE_SUBDOMAINS`, `HSTS_PRELOAD` | when set: `true`, `false`, `1`, `0`, `yes`, `no` |
+| `SEC_HEADER_COOP` | `same-origin`, `same-origin-allow-popups`, `unsafe-none`, or `off` (not in production) |
+| `SEC_HEADER_CORP` | `same-origin`, `same-site`, `cross-origin`, or `off` (not in production) |
+| `SEC_HEADER_COEP` | `require-corp`, `credentialless`, `unsafe-none`, or `off` (not in production) |
+
+`GOMEMLIMIT` is read by the Go runtime itself, which refuses a malformed value before the
+backend's code runs. Every other startup failure has its own code too (`E_SELFTEST`,
+`E_DB_UNREACHABLE`, `E_SECOND_INSTANCE`, `E_SCHEMA_NEWER`, `E_MIGRATE`, `E_KEY_CHECK`,
+`E_LISTEN`); [Disaster Recovery](disaster-recovery.md#startup-refusals) says what to do for each.
 
 ---
 
@@ -165,6 +239,14 @@ rm -rf certs && make up      # new CA and server certificate; postgres and backe
 ```
 
 Check validity at any time: `openssl x509 -noout -enddate -in certs/postgres/server.crt`.
+
+**Renewal routine.** `make certs` warns on every run (`[WARN] certs: ... expires within 60
+days`) once either certificate is that close to its end, a month before it renews it. Run
+`make up` (or `make certs && make up`) at least once a month, for example from a monthly
+scheduled job; between 30 days and the end, that run renews and recreates the right container.
+A certificate that has expired anyway stops the backend at its next start with
+`E_DB_UNREACHABLE` and the detail `TLS: the database certificate has expired`: run `make up`.
+A running backend keeps its open connections, but every new one fails until then.
 An existing installation needs nothing extra: its next `make up` creates `certs/`, and the
 database volume, `.env` and accounts are untouched (the volume's own `pg_hba.conf` is ignored).
 

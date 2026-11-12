@@ -34,12 +34,23 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
 - `conversations` row lock (`ChatRepository.NextSeq`, `UPDATE … RETURNING`, and
   `ChatRepository.LockConversation`): serialises senders of one conversation until the transaction
   ends. Room joins, leaves and notes take it too, so a message is always checked against the roster
-  it is stored under. Never held while acquiring a `users` or `rooms` row lock
+  it is stored under. Never held while acquiring a `users` or `rooms` row lock.
+  `DeleteConversation` takes it (`LockConversation`) right after the `rooms` delete and **before**
+  deleting the children (messages, memberships, notes) and the conversation row itself, so a sender
+  holding it finishes first and nothing it stores outlives the delete
 
 Order in one transaction: `invites` → `users` → `rooms` → `conversations`.
 - Master key re-wrapping (`KeyRepository.Rewrap*`): single-row updates outside any transaction,
   conditional on the row still naming the old key; it holds no lock while taking another
 - Master key initialization lock (`masterKeyOnce`)
+- Master key use lock (`encryption.keyUse`, RWMutex, leaf): every seal and open holds it for
+  reading for the one operation; `encryption.Close` (shutdown) takes it for writing, so it waits
+  for the operations in flight before zeroizing. Nothing else is acquired while it is held
+- PostgreSQL advisory locks (database/startup.go, database/instance.go): the migration lock is a
+  transaction-level lock taken first in the migration transaction; the single-instance lock is a
+  session-level lock on its own dedicated connection, held for the process's life and never
+  combined with any other lock
+- Log flood table (`utils.throttleMu`, leaf): held only to count one line
 
 ## Acquisition Rules
 

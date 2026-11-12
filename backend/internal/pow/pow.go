@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"elyrn/internal/apperr/opcode"
 	"elyrn/internal/config"
 	"elyrn/internal/cryptoengine"
 	"elyrn/internal/models"
@@ -173,17 +174,29 @@ func newChallenge(now time.Time, ttl int64, difficulty int) (*models.PoWChalleng
 
 // RunCleanup evicts expired spent challenges and idle per-client limiters every minute until
 // ctx ends. Run it under utils.SafeGoSupervised.
+//
+// Spent challenges are forgotten by the wall clock: one forgotten early, while the clock runs
+// ahead, would be accepted again once the clock is put back (a replay). So eviction pauses while
+// the clock is in doubt (the shared detector, utils.ClockSteady and the retention flag) and
+// resumes once it is steady; the spent set stays bounded by maxSpentChallenges meanwhile.
 func RunCleanup(ctx context.Context) {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
+	prev := time.Now()
 	for cycle := 0; cycle < maxCleanupCycles; cycle++ {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticker.C:
-			cleanupSpentChallenges(now)
-			cleanupInactiveRateLimiters(now)
+		case <-ticker.C:
 		}
+		now := time.Now()
+		if utils.ClockSteady(now, prev) && !utils.ClockJumpFlagged() {
+			cleanupSpentChallenges(now)
+		} else {
+			powLogger.Error("RunCleanup: %s", opcode.ClockJump)
+		}
+		cleanupInactiveRateLimiters(now)
+		prev = now
 	}
 }
 
@@ -296,7 +309,8 @@ func spend(challenge string, expiresAt int64) error {
 		powLogger.Warn("PoW challenge already used (replay attack)")
 		return ErrInvalidSolution
 	}
-	if len(spentChallenges) >= maxSpentChallenges {
+	// Never forget a spent challenge while the clock is in doubt (see RunCleanup): refuse instead
+	if len(spentChallenges) >= maxSpentChallenges && !utils.ClockJumpFlagged() {
 		removeExpiredSpentLocked(time.Now())
 	}
 	if len(spentChallenges) >= maxSpentChallenges {

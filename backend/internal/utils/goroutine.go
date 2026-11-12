@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"elyrn/internal/apperr/opcode"
@@ -27,7 +28,9 @@ const (
 // still panics is abandoned and the process exits (E_JOB_ABANDONED, ExitJobAbandoned): a server
 // silently running without its retention or key rotation is worse than a restart.
 func SafeGoSupervised(ctx context.Context, name string, fn func(ctx context.Context)) {
+	supervised.Add(1)
 	go func() {
+		defer supervised.Done()
 		for attempt := 0; attempt <= MaxRestarts; attempt++ {
 			if !runRecovered(ctx, name, fn) {
 				return
@@ -54,4 +57,23 @@ func runRecovered(ctx context.Context, name string, fn func(ctx context.Context)
 	}()
 	fn(ctx)
 	return false
+}
+
+// supervised counts the running supervised jobs, so shutdown can wait for them (WaitJobs)
+var supervised sync.WaitGroup
+
+// WaitJobs waits for every supervised job to return (their context must already be cancelled),
+// at most deadline; it reports whether they all did.
+func WaitJobs(deadline time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		supervised.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(deadline):
+		return false
+	}
 }

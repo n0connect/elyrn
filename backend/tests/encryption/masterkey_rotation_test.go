@@ -3,11 +3,14 @@ package encryption
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
 	"elyrn/internal/encryption"
 	"elyrn/tests/testutil"
+
+	"github.com/google/uuid"
 )
 
 // masterKeyHex draws a fresh 256-bit master key from the CSPRNG, as `make setup` does.
@@ -85,5 +88,31 @@ func TestInitMasterKeys_RejectsLowEntropyOrMalformedKeys(t *testing.T) {
 	raw, _ := hex.DecodeString(good)
 	if err := initKeys(t, "k1", base64.StdEncoding.EncodeToString(raw), "k0:"+masterKeyHex(t)); err != nil {
 		t.Fatalf("base64 active key with a valid old key rejected: %v", err)
+	}
+}
+
+// Close waits for nothing in flight here, then refuses every later use of the master keys and
+// zeroizes them: nothing is ever sealed under zeros.
+func TestClose_RefusesAndZeroizes(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	if err := initKeys(t, "k1", masterKeyHex(t), ""); err != nil {
+		t.Fatalf("InitMasterKeys: %v", err)
+	}
+	aad := encryption.BuildAAD("tag", uuid.New(), encryption.FieldPeerPublicKey, encryption.PurposeStoredRecord)
+	if _, err := encryption.SealWithActiveKey("before", aad); err != nil {
+		t.Fatalf("seal before close: %v", err)
+	}
+	key := encryption.ActiveMasterKey()
+	encryption.Close()
+	if _, err := encryption.SealWithActiveKey("after", aad); !errors.Is(err, encryption.ErrClosing) {
+		t.Fatalf("seal after close: %v, want ErrClosing", err)
+	}
+	if _, err := encryption.EncryptWithMasterKey("after"); !errors.Is(err, encryption.ErrClosing) {
+		t.Fatalf("EncryptWithMasterKey after close: %v, want ErrClosing", err)
+	}
+	for _, b := range key {
+		if b != 0 {
+			t.Fatal("the active key was not zeroized")
+		}
 	}
 }

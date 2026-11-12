@@ -22,6 +22,7 @@ var keyRepoLogger = utils.NewLogger("KEY_REPOSITORY")
 type KeyRepository interface {
 	MasterKeyIDsInUse() (map[string]struct{}, error)
 	HasUsers() (bool, error)
+	MaxUserID() (uint, error)
 
 	// Rows under keyID in primary-key order, after a cursor (the zero value starts at the top)
 	UsersUnderKey(keyID string, afterID uint, limit int) ([]models.User, error)
@@ -74,6 +75,16 @@ func (r *keyRepository) HasUsers() (bool, error) {
 		return false, err
 	}
 	return len(ids) > 0, nil
+}
+
+// MaxUserID returns the highest account id (0 without accounts): the pepper floor
+func (r *keyRepository) MaxUserID() (uint, error) {
+	var maxID uint
+	if err := database.DB.Model(&models.User{}).Select("COALESCE(MAX(id), 0)").Scan(&maxID).Error; err != nil {
+		keyRepoLogger.LogError("KeyRepository.MaxUserID", err)
+		return 0, err
+	}
+	return maxID, nil
 }
 
 func (r *keyRepository) UsersUnderKey(keyID string, afterID uint, limit int) ([]models.User, error) {

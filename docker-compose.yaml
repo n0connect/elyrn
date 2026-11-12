@@ -1,10 +1,20 @@
 # The project name keys the volumes (the Postgres data, the onion key): kept as "noaddx" across the rename to elyrn.
 name: noaddx
 
+# Every service logs through Docker's "local" driver with rotation: the default json-file driver
+# never rotates, so a flood of log lines could fill the host's disk. 3 files of 10 MB each, per
+# container. make check-hardening asserts it on every service.
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:15-alpine@sha256:a8e042598834300dfaa17a54f695b87b7f25d3490433bbbe2ef3bffbb9747f24
     container_name: elyrn-postgres
+    logging: *logging
     # Starts as root only to hand the TLS key to uid 70 (postgres/entrypoint.sh), then the image's
     # entrypoint drops to postgres (uid 70) for good. Those first steps need exactly:
     #   CHOWN            install -o postgres of the key copy and its tmpfs directory
@@ -95,6 +105,7 @@ services:
         ENGINE: ${ENGINE:-openssl}
     image: elyrn-backend:${ENGINE:-openssl}
     container_name: elyrn-backend
+    logging: *logging
     # One binary running as a non-root user: nothing to write, no capabilities needed
     user: "10001:10001"
     read_only: true
@@ -131,7 +142,10 @@ services:
       # private CA from make certs. Not taken from .env (there DB_SSL_MODE serves host-side tools).
       DB_SSL_MODE: verify-full
       PGSSLROOTCERT: /etc/elyrn/db-ca/ca.crt
-      BACKEND_PORT: ${BACKEND_PORT}
+      # Pinned: nginx (nginx-api-proxy.conf), the healthcheck below and docker-compose.dev.yaml
+      # all reach the backend on 8080 inside the container; BACKEND_PORT in .env serves only a
+      # backend run outside Compose. make check-hardening asserts the value.
+      BACKEND_PORT: "8080"
       MASTER_KEY_ACTIVE: ${MASTER_KEY_ACTIVE}
       MASTER_KEY_ACTIVE_ID: ${MASTER_KEY_ACTIVE_ID}
       MASTER_KEY_OLD: ${MASTER_KEY_OLD}
@@ -199,19 +213,26 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # Longer than the backend's shutdown budget (shutdownGrace 10 s + jobStopDeadline 5 s in
+    # backend/cmd/server/main.go), so Docker never kills it before it has closed the database
+    # and zeroized its keys; make check-hardening reads both constants and checks this
+    stop_grace_period: 30s
     healthcheck:
-      # GET /api/v2/me without a session must answer 401: proves routing + middleware are up
-      test: ["CMD-SHELL", "wget -S -q -O /dev/null http://localhost:8080/api/v2/me 2>&1 | grep -q ' 401 ' || exit 1"]
+      # /internal/health (loopback only, never forwarded by nginx): 200 once the database answers
+      # SELECT 1 within 3 s and retention is cycling, else 503
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/internal/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      # Room for the bounded wait for the database at start (60 s)
+      start_period: 70s
 
   frontend:
     build:
       context: .
       dockerfile: dev.frontend.Dockerfile
     container_name: elyrn-frontend
+    logging: *logging
     # nginx as its own unprivileged user (101) from the start: it listens on 8080 and 8081
     # inside the container, so it needs no capability at all
     user: "101:101"
@@ -269,6 +290,7 @@ services:
       dockerfile: tor.Dockerfile
     image: elyrn-tor
     container_name: elyrn-tor
+    logging: *logging
     # tor.Dockerfile's unprivileged user (uid 100 in the pinned Debian image)
     user: debian-tor
     read_only: true

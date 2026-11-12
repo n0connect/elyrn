@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,8 +18,6 @@ var (
 	pendingStore       = &pendingRegistrationStore{
 		store: make(map[string]*pendingRegistration),
 	}
-	cleanupOnce   sync.Once
-	cleanupTicker *time.Ticker
 )
 
 // MaxPendingRegistrations bounds phase-1 registrations awaiting confirmation (each costs the
@@ -70,24 +69,30 @@ func GeneratePendingID() (string, error) {
 	return hex.EncodeToString(randomBytes), nil
 }
 
-// initCleanup starts the background cleanup goroutine (only once)
-// SECURITY: Prevents goroutine leak by starting cleanup only once
-func initCleanup() error {
+// maxPendingCleanupCycles bounds the cleanup loop (RULES.md §8.1); even at one cycle a second it
+// outlives any deployment
+const maxPendingCleanupCycles = 1 << 30
+
+// RunPendingCleanup removes expired pending registrations every PENDING_CLEANUP_INTERVAL_SEC
+// until ctx ends. Run it under utils.SafeGoSupervised, so shutdown waits for it and a panic
+// restarts it. Expired entries are also refused and dropped where they are read and when the
+// store is full, so the store stays correct between cycles.
+func RunPendingCleanup(ctx context.Context) {
 	_, cleanupInterval, _, err := pendingConfig()
 	if err != nil {
-		return err
+		pendingStoreLogger.LogError("RunPendingCleanup", err)
+		return
 	}
-
-	cleanupOnce.Do(func() {
-		cleanupTicker = time.NewTicker(cleanupInterval)
-		go func() {
-			for range cleanupTicker.C {
-				cleanupExpiredPending()
-			}
-		}()
-		pendingStoreLogger.Debug("Started background cleanup goroutine")
-	})
-	return nil
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+	for cycle := 0; cycle < maxPendingCleanupCycles; cycle++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanupExpiredPending()
+		}
+	}
 }
 
 // StorePendingRegistration keeps a derived identity under a pending ID (config-driven TTL)
@@ -99,11 +104,6 @@ func StorePendingRegistration(pendingID string, pending PendingIdentity) error {
 
 	pendingStore.mu.Lock()
 	defer pendingStore.mu.Unlock()
-
-	// Start cleanup goroutine if not started (only once)
-	if err := initCleanup(); err != nil {
-		return err
-	}
 
 	now := time.Now()
 	if len(pendingStore.store) >= MaxPendingRegistrations {
@@ -162,14 +162,5 @@ func removeExpiredPendingLocked(now time.Time) {
 		if now.After(pending.ExpiresAt) {
 			delete(pendingStore.store, id)
 		}
-	}
-}
-
-// StopCleanup stops the background cleanup goroutine gracefully
-// This should be called during application shutdown to prevent resource leaks
-func StopCleanup() {
-	if cleanupTicker != nil {
-		cleanupTicker.Stop()
-		pendingStoreLogger.Debug("Stopped background cleanup goroutine")
 	}
 }

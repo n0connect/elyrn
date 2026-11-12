@@ -116,10 +116,16 @@ Verify your deployment status from the terminal:
 # Check running containers and health status
 docker compose ps
 
-# Verify the API through nginx (should return 401 Unauthorized, proving routing and middleware are active)
+# Verify the API through nginx: 401 with the backend's own body "Unauthorized" (text/plain),
+# proving routing and middleware are active
 curl -i http://localhost/api/v2/me
+# A path nginx's whitelist refuses itself: 404 with JSON
+# {"success":false,"message":"Not Found","code":"E_EDGE_NOT_FOUND"}
+curl -i http://localhost/api/v2/unknown
 # Development only: the backend directly (production publishes nginx alone)
 curl -i http://localhost:8080/api/v2/me
+# The backend's own health (database + retention), from inside its container only
+docker compose exec backend wget -q -S -O /dev/null http://127.0.0.1:8080/internal/health
 
 # View live backend logs
 docker compose logs -f backend

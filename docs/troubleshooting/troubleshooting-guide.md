@@ -179,9 +179,12 @@ After reloading or opening a new tab, the user is unexpectedly returned to the L
 The browser is operating in **Incognito / Private Browsing mode** or **Tor Browser Strict mode**, where IndexedDB write permissions are disabled or wiped on tab close.
 In this mode, `keystore.js` keeps private keys in volatile memory only.
 
+When storage fails, the page says so once: *"this browser is not keeping anything — you will be logged out on reload, and replay protection lasts only until then"*. Two related warnings name another tab: *"another elyrn. tab is holding the storage — close the other tabs, then reload this one"* (an upgrade is held back by a tab still running an older version) and *"another elyrn. tab changed this browser's storage — reload this tab"* (another tab upgraded the storage, or logged out and deleted it; this tab stops using storage until reloaded).
+
 ### Handling
 - If privacy settings block IndexedDB, keep your 43-character `AccountNumber` copied in a password manager.
 - You can log back in at any time: the derived keys and conversations will be restored.
+- For the two tab warnings, close the other elyrn. tabs and reload.
 
 ---
 
@@ -216,11 +219,17 @@ Restore the `.env` that wrote this database (or put the old key back into `MASTE
 
 ## 10. Rooms
 
-### "a room failed verification against its code — hidden"
-The server listed a room whose vault does not open for this account, or whose member limit or expiry differ from the code inside it. The browser hides it rather than trusting the server's numbers. On an honest server this does not happen; if it does, report it with the time it appeared.
+### "a room failed verification against its code — it cannot be opened, only left"
+The server listed a room whose vault does not open for this account, or whose member limit or expiry differ from the code inside it. The browser never opens it and never trusts the server's numbers for it: the list shows it under the name its id gives, marked *failed verification · cannot be opened*, with one action, **leave** (**burn** if the server says you own it), which asks first and frees the seat. The warning appears once per room per session, not on every refresh. On an honest server this does not happen; if it does, report it with the time it appeared.
 
 ### "the member list failed verification — not sending to it"
-The roster lacked this member's own card, listed more members than the code allows, or attributed a card wrongly. Nothing is encrypted for such a list. Reload; if it persists, the server is tampering with the room.
+The roster lacked this member's own card, listed more members than the code allows, or attributed a card wrongly. Nothing is encrypted for such a list. Reload; if it persists, the server is tampering with the room. A roster that could not be fetched at all (no answer, a server error, a rate limit) is reported as that, not as a verification failure.
+
+### "the server refused the room — check your device clock" / "the server refused the room's settings — reload the page and try again"
+The server checks a new room's expiry against its own clock and refuses it (`400`) when it strays more than ten minutes. The browser compares its clock with the server's time on the proof-of-work challenge: only when they differ by more than that does it name the clock; otherwise the settings themselves were refused, and a reload fetches the server's current limits. A rate-limited challenge or room says *"too many rooms or attempts — wait a moment"*.
+
+### "this room has expired — if it should not have, check your device clock"
+Room expiry is judged by this device's clock before anything is sent. A clock running fast makes a live room look expired; set the clock right and try again.
 
 ### "no such room — the code is wrong, or the room expired or was burned"
 The server answers a wrong code, an unknown room and an expired room the same way (`404`), so it cannot tell you which. Check the code was copied whole (56 characters starting with `elyrn#`, or 57 for an older `noaddx#` code); a room also stops answering at the hour its code names.

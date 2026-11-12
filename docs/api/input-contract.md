@@ -124,6 +124,13 @@ HEAD: bare 405 (`E_HEAD_NOT_ALLOWED`).
 - Query: none.
 - Body: none.
 
+## `/internal/health`
+
+### GET
+
+- Query: none.
+- Body: none.
+
 ## `/api/v2/invites`
 
 ### POST

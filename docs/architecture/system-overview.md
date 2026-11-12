@@ -75,6 +75,7 @@ AccountNumber (256-bit CSPRNG, base64url, 43 chars)
 - The private key is saved to **IndexedDB** as a **non-extractable `CryptoKey`**, next to the non-extractable HKDF key every room key derives from (the rooms root).
 - Even if malicious script or an XSS attempt were executed in the browser context, WebCrypto prohibits reading the raw private key bytes (`extractable: false`).
 - On the user's own logout or identity deletion, `Keystore.wipeAll()` deletes the whole IndexedDB database.
+- When storage fails (refused, full, or a database from a newer version), the user is told once per page load that nothing survives a reload. An upgrade held back by another tab fails at once with a warning to close the other tabs; a tab whose connection another tab upgrades or deletes closes it and stops using storage until reloaded.
 - When the server ends the session (a 401, or a `/me` answer that is refused), `Keystore.wipeIdentity()` removes only the identity record. The per-conversation replay records and verification marks stay, so a server cannot erase replay protection by ending a session once. They belong to the account that wrote them (its public key is kept as their owner); logging in with a different account on the same device clears them first, so one account never inherits or links to another's conversations.
 - If `/me` gets no answer or a server error while a stored session is resumed, nothing is removed and the device is not logged out: the main menu says the server cannot be reached and offers a retry.
 

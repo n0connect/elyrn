@@ -49,6 +49,7 @@ func NewMux() *http.ServeMux {
 		{models.PathConversations, protected(handlers.ConversationsHandler)},
 		{models.PathConversations + "/", protected(handlers.ConversationsHandler)},
 		{models.PathEvents, protected(handlers.EventsHandler)},
+		{models.PathHealth, public(handlers.HealthHandler)},
 	}
 	for _, route := range routes {
 		serverLogger.Debug("Registering route: %s", route.pattern)

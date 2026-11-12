@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"elyrn/internal/apperr/opcode"
 	"elyrn/internal/config"
 	"elyrn/internal/utils"
 )
@@ -18,6 +20,13 @@ import (
 var masterKeyLogger = utils.NewLogger("MASTER_KEY")
 
 const masterKeyBytes = 32
+
+// The variables that hold the master keys
+const (
+	envActiveKey   = "MASTER_KEY_ACTIVE"
+	envActiveKeyID = "MASTER_KEY_ACTIVE_ID"
+	envOldKeys     = "MASTER_KEY_OLD"
+)
 
 type masterKeySet struct {
 	activeID string
@@ -48,40 +57,40 @@ func InitMasterKeys() error {
 }
 
 func loadMasterKeys() (masterKeySet, error) {
-	activeID := strings.TrimSpace(config.GetEnv("MASTER_KEY_ACTIVE_ID", ""))
-	activeKeyRaw := strings.TrimSpace(config.GetEnv("MASTER_KEY_ACTIVE", ""))
+	activeID := strings.TrimSpace(config.GetEnv(envActiveKeyID, ""))
+	activeKeyRaw := strings.TrimSpace(config.GetEnv(envActiveKey, ""))
 	if activeKeyRaw == "" {
-		return masterKeySet{}, fmt.Errorf("MASTER_KEY_ACTIVE is required")
+		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envActiveKey, "is required")
 	}
 	if !keyIDPattern.MatchString(activeID) {
-		return masterKeySet{}, fmt.Errorf("MASTER_KEY_ACTIVE_ID must match %s", keyIDPattern)
+		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envActiveKeyID, "must match "+keyIDPattern.String())
 	}
 	activeKey, err := decodeKeyMaterial(activeKeyRaw)
 	if err != nil {
-		return masterKeySet{}, fmt.Errorf("invalid active master key: %w", err)
+		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envActiveKey, err.Error())
 	}
 
 	oldKeys := make(map[string][]byte)
-	oldRaw := strings.TrimSpace(config.GetEnv("MASTER_KEY_OLD", ""))
+	oldRaw := strings.TrimSpace(config.GetEnv(envOldKeys, ""))
 	if oldRaw != "" {
 		for _, entry := range strings.Split(oldRaw, ",") {
 			parts := strings.SplitN(strings.TrimSpace(entry), ":", 2)
 			if len(parts) != 2 {
-				return masterKeySet{}, fmt.Errorf("MASTER_KEY_OLD entries must be id:key")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "entries must be id:key")
 			}
 			kid := strings.TrimSpace(parts[0])
 			if !keyIDPattern.MatchString(kid) || kid == activeID {
-				return masterKeySet{}, fmt.Errorf("MASTER_KEY_OLD has an invalid or active key id")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "has an invalid key id or the active one")
 			}
 			if _, dup := oldKeys[kid]; dup {
-				return masterKeySet{}, fmt.Errorf("MASTER_KEY_OLD repeats a key id")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "repeats a key id")
 			}
 			key, err := decodeKeyMaterial(strings.TrimSpace(parts[1]))
 			if err != nil {
-				return masterKeySet{}, fmt.Errorf("MASTER_KEY_OLD has invalid key material")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "has invalid key material")
 			}
 			if subtle.ConstantTimeCompare(key, activeKey) == 1 {
-				return masterKeySet{}, fmt.Errorf("MASTER_KEY_OLD repeats the active key")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "repeats the active key")
 			}
 			oldKeys[kid] = key
 		}
@@ -89,6 +98,21 @@ func loadMasterKeys() (masterKeySet, error) {
 	return masterKeySet{activeID: activeID, active: activeKey, old: oldKeys}, nil
 }
 
+// ErrClosing: the server is shutting down and its master keys are being zeroized; nothing is
+// sealed or opened any more (apperr answers 503 E_SHUTTING_DOWN). A late request can therefore
+// never seal a record under a zeroized key.
+var ErrClosing = errors.New("master keys closed")
+
+// keyUse guards the key material against Close: every use of a master key holds it for reading
+// for the whole operation, Close takes it for writing, so it waits for every operation in flight
+// and zeroizes nothing that is still being used. closed is read and written under it.
+var (
+	keyUse sync.RWMutex
+	closed bool
+)
+
+// ActiveMasterKey returns the active master key, for inspection only (tests, its length):
+// sealing goes through SealWithActiveKey, which holds the key for the whole operation.
 func ActiveMasterKey() []byte {
 	if err := InitMasterKeys(); err != nil {
 		// Unreachable in a running server: the result is cached once and startup refuses to run
@@ -96,6 +120,66 @@ func ActiveMasterKey() []byte {
 		panic(err)
 	}
 	return masterKeys.active
+}
+
+// withActiveKey runs fn with the active key and its id while holding the key, or answers
+// ErrClosing once Close has begun.
+func withActiveKey(fn func(id string, key []byte) error) error {
+	if err := InitMasterKeys(); err != nil {
+		// Unreachable in a running server (see ActiveMasterKey): a record must never be
+		// labelled with an empty key id or sealed without a key, so abort
+		panic(err)
+	}
+	keyUse.RLock()
+	defer keyUse.RUnlock()
+	if closed {
+		return ErrClosing
+	}
+	return fn(masterKeys.activeID, masterKeys.active)
+}
+
+// withKeyByID runs fn with the master key named id while holding it; unknown ids and a closed
+// key set answer ok=false (or ErrClosing).
+func withKeyByID(id string, fn func(key []byte) error) (ok bool, err error) {
+	if err := InitMasterKeys(); err != nil {
+		return false, nil
+	}
+	keyUse.RLock()
+	defer keyUse.RUnlock()
+	if closed {
+		return false, ErrClosing
+	}
+	key, ok := masterKeys.old[id]
+	if id == masterKeys.activeID {
+		key, ok = masterKeys.active, true
+	}
+	if !ok {
+		return false, nil
+	}
+	return true, fn(key)
+}
+
+// SealWithActiveKey seals text under the active master key with aad (EncryptWithAAD), holding
+// the key for the whole operation.
+func SealWithActiveKey(text string, aad []byte) (string, error) {
+	var sealed string
+	err := withActiveKey(func(_ string, key []byte) error {
+		var err error
+		sealed, err = EncryptWithAAD(text, key, aad)
+		return err
+	})
+	return sealed, err
+}
+
+// OpenWithKeyID opens text sealed under the master key named id with aad (DecryptWithAAD).
+// ok is false when no such key is configured.
+func OpenWithKeyID(id, text string, aad []byte) (plain string, ok bool, err error) {
+	ok, err = withKeyByID(id, func(key []byte) error {
+		var err error
+		plain, err = DecryptWithAAD(text, key, aad)
+		return err
+	})
+	return plain, ok, err
 }
 
 func ActiveMasterKeyID() string {
@@ -120,15 +204,16 @@ func OldMasterKeyIDs() []string {
 	return ids
 }
 
-func MasterKeyByID(id string) ([]byte, bool) {
+// HasMasterKey reports whether a master key with this id is configured.
+func HasMasterKey(id string) bool {
 	if err := InitMasterKeys(); err != nil {
-		return nil, false
+		return false
 	}
 	if id == masterKeys.activeID {
-		return masterKeys.active, true
+		return true
 	}
-	key, ok := masterKeys.old[id]
-	return key, ok
+	_, ok := masterKeys.old[id]
+	return ok
 }
 
 // decodeKeyMaterial accepts exactly 32 bytes of key material encoded as hex or base64.
@@ -161,14 +246,15 @@ func zeroizeKey(key []byte) {
 	}
 }
 
-// ZeroizeAllKeys explicitly zeros all master keys (call on shutdown)
-func ZeroizeAllKeys() {
-	if masterKeys.active != nil {
-		zeroizeKey(masterKeys.active)
-	}
+// Close ends every use of the master keys: it waits for each operation in flight, refuses
+// every later one (ErrClosing) and zeroizes the key material (RULES.md §1.2). Call it last on
+// shutdown, after the HTTP server and the background jobs have stopped.
+func Close() {
+	keyUse.Lock()
+	defer keyUse.Unlock()
+	closed = true
+	zeroizeKey(masterKeys.active)
 	for _, key := range masterKeys.old {
-		if key != nil {
-			zeroizeKey(key)
-		}
+		zeroizeKey(key)
 	}
 }

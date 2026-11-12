@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"elyrn/internal/apperr/opcode"
@@ -185,7 +186,7 @@ func sealMembership(owner *Member, conversationID uuid.UUID, peerPublicKey strin
 	if err != nil {
 		return models.ConversationMember{}, err
 	}
-	refEnc, err := encryption.EncryptWithAAD(owner.UserUUID, encryption.ActiveMasterKey(), memberRefAAD(tag, conversationID))
+	refEnc, err := encryption.SealWithActiveKey(owner.UserUUID, memberRefAAD(tag, conversationID))
 	if err != nil {
 		return models.ConversationMember{}, err
 	}
@@ -203,17 +204,23 @@ func sealMembership(owner *Member, conversationID uuid.UUID, peerPublicKey strin
 	}, nil
 }
 
-// memberRefUUID decrypts who a membership row belongs to (master key only, tag unchecked).
-func memberRefUUID(member *models.ConversationMember) (string, error) {
-	masterKey, ok := encryption.MasterKeyByID(member.MasterKeyID)
-	if !ok {
-		return "", errCorrupt
+// openUnderMasterKey opens a user UUID sealed under the master key named keyID. A record that
+// does not open (unknown key, failed tag, not a UUID) is errCorrupt; a server that is closing its
+// keys answers encryption.ErrClosing, so the request gets 503 and nothing looks corrupt.
+func openUnderMasterKey(keyID, sealed string, aad []byte) (string, error) {
+	userUUID, ok, err := encryption.OpenWithKeyID(keyID, sealed, aad)
+	if errors.Is(err, encryption.ErrClosing) {
+		return "", err
 	}
-	userUUID, err := encryption.DecryptWithAAD(member.MemberRefEnc, masterKey, memberRefAAD(member.MemberTag, member.ConversationID))
-	if err != nil || !utils.ValidateUUID(userUUID) {
+	if !ok || err != nil || !utils.ValidateUUID(userUUID) {
 		return "", errCorrupt
 	}
 	return userUUID, nil
+}
+
+// memberRefUUID decrypts who a membership row belongs to (master key only, tag unchecked).
+func memberRefUUID(member *models.ConversationMember) (string, error) {
+	return openUnderMasterKey(member.MasterKeyID, member.MemberRefEnc, memberRefAAD(member.MemberTag, member.ConversationID))
 }
 
 // openMemberRef recovers who a membership row belongs to, and cross-checks the tag.
@@ -308,7 +315,7 @@ func (s *Service) CreateInvite(me *Member) (string, time.Time, error) {
 		return "", time.Time{}, err
 	}
 
-	creatorEnc, err := encryption.EncryptWithAAD(me.UserUUID, encryption.ActiveMasterKey(), inviteCreatorAAD(lookup, inviteID))
+	creatorEnc, err := encryption.SealWithActiveKey(me.UserUUID, inviteCreatorAAD(lookup, inviteID))
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -329,15 +336,7 @@ func (s *Service) CreateInvite(me *Member) (string, time.Time, error) {
 }
 
 func openInviteCreator(invite *models.Invite) (string, error) {
-	masterKey, ok := encryption.MasterKeyByID(invite.MasterKeyID)
-	if !ok {
-		return "", errCorrupt
-	}
-	creatorUUID, err := encryption.DecryptWithAAD(invite.CreatorRefEnc, masterKey, inviteCreatorAAD(invite.Lookup, invite.ID))
-	if err != nil || !utils.ValidateUUID(creatorUUID) {
-		return "", errCorrupt
-	}
-	return creatorUUID, nil
+	return openUnderMasterKey(invite.MasterKeyID, invite.CreatorRefEnc, inviteCreatorAAD(invite.Lookup, invite.ID))
 }
 
 // RedeemInvite consumes a token and opens a conversation between creator and caller.
@@ -851,7 +850,7 @@ func (s *Service) MarkRead(me *Member, conversationID uuid.UUID, seq int64) erro
 // die early once the clock is put right. Each cycle therefore purges only when the clock can be
 // trusted (clockTrusted), and remembers when it last purged (the retention mark, in key_checks):
 //  1. while running, the wall clock must have moved with the monotonic clock since the previous
-//     cycle (within clockJumpTolerance); a jump pauses that cycle;
+//     cycle (utils.ClockSteady, within utils.ClockJumpTolerance); a jump pauses that cycle;
 //  2. now must not be before the last purge: a clock behind it went back, and purging (the cap
 //     above all) would be wrong until it catches up again;
 //  3. at boot there is no previous cycle to compare with, so a time far past the last purge
@@ -862,9 +861,6 @@ func (s *Service) MarkRead(me *Member, conversationID uuid.UUID, seq int64) erro
 // A paused cycle deletes nothing and logs E_CLOCK_JUMP; expired data stays unreadable meanwhile
 // (reads filter by expiry themselves).
 const (
-	// clockJumpTolerance is how far the wall clock may drift from the monotonic clock over one
-	// cycle (NTP slews by well under a second per five minutes)
-	clockJumpTolerance = time.Minute
 	// maxRetentionGapTTLs: a boot more than this many maximum retention periods after the last
 	// purge waits for a steady cycle (rule 3)
 	maxRetentionGapTTLs = 2
@@ -878,11 +874,8 @@ func maxRetentionGap() time.Duration {
 // clockTrusted applies the rules above. prev is the previous cycle's reading in this process
 // (zero at boot), mark the last purge (zero if retention never ran on this database).
 func clockTrusted(now, prev, mark time.Time) bool {
-	if !prev.IsZero() {
-		drift := now.Round(0).Sub(prev.Round(0)) - now.Sub(prev) // wall gap minus monotonic gap
-		if drift > clockJumpTolerance || drift < -clockJumpTolerance {
-			return false
-		}
+	if !utils.ClockSteady(now, prev) {
+		return false
 	}
 	if mark.IsZero() {
 		return true
@@ -909,7 +902,9 @@ func (s *Service) retentionCycle(now, prev time.Time) error {
 	if err != nil {
 		return err
 	}
-	if !clockTrusted(now, prev, mark) {
+	trusted := clockTrusted(now, prev, mark)
+	utils.FlagClockJump(!trusted)
+	if !trusted {
 		s.logger.Error("RunRetention: %s", opcode.ClockJump)
 		return nil
 	}
@@ -927,6 +922,22 @@ const (
 	maxRetentionCycles = 1 << 22
 )
 
+// Retention liveness, for the healthcheck: each cycle records when it began, on the monotonic
+// clock (time since processStart), so a clock jump never makes retention look dead or alive.
+var (
+	processStart  = time.Now()
+	retentionBeat atomic.Int64
+)
+
+// retentionSilence: no cycle began for this long means retention is stuck (three missed cycles)
+const retentionSilence = 3 * retentionInterval
+
+// RetentionAlive reports whether a retention cycle began within retentionSilence (or the process
+// is younger than that).
+func RetentionAlive() bool {
+	return time.Since(processStart)-time.Duration(retentionBeat.Load()) <= retentionSilence
+}
+
 // RunRetention runs a retention cycle now and then every five minutes until ctx ends, each
 // compared with the one before it (clockTrusted).
 func (s *Service) RunRetention(ctx context.Context) {
@@ -934,6 +945,7 @@ func (s *Service) RunRetention(ctx context.Context) {
 	defer ticker.Stop()
 	var prev time.Time
 	for cycle := 0; cycle < maxRetentionCycles; cycle++ {
+		retentionBeat.Store(int64(time.Since(processStart)))
 		now := time.Now()
 		if err := s.retentionCycle(now, prev); err != nil {
 			s.logger.LogError("RunRetention", err)

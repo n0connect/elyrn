@@ -128,7 +128,7 @@ func roomMembership(owner *Member, in *RoomInput, joinedSeq int64) (models.Conve
 	if err != nil {
 		return models.ConversationMember{}, err
 	}
-	refEnc, err := encryption.EncryptWithAAD(owner.UserUUID, encryption.ActiveMasterKey(), memberRefAAD(tag, in.ID))
+	refEnc, err := encryption.SealWithActiveKey(owner.UserUUID, memberRefAAD(tag, in.ID))
 	if err != nil {
 		return models.ConversationMember{}, err
 	}

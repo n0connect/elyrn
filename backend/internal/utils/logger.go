@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"elyrn/internal/config"
@@ -64,17 +65,21 @@ func (l *Logger) Info(message string, args ...interface{}) {
 	}
 }
 
-// Warn logs a warning message
+// Warn logs a warning message, at most LogBurst per message template per LogWindow
 func (l *Logger) Warn(message string, args ...interface{}) {
-	if enabled(LogLevelWARN) {
-		log.Println(l.formatMessage(LogLevelWARN, message, args...))
-	}
+	l.At(LogLevelWARN, message, message, args...)
 }
 
-// Error logs an error message
+// Error logs an error message, at most LogBurst per message template per LogWindow
 func (l *Logger) Error(message string, args ...interface{}) {
-	if enabled(LogLevelERROR) {
-		log.Println(l.formatMessage(LogLevelERROR, message, args...))
+	l.At(LogLevelERROR, message, message, args...)
+}
+
+// At logs message at level under the flood bound of key (Admit): callers whose template is
+// shared by many causes (apperr) pass the cause's id as key.
+func (l *Logger) At(level LogLevel, key, message string, args ...interface{}) {
+	if l.Admit(level, key) {
+		log.Println(l.formatMessage(level, message, args...))
 	}
 }
 
@@ -103,7 +108,7 @@ func (l *Logger) LogError(operation string, err error) {
 // LogErrorFrom is LogError for helpers that log on their caller's behalf: skip counts the
 // frames above LogErrorFrom's caller, so the recorded caller is the code that failed.
 func (l *Logger) LogErrorFrom(skip int, operation string, err error) {
-	if !enabled(LogLevelERROR) {
+	if !l.Admit(LogLevelERROR, operation) {
 		return
 	}
 	// Get caller info for stack trace
@@ -127,7 +132,7 @@ func (l *Logger) LogErrorFrom(skip int, operation string, err error) {
 		log.Println(string(jsonBytes))
 	} else {
 		// Fallback to text format
-		l.Error("Operation failed: operation=%s error=%v caller=%s", operation, err, callerInfo)
+		log.Println(l.formatMessage(LogLevelERROR, "Operation failed: operation=%s error=%v caller=%s", operation, err, callerInfo))
 	}
 }
 
@@ -151,4 +156,69 @@ func (w stdWriter) Write(p []byte) (int, error) {
 // every line goes through this logger at ERROR, with peer addresses removed.
 func (l *Logger) StdLogger() *log.Logger {
 	return log.New(stdWriter{l: l}, "", 0)
+}
+
+// Log flood bound: lines a client can cause for free (refused requests, rate limits, malformed
+// proofs of work, invalid tokens) are throttled per key, so a flood cannot write unbounded lines
+// to the disk. WARN and ERROR lines are keyed by their message template (or by an explicit key,
+// At), LogError by its operation; INFO and DEBUG are not throttled (DEBUG is off in production).
+// At most LogBurst lines per key are written per LogWindow; the first line under a key after a
+// window in which lines were dropped is preceded by one line that says how many were dropped
+// (written when the key is next logged, so a flood that ends is reported by its next line).
+const (
+	LogBurst  = 20
+	LogWindow = time.Minute
+	// maxThrottleKeys bounds the table; keys are registered codes, so it is never reached
+	maxThrottleKeys = 1024
+)
+
+type throttleWindow struct {
+	start      time.Time
+	written    int
+	suppressed int
+}
+
+var (
+	throttleMu sync.Mutex
+	throttles  = make(map[string]*throttleWindow)
+)
+
+// admitLine counts one line under key at now: whether it may be written, and how many lines
+// were dropped under key in the window that just ended (to be reported once).
+func admitLine(key string, now time.Time) (ok bool, dropped int) {
+	throttleMu.Lock()
+	defer throttleMu.Unlock()
+	w, found := throttles[key]
+	if !found {
+		if len(throttles) >= maxThrottleKeys {
+			return false, 0
+		}
+		w = &throttleWindow{start: now}
+		throttles[key] = w
+	}
+	if now.Sub(w.start) >= LogWindow || now.Before(w.start) {
+		dropped = w.suppressed
+		*w = throttleWindow{start: now}
+	}
+	if w.written >= LogBurst {
+		w.suppressed++
+		return false, dropped
+	}
+	w.written++
+	return true, dropped
+}
+
+// Admit reports whether one more line at level under key may be written now (always false when
+// level is not logged). When lines under key were dropped in the previous window, it first
+// writes one WARN line saying how many.
+func (l *Logger) Admit(level LogLevel, key string) bool {
+	if !enabled(level) {
+		return false
+	}
+	ok, dropped := admitLine(l.prefix+"/"+key, time.Now())
+	if dropped > 0 && enabled(LogLevelWARN) {
+		log.Println(l.formatMessage(LogLevelWARN, "%s: suppressed %d lines in the previous %s (flood bound %d per %s)",
+			key, dropped, LogWindow, LogBurst, LogWindow))
+	}
+	return ok
 }

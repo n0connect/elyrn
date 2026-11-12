@@ -3,12 +3,18 @@
 Usage (make check-hardening): docker compose ... config --format json | python3 -I scripts/check-hardening.py <production|development>
 
 The rendered config holds values from .env (secrets among them): this script prints service,
-key and variable names only, never a value from the input. Exit 0 when every control holds, 1
+key and variable names only, never a value from the input. It also reads the nginx files and
+two backend sources from the repository (no secrets there): nginx's own /api/ answers must be
+the ones registered in backend/internal/apperr/edge.go, and the backend's stop grace must
+outlast its shutdown budget in backend/cmd/server/main.go. Exit 0 when every control holds, 1
 with one line per failure otherwise, 2 on unusable input.
 """
 
 import json
+import re
 import sys
+from http import HTTPStatus
+from pathlib import Path
 
 # Capabilities each service may add back after cap_drop ALL. postgres starts as root only to
 # hand its TLS key to uid 70 and drop to it (postgres/entrypoint.sh, docker-compose.yaml).
@@ -50,6 +56,28 @@ KIB = 1024
 # Backend defaults (backend/internal/config) when .env leaves a value empty
 DEFAULT_ARGON2_MEMORY_KIB = 65536
 DEFAULT_ARGON2_MAX_CONCURRENT = 4
+
+# Every service logs through the rotating "local" driver (docker-compose.yaml x-logging)
+LOG_DRIVER = "local"
+LOG_OPTIONS = ("max-size", "max-file")
+# The backend listens on this port inside its container: nginx-api-proxy.conf, the healthcheck
+# and docker-compose.dev.yaml name it, so BACKEND_PORT is pinned to it in Compose
+BACKEND_PORT = "8080"
+HEALTH_PATH = "/internal/health"
+# Repository files read for the nginx and shutdown checks
+ROOT = Path(__file__).resolve().parent.parent
+MAIN_GO = ROOT / "backend/cmd/server/main.go"
+APPERR_GO = ROOT / "backend/internal/apperr/apperr.go"
+EDGE_GO = ROOT / "backend/internal/apperr/edge.go"
+NGINX_SITE = ROOT / "nginx-site.conf"
+NGINX_API_ERRORS = ROOT / "nginx-api-errors.conf"
+API_PROXY_INCLUDE = "include /etc/nginx/elyrn/api-proxy.conf;"
+API_ERRORS_INCLUDE = "include /etc/nginx/elyrn/api-errors.conf;"
+API_DEFAULT_DENY = "location /api/ { " + API_ERRORS_INCLUDE + " return 404; }"
+# Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
+NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
+# Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
+SHUTDOWN_CONSTANTS = ("shutdownGrace", "jobStopDeadline")
 
 failures = []
 
@@ -128,6 +156,102 @@ def check_resources(name, svc):
         fail(name, "init must be true (PID 1 reaps no children)")
 
 
+def check_logging(name, svc):
+    logging = svc.get("logging") or {}
+    options = logging.get("options") or {}
+    if logging.get("driver") != LOG_DRIVER or any(not options.get(o) for o in LOG_OPTIONS):
+        fail(name, f"logging must use the {LOG_DRIVER} driver with " + " and ".join(LOG_OPTIONS))
+
+
+def duration_seconds(raw):
+    """Compose durations as rendered ("30s", "1m30s"); None when unparseable."""
+    text = str(raw or "").strip()
+    parts = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+)s)?", text)
+    if not text or not parts:
+        return None
+    hours, minutes, secs = (int(p or 0) for p in parts.groups())
+    return hours * 3600 + minutes * 60 + secs
+
+
+def read(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        fail("repository", f"{path.relative_to(ROOT)} is missing")
+        return ""
+
+
+def shutdown_budget():
+    """shutdownGrace + jobStopDeadline from main.go, in seconds (None when not found)."""
+    source = read(MAIN_GO)
+    total = 0
+    for name in SHUTDOWN_CONSTANTS:
+        found = re.search(name + r"\s*=\s*(\d+)\s*\*\s*time\.Second", source)
+        if not found:
+            fail("backend", f"{name} not found in {MAIN_GO.relative_to(ROOT)}")
+            return None
+        total += int(found.group(1))
+    return total
+
+
+def check_backend_lifecycle(svc):
+    env = svc.get("environment") or {}
+    if str(env.get("BACKEND_PORT")) != BACKEND_PORT:
+        fail("backend", f"BACKEND_PORT must be pinned to {BACKEND_PORT} (nginx and the healthcheck use it)")
+    test = " ".join(str(t) for t in ((svc.get("healthcheck") or {}).get("test") or []))
+    if f"127.0.0.1:{BACKEND_PORT}{HEALTH_PATH}" not in test:
+        fail("backend", f"healthcheck must probe http://127.0.0.1:{BACKEND_PORT}{HEALTH_PATH} (it touches the database)")
+    budget = shutdown_budget()
+    grace = duration_seconds(svc.get("stop_grace_period"))
+    if budget is not None and (grace is None or grace <= budget):
+        fail("backend", f"stop_grace_period must exceed shutdownGrace + jobStopDeadline ({budget} s)")
+
+
+def go_strings(source):
+    """Every `name = "text"` constant in a Go source."""
+    return dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', source))
+
+
+def edge_answers():
+    """{id: expected JSON body} from apperr/edge.go, rendered as EdgeAnswer.Body does."""
+    sentences = go_strings(read(APPERR_GO))
+    edge = read(EDGE_GO)
+    sentences.update(go_strings(edge))
+    answers = {}
+    for code, status, say in re.findall(r'\{"(E_[A-Z0-9_]+)", http\.Status(\w+), (\w+)\}', edge):
+        number = HTTPStatus[re.sub(r"(?<!^)(?=[A-Z])", "_", status).upper()].value
+        body = json.dumps({"success": False, "message": sentences.get(say, ""), "code": code}, separators=(",", ":"))
+        answers[code] = (number, body)
+    if not answers:
+        fail("apperr", "no EdgeAnswers found in edge.go")
+    return answers
+
+
+def check_nginx():
+    site, errors = read(NGINX_SITE), read(NGINX_API_ERRORS)
+    for line in NGINX_LOG_LINES:
+        if line not in site.splitlines():
+            fail("nginx", f"nginx-site.conf must keep '{line}'")
+    if API_DEFAULT_DENY not in site.splitlines():
+        fail("nginx", "the /api/ default-deny line is missing")
+    if "proxy_intercept_errors off;" not in errors or re.search(r"proxy_intercept_errors\s+on", site + errors):
+        fail("nginx", "proxy_intercept_errors must be off: the backend's coded answers pass through")
+    # Every location that proxies to the backend answers nginx's own failures in JSON
+    for block in re.split(r"\n(?=location )", site):
+        if API_PROXY_INCLUDE in block and API_ERRORS_INCLUDE not in block:
+            fail("nginx", "a location proxies /api/ without " + API_ERRORS_INCLUDE)
+    # Every JSON body nginx returns is a registered edge answer, byte for byte, with its status
+    answers = edge_answers()
+    returned = re.findall(r"return (\d{3}) '([^']*)';", site)
+    for status, body in returned:
+        code = (json.loads(body) if body.startswith("{") else {}).get("code", "")
+        if code not in answers or answers[code] != (int(status), body):
+            fail("nginx", f"a JSON answer ({status}) is not the one registered in apperr/edge.go")
+    missing = set(answers) - {json.loads(b).get("code") for _, b in returned if b.startswith("{")}
+    if missing:
+        fail("nginx", "registered edge answers nginx never returns: " + ", ".join(sorted(missing)))
+
+
 def check_backend_memory(svc):
     env = svc.get("environment") or {}
     kib = as_int(env.get("ARGON2_MEMORY_KIB"), DEFAULT_ARGON2_MEMORY_KIB)
@@ -204,8 +328,11 @@ def main():
         check_resources(name, svc)
         check_ports(name, svc, layout)
         check_networks(name, svc, layout, networks)
+        check_logging(name, svc)
     check_backend_memory(services["backend"])
+    check_backend_lifecycle(services["backend"])
     check_trust(services)
+    check_nginx()
     if failures:
         for line in failures:
             print(f"[FAIL] {layout}: {line}")

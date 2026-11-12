@@ -3,11 +3,13 @@ package integration
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 
+	"elyrn/internal/apperr/opcode"
 	"elyrn/internal/chat"
 	"elyrn/internal/database"
 	"elyrn/internal/encryption"
@@ -54,8 +56,11 @@ func TestVerifyKeys_RefusesMasterKeysThatCannotOpenTheDatabase(t *testing.T) {
 
 	writerID, writer, fresh := os.Getenv("MASTER_KEY_ACTIVE_ID"), os.Getenv("MASTER_KEY_ACTIVE"), newKeyHex(t)
 	setMasterKeys(t, "k2", fresh, "")
-	if err := svc.VerifyKeys(); err == nil || !strings.Contains(err.Error(), writerID) {
-		t.Fatalf("missing master key %q: VerifyKeys = %v", writerID, err)
+	// Coded and named (E_KEY_CHECK, MASTER_KEY_OLD); the key id itself is never logged
+	var f *opcode.Failure
+	if err := svc.VerifyKeys(); !errors.As(err, &f) || f.Code.ID != opcode.KeyCheck.ID || f.Variable != "MASTER_KEY_OLD" ||
+		strings.Contains(err.Error(), writerID) {
+		t.Fatalf("missing master key: VerifyKeys = %v", err)
 	}
 	setMasterKeys(t, "k2", fresh, writerID+":"+newKeyHex(t))
 	if err := svc.VerifyKeys(); err == nil {
@@ -95,8 +100,11 @@ func TestVerifyKeys_PinsThePepperOnlyOnceRecordsProveIt(t *testing.T) {
 	if err := svc.VerifyKeys(); err != nil {
 		t.Fatalf("accounts alone prove nothing about the pepper, yet VerifyKeys = %v", err)
 	}
-	if pinned := countWhere(t, &models.KeyCheck{}, "1 = 1"); pinned != 0 {
+	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 0 {
 		t.Fatal("an unproven pepper was pinned")
+	}
+	if floors := countWhere(t, &models.KeyCheck{}, "name = ?", pepperFloorRow); floors != 1 {
+		t.Fatal("an unverified start did not mark the pepper floor")
 	}
 
 	t.Setenv("ACCOUNT_LOOKUP_PEPPER", right)
@@ -109,8 +117,49 @@ func TestVerifyKeys_PinsThePepperOnlyOnceRecordsProveIt(t *testing.T) {
 	if err := svc.VerifyKeys(); err != nil {
 		t.Fatalf("right pepper: %v", err)
 	}
-	if pinned := countWhere(t, &models.KeyCheck{}, "1 = 1"); pinned != 1 {
+	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 1 {
 		t.Fatal("a proven pepper was not pinned")
+	}
+}
+
+// key_checks rows of the pepper check (stored names)
+const (
+	pepperRow      = "pepper"
+	pepperFloorRow = "pepper-floor"
+)
+
+// Accounts registered while the pepper was unverified (possibly under a wrong one) neither pin
+// a pepper nor lock the right one out: only conversations of accounts at or below the floor,
+// which nobody can log in to under a wrong pepper, prove or contradict it.
+func TestVerifyKeys_AccountsAfterTheFloorNeverPinAPepper(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	svc := chat.NewService()
+	right := os.Getenv("ACCOUNT_LOOKUP_PEPPER")
+
+	t.Setenv("ACCOUNT_LOOKUP_PEPPER", newKeyHex(t))
+	if err := svc.VerifyKeys(); err != nil {
+		t.Fatalf("unverified start refused: %v", err)
+	}
+	carol, dave := register(t, mux), register(t, mux)
+	pair(t, carol, dave)
+	if err := svc.VerifyKeys(); err != nil {
+		t.Fatalf("wrong pepper with only post-floor conversations: %v", err)
+	}
+	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 0 {
+		t.Fatal("conversations of accounts registered under an unverified pepper pinned it")
+	}
+
+	t.Setenv("ACCOUNT_LOOKUP_PEPPER", right)
+	if err := svc.VerifyKeys(); err != nil {
+		t.Fatalf("the right pepper was locked out by post-floor conversations: %v", err)
+	}
+	pair(t, alice, bob)
+	if err := svc.VerifyKeys(); err != nil {
+		t.Fatalf("right pepper with a pre-floor conversation: %v", err)
+	}
+	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 1 {
+		t.Fatal("a conversation of a pre-floor account did not pin the pepper")
 	}
 }
 

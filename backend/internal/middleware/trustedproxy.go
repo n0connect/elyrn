@@ -21,35 +21,29 @@ var (
 	trustedProxyIPs    []net.IP
 )
 
+// loadTrustedProxies parses TRUSTED_PROXIES once. Startup validation refuses a malformed list
+// (E_CONFIG_INVALID); should one get here anyway, no proxy is trusted (fail closed) and the
+// entry is never echoed.
 func loadTrustedProxies() {
 	trustedProxyOnce.Do(func() {
-		raw := config.GetTrustedProxies()
-		if raw == "" {
-			trustedProxyLogger.Info("Trusted proxies: none configured")
+		ips, nets, err := utils.ParseProxyList(config.GetTrustedProxies())
+		if err != nil {
+			trustedProxyLogger.Error("TRUSTED_PROXIES is malformed (%v): no proxy is trusted", err)
 			return
 		}
-
-		for _, entry := range strings.Split(raw, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-
-			if ip := net.ParseIP(entry); ip != nil {
-				trustedProxyIPs = append(trustedProxyIPs, ip)
-				continue
-			}
-
-			if _, cidr, err := net.ParseCIDR(entry); err == nil {
-				trustedProxyNets = append(trustedProxyNets, cidr)
-				continue
-			}
-
-			trustedProxyLogger.Warn("Trusted proxy entry ignored (invalid): %s", entry)
-		}
-
+		trustedProxyIPs, trustedProxyNets = ips, nets
 		trustedProxyLogger.Info("Trusted proxies loaded: ips=%d cidrs=%d", len(trustedProxyIPs), len(trustedProxyNets))
 	})
+}
+
+// LoadTrustedProxies parses TRUSTED_PROXIES now (at startup) instead of at the first request.
+func LoadTrustedProxies() { loadTrustedProxies() }
+
+// IsLoopbackPeer reports whether the request's direct TCP peer is a loopback address (the
+// container's own healthcheck); forwarded headers are never consulted.
+func IsLoopbackPeer(r *http.Request) bool {
+	ip := parseRemoteIP(r.RemoteAddr)
+	return ip != nil && ip.IsLoopback()
 }
 
 func isTrustedProxy(ip net.IP) bool {

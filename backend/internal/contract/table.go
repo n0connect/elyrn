@@ -82,6 +82,7 @@ const (
 	OpNoteSend
 	OpNoteDelete
 	OpEvents
+	OpHealth
 )
 
 // Op is one accepted method on one endpoint.
@@ -178,6 +179,8 @@ func authEndpoints() []Endpoint {
 			{ID: OpMeDelete, Method: http.MethodDelete, Body: jsonBody(Field{Name: "auth_key", Kind: KindString, Required: true, Str: patternKey32})},
 		}},
 		{Template: models.PathEvents, Ops: []Op{{ID: OpEvents, Method: http.MethodGet}}},
+		// The container healthcheck (loopback peers only; nginx never forwards it)
+		{Template: models.PathHealth, Ops: []Op{{ID: OpHealth, Method: http.MethodGet}}},
 	}
 }
 

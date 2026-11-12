@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"net/http"
-	"strings"
 	"sync"
 
 	"elyrn/internal/apperr"
@@ -22,30 +21,23 @@ var (
 	corsOnce       sync.Once
 )
 
+// loadAllowedOrigins parses ALLOWED_ORIGINS once. Startup validation refuses a malformed
+// list (E_CONFIG_INVALID); should one get here anyway, no origin is allowed (fail closed).
 func loadAllowedOrigins() {
 	corsOnce.Do(func() {
-		allowedOrigins = make(map[string]struct{})
-
-		raw := config.GetAllowedOrigins()
-		if raw == "" {
-			corsLogger.Warn("CORS: ALLOWED_ORIGINS not set; no origins will be allowed")
+		origins, err := utils.ParseOrigins(config.GetAllowedOrigins())
+		if err != nil {
+			allowedOrigins = map[string]struct{}{}
+			corsLogger.Error("CORS: ALLOWED_ORIGINS is malformed (%v): no origin is allowed", err)
 			return
 		}
-		if raw == "*" {
-			corsLogger.Warn("CORS: wildcard origins are not allowed; no origins will be allowed")
-			return
-		}
-
-		for _, o := range strings.Split(raw, ",") {
-			o = strings.TrimSpace(o)
-			if o == "" {
-				continue
-			}
-			allowedOrigins[o] = struct{}{}
-		}
+		allowedOrigins = origins
 		corsLogger.Info("CORS: whitelist enabled from ALLOWED_ORIGINS, count=%d", len(allowedOrigins))
 	})
 }
+
+// LoadAllowedOrigins parses ALLOWED_ORIGINS now (at startup) instead of at the first request.
+func LoadAllowedOrigins() { loadAllowedOrigins() }
 
 // isOriginAllowed is an exact whitelist match: scheme, host and port must all be listed in
 // ALLOWED_ORIGINS. No prefix or pattern matching ("http://localhost:3000.evil.example").

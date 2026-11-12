@@ -1,16 +1,20 @@
 package apperr
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"elyrn/internal/apperr/opcode"
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
+	"elyrn/internal/encryption"
 	"elyrn/internal/models"
 	"elyrn/internal/pow"
 	"elyrn/internal/store"
@@ -76,7 +80,8 @@ var jsonWire = map[Code]struct {
 
 // emptyWire pins the answers with a status line only: HEAD on register, login and the PoW
 // challenge answered a bare 405 (w.WriteHeader) before the input contract's gate took it over.
-var emptyWire = map[Code]int{HeadNotAllowed: http.StatusMethodNotAllowed}
+// The healthcheck's 503 is a status line only too: no detail leaves the server.
+var emptyWire = map[Code]int{HeadNotAllowed: http.StatusMethodNotAllowed, HealthUnavailable: http.StatusServiceUnavailable}
 
 // TestWireAnswers pins every code to the exact (status, body) the server answered before the
 // registry existed; clients compare these bytes.
@@ -105,6 +110,7 @@ func TestWireAnswers(t *testing.T) {
 		Argon2Busy:            {503, "Service unavailable"},
 		PendingStoreFull:      {503, "Service unavailable"},
 		StoreUnavailable:      {503, "Service unavailable"},
+		ShuttingDown:          {503, "Service unavailable"},
 		InvalidInput:          {400, "Invalid request"},
 		NotFound:              {404, "Not found"},
 		LimitReached:          {429, "Too many requests"},
@@ -225,6 +231,7 @@ func TestSentinelsMapped(t *testing.T) {
 		pow.ErrCapacity:          PoWCapacity,
 		pow.ErrInvalidSolution:   PoWInvalid,
 		store.ErrUnavailable:     StoreUnavailable,
+		encryption.ErrClosing:    ShuttingDown,
 	}
 	if len(want) != len(sentinels) {
 		t.Errorf("pinned %d sentinels, table has %d", len(want), len(sentinels))
@@ -282,5 +289,51 @@ func TestOperatorCodesWellFormed(t *testing.T) {
 			t.Errorf("id %q is registered twice", c.ID)
 		}
 		seen[c.ID] = struct{}{}
+	}
+}
+
+// nginxSite is nginx's site configuration (it holds the /api/ error answers), from here
+const nginxSite = "../../../nginx-site.conf"
+
+// TestEdgeAnswers: nginx's own /api/ answers are registered once, with ids no other code uses,
+// in apperr's JSON shape plus the code; and nginx-site.conf returns exactly these bytes.
+func TestEdgeAnswers(t *testing.T) {
+	seen := map[string]struct{}{}
+	for _, e := range registry {
+		seen[e.id] = struct{}{}
+	}
+	for _, c := range opcode.All {
+		seen[c.ID] = struct{}{}
+	}
+	for _, a := range EdgeAnswers {
+		if !idPattern.MatchString(a.ID) {
+			t.Errorf("edge id %q does not match %s", a.ID, idPattern)
+		}
+		if _, dup := seen[a.ID]; dup {
+			t.Errorf("edge id %q is registered twice", a.ID)
+		}
+		seen[a.ID] = struct{}{}
+		var body struct {
+			Success *bool  `json:"success"`
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		}
+		if err := json.Unmarshal([]byte(a.Body()), &body); err != nil || body.Success == nil || *body.Success ||
+			body.Message != a.Sentence || body.Code != a.ID || a.Status < 400 || a.Status > 599 {
+			t.Errorf("%s: malformed edge answer %d %s", a.ID, a.Status, a.Body())
+		}
+	}
+	site, err := os.ReadFile(nginxSite)
+	if os.IsNotExist(err) {
+		// The test container carries backend/ only; make check-hardening compares the same bytes
+		t.Skip("nginx-site.conf is outside this tree")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range EdgeAnswers {
+		if want := fmt.Sprintf("return %d '%s';", a.Status, a.Body()); !strings.Contains(string(site), want) {
+			t.Errorf("nginx-site.conf does not return %s", want)
+		}
 	}
 }

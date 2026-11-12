@@ -155,3 +155,21 @@ func TestLogger_StdLoggerRemovesPeerAddresses(t *testing.T) {
 		t.Errorf("unexpected log output %q", out)
 	}
 }
+
+// A flood of one warning (a refused request a client can repeat for free) writes at most
+// utils.LogBurst lines per window, so it cannot fill the disk; other templates are unaffected.
+func TestLogger_FloodBoundPerTemplate(t *testing.T) {
+	logger := utils.NewLogger("TEST_FLOOD")
+	out := captureLog(t, "warn", func() {
+		for i := 0; i < 3*utils.LogBurst; i++ {
+			logger.Warn("flooded line %d", i)
+		}
+		logger.Warn("another line")
+	})
+	if got := strings.Count(out, "flooded line"); got != utils.LogBurst {
+		t.Fatalf("%d flooded lines written, want %d", got, utils.LogBurst)
+	}
+	if !strings.Contains(out, "another line") {
+		t.Fatal("a different template was suppressed by another's flood")
+	}
+}

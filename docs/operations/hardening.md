@@ -6,8 +6,16 @@ nginx publishes a port, on loopback. `make check-hardening` fails if the rendere
 (production and development layouts) loses any control below or gains a forbidden one.
 
 ```bash
-make check-hardening     # rendered config of both layouts + nginx's /api/ default deny
+make check-hardening     # rendered config of both layouts, nginx's /api/ answers and log levels
 ```
+
+Besides the per-service controls below it fails when a service loses its log rotation, when the
+backend's `stop_grace_period` no longer exceeds its shutdown budget (read from
+`backend/cmd/server/main.go`), when `BACKEND_PORT` is not pinned to 8080 or the healthcheck stops
+probing `/internal/health`, when nginx intercepts the backend's answers again, when an `/api/`
+location that proxies lacks the JSON error include, when an nginx JSON answer differs by one byte
+from its registered code (`backend/internal/apperr/edge.go`), or when nginx's `error_log` level or
+`access_log off` changes.
 
 ---
 
@@ -68,7 +76,9 @@ Docker's default seccomp profile stays on everywhere (no `seccomp=` option); no 
 | nofile | 8192 | 4096 | 4096 | 8192 | descriptor exhaustion | `Ulimits` |
 | `init` (tini) | yes | no (nginx reaps) | no (postgres reaps) | yes | zombies from interrupted healthchecks | `Init` |
 | restart | unless-stopped | unless-stopped | unless-stopped | unless-stopped | staying down after a crash | `RestartPolicy` |
-| healthcheck | `/api/v2/me` answers 401 | `/` answers | `pg_isready` | onion address published | starting dependents early | `docker ps` |
+| healthcheck | `/internal/health` (loopback only): `SELECT 1` within 3 s and retention cycling | `/` answers | `pg_isready` | onion address published (a file; see Known limits) | starting dependents early, an unnoticed dead database link | `docker ps` |
+| Logs | `local` driver, 3 × 10 MB | same | same | same | logs filling the host's disk | `docker inspect -f '{{.HostConfig.LogConfig}}' <c>` |
+| Stop grace | 30 s (> 10 s requests + 5 s jobs) | default | default | default | a kill before keys are zeroized | `docker inspect -f '{{.Config.StopTimeout}}'` |
 | Networks | app, data | edge, app | data | edge | lateral movement | `docker network inspect noaddx_app` |
 | Published | dev only (8080) | `127.0.0.1:HTTP_PORT` → 8080 | dev only (`DB_HOST_PORT`) | none | exposure beyond loopback | `docker ps` |
 | Egress | none | via edge | none | via edge (Tor) | exfiltration, callbacks | a TCP connect from the backend's namespace fails |
@@ -92,7 +102,8 @@ being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too
 | Control | Where |
 |---|---|
 | Unprivileged ports 8080 (clearnet) and 8081 (onion) | `nginx.conf` `listen` |
-| `server_tokens off`, no access log, errors at `crit` | `nginx-site.conf` top |
+| `server_tokens off`, no access log, errors at `crit` (at `error`, nginx names the client address and path in every upstream and rate-limit line; an unreachable backend shows instead as `503 E_BACKEND_UNAVAILABLE` and in the backend's healthcheck) | `nginx-site.conf` top |
+| `/api/`: the backend's answers pass through (`proxy_intercept_errors off`); nginx's own failures answer JSON with a registered code: 404 `E_EDGE_NOT_FOUND`, 405 `E_EDGE_METHOD_NOT_ALLOWED`, 413 `E_BODY_TOO_LARGE`, 429 `E_EDGE_RATE_LIMITED`, 500/502/503/504 as 503 `E_BACKEND_UNAVAILABLE`; HTML status pages for page navigation only | [nginx-api-errors.conf](../../nginx-api-errors.conf), named locations in `nginx-site.conf` |
 | Method whitelist for the whole site: GET, HEAD, POST, DELETE, OPTIONS, else 405 | `nginx-site.conf` `if ($request_method ...)` |
 | Body bound 1k outside `/api/`; per API location below | `client_max_body_size` |
 | Headers: 1k buffer, at most 4 × 8k | `client_header_buffer_size`, `large_client_header_buffers` |
@@ -109,7 +120,7 @@ being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too
 per route group, exact anchored paths (`{id}`, `{note}` as canonical UUIDv4), the contract's
 methods (HEAD passes with GET and the backend answers it; OPTIONS passes for CORS preflight), and
 a body bound at the smallest round size above the contract's. Anything else under `/api/` ends
-in `location /api/ { return 404; }`.
+in `location /api/ { include /etc/nginx/elyrn/api-errors.conf; return 404; }`.
 
 | Paths (`/api/v2/…`) | Methods | Body bound (contract) |
 |---|---|---|
@@ -124,8 +135,10 @@ in `location /api/ { return 404; }`.
 | `conversations/{id}`, `conversations/{id}/notes/{note}` | DELETE | 1k (none) |
 
 A method outside the list answers 405, as the backend would; an unknown path 404; a body over
-the bound 413. The status pages accept bodies up to 8k, because an intercepted API error is
-redirected there with its body. The backend's gate still checks everything again.
+the bound 413; each as JSON, `{"success":false,"message":"<sentence>","code":"E_..."}`, the same
+shape as the backend's JSON answers plus the code. The backend's gate still checks everything
+again, and its own answers reach the client unchanged. `/internal/health` lies outside `/api/`,
+so nginx never forwards it; the backend also answers it to loopback peers only.
 
 ## Images
 
@@ -151,6 +164,10 @@ on a schedule.
   in the backend.
 - `edge` has internet access, so nginx does too; it needs none, but tor does and the published
   port needs a gateway.
+- tor's healthcheck tests only that the onion address was published (a file). tor offers no
+  cheap local test of reachability: proving the address answers would need a client that goes
+  out through the Tor network and back (minutes, and traffic that identifies the probe).
+  Check it from outside with Tor Browser after `make onion`.
 
 ---
 

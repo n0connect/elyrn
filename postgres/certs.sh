@@ -17,6 +17,11 @@ openssl=${OPENSSL:-openssl}
 ca_days=3650
 server_days=730
 renew_seconds=$((30 * 24 * 3600))
+# Earlier and louder than renewal: a certificate that expires within warn_days is named on every
+# run, so an operator who never runs make certs or make up sees it coming (an expired server
+# certificate stops the backend at start: E_DB_UNREACHABLE, "TLS: ... has expired")
+warn_days=60
+warn_seconds=$((warn_days * 24 * 3600))
 # Every name the backend or a host-side client may dial: the compose service name, the
 # container name, and loopback for psql/tests through the published port
 san="DNS:postgres,DNS:elyrn-postgres,DNS:localhost,IP:127.0.0.1,IP:::1"
@@ -102,6 +107,12 @@ chmod 600 "$dir/ca.key" "$dir/postgres/server.key"
 chmod 644 "$dir/ca/ca.crt" "$dir/postgres/server.crt"
 
 until=$("$openssl" x509 -noout -enddate -in "$dir/postgres/server.crt" | cut -d= -f2-)
+for cert in "$dir/ca/ca.crt" "$dir/postgres/server.crt"; do
+	if ! "$openssl" x509 -noout -checkend "$warn_seconds" -in "$cert" >/dev/null 2>&1; then
+		echo "[WARN] certs: $cert expires within $warn_days days ($("$openssl" x509 -noout -enddate -in "$cert" | cut -d= -f2-));" \
+			"it is renewed by make certs (and make up) once within 30 days: schedule one, see docs/operations/disaster-recovery.md" >&2
+	fi
+done
 if [ -n "$renewed" ]; then
 	echo "[OK] certs: $renewed written to $dir/ (server certificate until $until)"
 else

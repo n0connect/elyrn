@@ -54,7 +54,7 @@ MANIFEST ?= frontend.sha256
 .PHONY: all help setup certs check-production check-hardening check-deps check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db \
         build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
-        manifest verify-frontend backup-accounts
+        manifest verify-frontend backup-accounts test-restore
 
 ## -----------------------------------------------------------------------------
 ## Help
@@ -92,6 +92,7 @@ help:
 	@echo "  test-crypto   Run frontend WebCrypto derivation tests (Node.js 20+)"
 	@echo "  test-all      Run local Go unit tests and frontend crypto tests"
 	@echo "  test-db       Run Go database and integration tests (requires local PostgreSQL)"
+	@echo "  test-restore  Restore drill in the disposable test stack: seed, dump (backup-accounts' command), restore, log in"
 	@echo ""
 	@echo "Release Targets:"
 	@echo "  build-ref     Build the backend image of any tag or commit: make build-ref REF=elyrn-openssl-v1.0.0"
@@ -160,9 +161,9 @@ check-hardening:
 		$(DOCKER_COMPOSE) $$files --profile onion config --format json \
 			| python3 -I scripts/check-hardening.py "$$layout" || exit 1; \
 	done
-	@grep -qx 'location /api/ { return 404; }' nginx-site.conf \
+	@grep -qx 'location /api/ { include /etc/nginx/elyrn/api-errors.conf; return 404; }' nginx-site.conf \
 		|| { echo "[FAIL] nginx-site.conf: the /api/ default-deny line is missing"; exit 1; }
-	@echo "[OK] check-hardening: nginx /api/ ends in default deny"
+	@echo "[OK] check-hardening: nginx /api/ ends in default deny; its own answers are the registered JSON (apperr/edge.go)"
 
 $(ENV_FILE):
 	@$(MAKE) setup
@@ -372,12 +373,42 @@ shell-backend:
 shell-db:
 	@$(DOCKER_COMPOSE) -f docker-compose.yaml exec postgres psql -U postgres -d noaddx
 
-# Accounts only (users + the pepper commitment in key_checks): messages expire and burned
-# conversations must stay gone, so they are never backed up. Keep it apart from .env.
+# Accounts only (users with their id sequence, and key_checks: the pepper commitment, the
+# schema version and the retention mark): messages expire and burned conversations must stay
+# gone, so they are never backed up. pg_dump --table dumps a table's owned sequence with it, so
+# users_id_seq and its position come along. Keep the file apart from .env.
+ACCOUNTS_DUMP := pg_dump -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" --no-owner --table=users --table=key_checks
+
 backup-accounts:
 	@mkdir -p backups
 	@umask 077; file="backups/accounts-$$(date -u +%Y%m%dT%H%M%SZ).sql"; \
-	$(DOCKER_COMPOSE) -f docker-compose.yaml exec -T postgres sh -c \
-		'pg_dump -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" --no-owner --table=users --table=key_checks' > "$$file" \
+	$(DOCKER_COMPOSE) -f docker-compose.yaml exec -T postgres sh -c '$(ACCOUNTS_DUMP)' > "$$file" \
 		|| { rm -f "$$file"; echo "[ERROR] backup failed (is the database running?)"; exit 1; }; \
 	echo "[OK] $$file: store it apart from .env"
+
+# Restore drill, entirely inside the disposable test stack (docker-compose.test.yaml: project
+# noaddx-test, its database on tmpfs), so no development or production volume is ever touched:
+# seed an account, dump with backup-accounts' command, empty the test database, restore the dump
+# the way docs/operations/disaster-recovery.md does, then start on it, log in and register again.
+# The drill's keys are drawn once here and passed to the containers by name only.
+TEST_COMPOSE := $(DOCKER_COMPOSE) -f docker-compose.test.yaml
+RESTORE_DRILL_DIR := test-results/restore-drill
+RESTORE_DRILL_RUN = $(TEST_COMPOSE) run --rm -e CGO_ENABLED=$(CGO_$(ENGINE)) -e RESTORE_DRILL_DIR=/$(RESTORE_DRILL_DIR) \
+	-e RESTORE_DRILL_JWT_SECRET -e RESTORE_DRILL_MASTER_KEY_ACTIVE -e RESTORE_DRILL_ACCOUNT_LOOKUP_PEPPER
+
+test-restore: check-docker
+	@echo "[INFO] Restore drill in the test stack (crypto engine: $(ENGINE))..."
+	@set -e; umask 077; mkdir -p $(RESTORE_DRILL_DIR); \
+	trap '$(TEST_COMPOSE) down -v >/dev/null 2>&1; rm -f $(RESTORE_DRILL_DIR)/accounts.sql $(RESTORE_DRILL_DIR)/account' EXIT; \
+	export RESTORE_DRILL_JWT_SECRET=$$(openssl rand -hex 32) RESTORE_DRILL_MASTER_KEY_ACTIVE=$$(openssl rand -hex 32) \
+		RESTORE_DRILL_ACCOUNT_LOOKUP_PEPPER=$$(openssl rand -hex 32); \
+	$(COMPOSE_ENV) $(TEST_COMPOSE) build test-runner; \
+	$(TEST_COMPOSE) up -d --wait postgres-test; \
+	drill() { $(COMPOSE_ENV) $(RESTORE_DRILL_RUN) -e RESTORE_DRILL=$$1 test-runner \
+		go test -count=1 -tags "test $(GO_TAGS_$(ENGINE))" -run '^TestRestoreDrill$$' ./tests/integration/; }; \
+	drill seed; \
+	$(TEST_COMPOSE) exec -T postgres-test sh -c '$(ACCOUNTS_DUMP)' > $(RESTORE_DRILL_DIR)/accounts.sql; \
+	$(TEST_COMPOSE) exec -T postgres-test sh -c 'dropdb -U "$$POSTGRES_USER" --force "$$POSTGRES_DB" && createdb -U "$$POSTGRES_USER" "$$POSTGRES_DB"'; \
+	$(TEST_COMPOSE) exec -T postgres-test sh -c 'psql -v ON_ERROR_STOP=1 -q -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < $(RESTORE_DRILL_DIR)/accounts.sql; \
+	drill verify; \
+	echo "[OK] Restore drill: the dump restores, the key check passes, its account logs in, a new one registers"

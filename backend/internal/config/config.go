@@ -285,31 +285,29 @@ func GetHSTSPreload() bool {
 	return getEnvBool("HSTS_PRELOAD")
 }
 
-// GetSecurityHeaderCOOP returns Cross-Origin-Opener-Policy (default same-origin; "off" disables)
-func GetSecurityHeaderCOOP() string {
-	value := strings.TrimSpace(GetEnv("SEC_HEADER_COOP", "same-origin"))
-	if strings.EqualFold(value, "off") || strings.EqualFold(value, "disabled") {
+// crossOriginHeader reads one cross-origin header setting, lower case; "off" or "disabled"
+// drops the header (empty). Startup validation whitelists the values.
+func crossOriginHeader(key, defaultValue string) string {
+	value := strings.ToLower(strings.TrimSpace(GetEnv(key, defaultValue)))
+	if value == "off" || value == "disabled" {
 		return ""
 	}
 	return value
+}
+
+// GetSecurityHeaderCOOP returns Cross-Origin-Opener-Policy (default same-origin; "off" disables)
+func GetSecurityHeaderCOOP() string {
+	return crossOriginHeader("SEC_HEADER_COOP", "same-origin")
 }
 
 // GetSecurityHeaderCORP returns Cross-Origin-Resource-Policy (default same-origin; "off" disables)
 func GetSecurityHeaderCORP() string {
-	value := strings.TrimSpace(GetEnv("SEC_HEADER_CORP", "same-origin"))
-	if strings.EqualFold(value, "off") || strings.EqualFold(value, "disabled") {
-		return ""
-	}
-	return value
+	return crossOriginHeader("SEC_HEADER_CORP", "same-origin")
 }
 
 // GetSecurityHeaderCOEP returns Cross-Origin-Embedder-Policy (default require-corp; "off" disables)
 func GetSecurityHeaderCOEP() string {
-	value := strings.TrimSpace(GetEnv("SEC_HEADER_COEP", "require-corp"))
-	if strings.EqualFold(value, "off") || strings.EqualFold(value, "disabled") {
-		return ""
-	}
-	return value
+	return crossOriginHeader("SEC_HEADER_COEP", "require-corp")
 }
 
 // ========================================

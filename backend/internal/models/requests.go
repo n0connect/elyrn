@@ -18,6 +18,9 @@ const (
 	PathRoomsJoin     = PathRooms + "/join"
 	PathConversations = apiPrefix + "/conversations"
 	PathEvents        = apiPrefix + "/events"
+	// PathHealth is the container healthcheck: outside /api/, so nginx never forwards it
+	// (its whitelist proxies /api/ alone), and answered to loopback peers only
+	PathHealth = "/internal/health"
 
 	// Sub-resources under PathConversations/{id}
 	SubMessages = "messages"

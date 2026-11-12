@@ -5,6 +5,7 @@ import (
 
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
+	"elyrn/internal/encryption"
 	"elyrn/internal/pow"
 	"elyrn/internal/store"
 )
@@ -38,6 +39,7 @@ var sentinels = []struct {
 	{pow.ErrCapacity, PoWCapacity},
 	{pow.ErrInvalidSolution, PoWInvalid},
 	{store.ErrUnavailable, StoreUnavailable},
+	{encryption.ErrClosing, ShuttingDown},
 }
 
 // CodeOf returns the code a sentinel error (or one wrapping it) is answered with.

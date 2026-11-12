@@ -64,7 +64,12 @@ func DecryptWithKey(encryptedText string, key []byte) (string, error) {
 
 func EncryptWithMasterKey(text string) (string, error) {
 	cryptoLogger.Debug("EncryptWithMasterKey: starting encryption with master key, input length: %d", len(text))
-	result, err := EncryptWithKey(text, ActiveMasterKey())
+	var result string
+	err := withActiveKey(func(_ string, key []byte) error {
+		var err error
+		result, err = EncryptWithKey(text, key)
+		return err
+	})
 	if err != nil {
 		cryptoLogger.LogError("EncryptWithMasterKey", err)
 		return "", err
@@ -76,11 +81,15 @@ func EncryptWithMasterKey(text string) (string, error) {
 // DecryptWithMasterKey opens a record with the master key named by its stored key id.
 // There is no fallback: a record is never trial-decrypted under every key.
 func DecryptWithMasterKey(encryptedText string, keyID string) (string, error) {
-	key, ok := MasterKeyByID(keyID)
-	if !ok {
+	var result string
+	ok, err := withKeyByID(keyID, func(key []byte) error {
+		var err error
+		result, err = DecryptWithKey(encryptedText, key)
+		return err
+	})
+	if err == nil && !ok {
 		return "", fmt.Errorf("unknown master key id")
 	}
-	result, err := DecryptWithKey(encryptedText, key)
 	if err != nil {
 		cryptoLogger.LogError("DecryptWithMasterKey", err)
 		return "", err

@@ -10,4 +10,7 @@ func ResetMasterKeysForTesting() {
 	masterKeyOnce = sync.Once{}
 	masterKeyError = nil
 	masterKeys = masterKeySet{}
+	keyUse.Lock()
+	closed = false
+	keyUse.Unlock()
 }
