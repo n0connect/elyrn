@@ -1288,9 +1288,32 @@ header {
     font-size: 14px;
 }
 
+/* Glyph, name and code on one line; wraps rather than widening the bubble */
 .msg-sender {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 6px;
     margin-bottom: 2px;
     font-size: 13px;
     letter-spacing: 1px;
     opacity: 0.7;
+}
+
+.msg-sender .aura-glyph {
+    width: 10px;
+    height: 10px;
+    padding: 1px;
+}
+
+.msg-sender .aura-name,
+.msg-sender .aura-code {
+    font-size: inherit;
+    letter-spacing: inherit;
+}
+
+/* Two keys under one name: one may be a ground lookalike */
+.member-tag.lookalike-tag {
+    color: var(--danger);
+    border-color: var(--danger);
 }

@@ -177,6 +177,24 @@ function createGlyph(grid) {
     return canvas;
 }
 
+// The 16-bit code that follows a name wherever both are shown
+function auraCode(aura) {
+    return '·' + aura.code;
+}
+
+// Glyph, name and code: what tells two members apart (a name alone carries only 12 bits)
+function appendAura(parent, aura) {
+    parent.appendChild(createGlyph(aura.grid));
+    const name = document.createElement('span');
+    name.className = 'aura-name';
+    name.textContent = aura.name;
+    parent.appendChild(name);
+    const code = document.createElement('span');
+    code.className = 'aura-code';
+    code.textContent = auraCode(aura);
+    parent.appendChild(code);
+}
+
 function renderMe(aura) {
     drawGlyph(document.getElementById('meGlyph'), aura.grid);
     document.getElementById('meName').textContent = aura.name;
@@ -275,7 +293,7 @@ function renderConversationList(items, onOpen) {
 
         const code = document.createElement('span');
         code.className = 'aura-code';
-        code.textContent = item.room ? roomMeta(item.room) : '·' + item.aura.code;
+        code.textContent = item.room ? roomMeta(item.room) : auraCode(item.aura);
 
         const marker = document.createElement('span');
         marker.className = 'unread-marker';
@@ -305,7 +323,7 @@ function renderConversationList(items, onOpen) {
 function showChatView(aura, room) {
     drawGlyph(document.getElementById('peerGlyph'), aura.grid);
     document.getElementById('peerName').textContent = room ? roomName(aura) : aura.name;
-    document.getElementById('peerCode').textContent = room ? '' : '·' + aura.code;
+    document.getElementById('peerCode').textContent = room ? '' : auraCode(aura);
     document.getElementById('safetyPanel').style.display = 'none';
     document.getElementById('burnConfirm').style.display = 'none';
     hideRoomPanels();
@@ -341,10 +359,11 @@ function renderSafetyNumber(groups) {
 }
 
 // A gap in a sender's counter: the server withheld, delayed or deleted their messages
+// from: the room sender's aura (absent one-to-one)
 function createGapElement(missing, from) {
     const item = document.createElement('li');
     item.className = 'msg-gap';
-    const who = from || 'them';
+    const who = from ? from.name + auraCode(from) : 'them';
     // The count comes from the sender's own counter; cap what we repeat back
     item.textContent = missing === 1
         ? `⚠ 1 message from ${who} never arrived`
@@ -357,11 +376,17 @@ function createMessageElement(message) {
     item.className = 'msg ' + (message.mine ? 'mine' : 'theirs') + (message.broken ? ' broken' : '');
     item.dataset.seq = String(message.seq);
 
-    // In a room, every message from someone else says who (their name in this room only)
+    // In a room, every message from someone else says who: glyph, name and code in this room only
     if (message.from && !message.broken) {
         const sender = document.createElement('div');
         sender.className = 'msg-sender';
-        sender.textContent = message.left ? message.from + ' · left' : message.from;
+        sender.dataset.sender = message.sender;
+        appendAura(sender, message.from);
+        if (message.left) {
+            const left = document.createElement('span');
+            left.textContent = LEFT_MARK;
+            sender.appendChild(left);
+        }
         item.appendChild(sender);
     }
 
@@ -464,6 +489,8 @@ function roomMeta(room) {
 }
 
 const ROOM_PANELS = ['membersPanel', 'notesPanel', 'roomCodePanel'];
+const LOOKALIKE_TAG = 'same name as another member';
+const LEFT_MARK = '· left';
 
 function hideRoomPanels() {
     ROOM_PANELS.forEach(id => {
@@ -574,15 +601,7 @@ function showRoomCode(code, expiresAt) {
 function memberRow(entry) {
     const row = document.createElement('li');
     row.className = 'member-item';
-    row.appendChild(createGlyph(entry.aura.grid));
-    const name = document.createElement('span');
-    name.className = 'aura-name';
-    name.textContent = entry.aura.name;
-    row.appendChild(name);
-    const code = document.createElement('span');
-    code.className = 'aura-code';
-    code.textContent = '·' + entry.aura.code;
-    row.appendChild(code);
+    appendAura(row, entry.aura);
     return row;
 }
 
@@ -593,14 +612,35 @@ function memberTag(text) {
     return tag;
 }
 
-// entries: verified roster; skipped: cards that failed to open (shown, never written to)
-function renderMembers(entries, skipped, requested, onBefriend) {
+function lookalikeTag() {
+    const tag = memberTag(LOOKALIKE_TAG);
+    tag.classList.add('lookalike-tag');
+    return tag;
+}
+
+// keys: public keys whose name another key shares; tags (or untags) every message from them
+function markLookalikes(keys) {
+    document.querySelectorAll('#messageList .msg-sender').forEach(sender => {
+        const tag = sender.querySelector('.lookalike-tag');
+        const lookalike = keys.has(sender.dataset.sender);
+        if (lookalike && !tag) {
+            sender.appendChild(lookalikeTag());
+        } else if (!lookalike && tag) {
+            tag.remove();
+        }
+    });
+}
+
+// entries: verified roster; skipped: cards that failed to open (shown, never written to);
+// lookalikes: public keys whose name another key shares
+function renderMembers(entries, skipped, requested, lookalikes, onBefriend) {
     const list = document.getElementById('memberList');
     clearChildren(list);
     entries.forEach(entry => {
         const row = memberRow(entry);
         if (entry.mine) row.appendChild(memberTag('you'));
         if (entry.owner) row.appendChild(memberTag('owner'));
+        if (lookalikes.has(entry.publicKey)) row.appendChild(lookalikeTag());
         if (!entry.mine) {
             const button = document.createElement('button');
             button.className = 'menu-opt member-action';

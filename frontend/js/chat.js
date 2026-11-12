@@ -16,6 +16,7 @@ const Chat = (() => {
     const MAX_CIPHERTEXT_CHARS = 11000;
     // A roster can change between fetching it and sending (412): fetch, re-encrypt, retry, bounded
     const MAX_ROSTER_RETRIES = 2;
+    const LOOKALIKE_WARNING = 'two members share a name — tell them apart by glyph and code';
 
     let me = null;                    // { privateKey, publicKey, roomsRoot, aura, ttlDays, limits }
     const conversations = new Map();  // id -> conversation state
@@ -374,6 +375,7 @@ const Chat = (() => {
         if (activeId !== conv.id) return;
 
         appendMessages(fresh);
+        if (conv.room) checkLookalikes(conv);
         conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
         await markRead(conv);
     }
@@ -396,12 +398,16 @@ const Chat = (() => {
         }
         const entry = Rooms.senderOf(conv.room, plain.sender);
         const aura = entry ? entry.aura : await ElyrnCrypto.aura(plain.sender);
+        if (!entry) {
+            // Off the roster, yet a lookalike all the same: its name is compared too
+            conv.room.outsiders.set(plain.sender, { publicKey: plain.sender, aura: aura });
+        }
         const last = conv.peerLastN.get(plain.sender) || 0;
         if (last > 0 && plain.counter > last + 1) {
-            fresh.push({ gap: plain.counter - last - 1, from: aura.name });
+            fresh.push({ gap: plain.counter - last - 1, from: aura });
         }
         conv.peerLastN.set(plain.sender, Math.max(last, plain.counter));
-        return { seq: raw.seq, mine: false, text: plain.text, sentAt: plain.sentAt, from: aura.name, left: !entry };
+        return { seq: raw.seq, mine: false, text: plain.text, sentAt: plain.sentAt, from: aura, sender: plain.sender, left: !entry };
     }
 
     async function markRead(conv) {
@@ -618,10 +624,23 @@ const Chat = (() => {
             }
             return false;
         }
+        checkLookalikes(conv);
         if (activeId === conv.id) {
             renderRoomHeader(conv.room);
         }
         return true;
+    }
+
+    // Different keys under one name: one of them may have been ground to pass as the other.
+    // Tags them wherever shown; the toast comes once per key per session, not on every refresh.
+    function checkLookalikes(conv) {
+        const room = conv.room;
+        room.lookalikes = Rooms.nameCollisions(room.roster || [], room.outsiders.values());
+        if (activeId !== conv.id) return;
+        const unseen = [...room.lookalikes].filter(key => !room.warned.has(key));
+        unseen.forEach(key => room.warned.add(key));
+        if (unseen.length > 0) showWarning(LOOKALIKE_WARNING);
+        markLookalikes(room.lookalikes);
     }
 
     // Someone joined, left or sent a note: refresh what the open room shows
@@ -634,7 +653,8 @@ const Chat = (() => {
     async function refreshRoomPanels(conv) {
         if (!conv.room.roster || activeId !== conv.id) return;
         if (document.getElementById('membersPanel').style.display !== 'none') {
-            renderMembers(conv.room.roster, conv.room.skipped, conv.room.requested, entry => befriend(conv, entry));
+            renderMembers(conv.room.roster, conv.room.skipped, conv.room.requested, conv.room.lookalikes,
+                entry => befriend(conv, entry));
             renderRoomSafety(await Rooms.safetyNumber(conv));
         }
         const notes = conv.room.notes > 0 ? await Rooms.notes(api, conv) : [];

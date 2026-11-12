@@ -47,7 +47,10 @@ const Rooms = (() => {
             roster: null,       // [{ card, publicKey, aura, mine, owner }], valid cards only
             rosterCards: null,  // every card as served (the digest covers them all)
             skipped: 0,         // cards that failed to open: counted, never wrapped for
-            requested: new Set()
+            requested: new Set(),
+            outsiders: new Map(),   // publicKey -> { publicKey, aura }: senders not on the roster (left)
+            lookalikes: new Set(),  // public keys whose aura name another key shares
+            warned: new Set()       // lookalike keys already announced this session
         };
     }
 
@@ -123,6 +126,23 @@ const Rooms = (() => {
 
     function senderOf(room, publicKey) {
         return room.roster ? room.roster.find(entry => entry.publicKey === publicKey) : undefined;
+    }
+
+    // A name carries 12 bits, so whoever holds the code can grind an account offline until its
+    // member key is named like someone here. Returns every public key whose name a different
+    // key shares: roster entries and outsiders ([{ publicKey, aura }]) alike.
+    function nameCollisions(roster, outsiders) {
+        const keysByName = new Map();
+        for (const entry of [...roster, ...outsiders]) {
+            const keys = keysByName.get(entry.aura.name) || new Set();
+            keys.add(entry.publicKey);
+            keysByName.set(entry.aura.name, keys);
+        }
+        const colliding = new Set();
+        keysByName.forEach(keys => {
+            if (keys.size > 1) keys.forEach(key => colliding.add(key));
+        });
+        return colliding;
     }
 
     // ---------- messages ----------
@@ -232,7 +252,7 @@ const Rooms = (() => {
     }
 
     return Object.freeze({
-        adopt, refreshView, expired, loadRoster, senderOf, seal, open,
+        adopt, refreshView, expired, loadRoster, senderOf, nameCollisions, seal, open,
         ttlChoices, create, join, codeText, befriend, notes, dismissNote, safetyNumber,
         aura: (id) => R.roomAura(id)
     });
