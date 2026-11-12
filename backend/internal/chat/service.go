@@ -696,9 +696,37 @@ func (s *Service) forget(tx store.ChatRepository, id uuid.UUID, member *models.C
 
 // ---------- messages ----------
 
-// ListMessages returns messages after `after`, or the latest page when after is nil. A room
-// member never gets what was sent before they joined: it was not encrypted for them.
-func (s *Service) ListMessages(me *Member, conversationID uuid.UUID, after *int64) ([]models.MessageDTO, error) {
+// PageCursor names which page of messages a read asks for.
+type PageCursor struct {
+	Kind CursorKind
+	Seq  int64 // the cursor's seq; unused for CursorLatest
+}
+
+// CursorKind is the page a read asks for (the whitelisted query parameters of the messages route).
+type CursorKind int
+
+const (
+	CursorLatest CursorKind = iota // the newest page
+	CursorAfter                    // the oldest page above Seq: catching up
+	CursorBefore                   // the newest page below Seq: paging back through history
+)
+
+// messageWindow turns a cursor into the stored range it reads. A room member never gets what was
+// sent before they joined (it was not encrypted for them), so every window stops at joined_seq.
+func messageWindow(cursor PageCursor, joinedSeq int64, limit int) store.MessageWindow {
+	switch cursor.Kind {
+	case CursorAfter:
+		return store.MessageWindow{Floor: max(cursor.Seq, joinedSeq), Limit: limit}
+	case CursorBefore:
+		// Seqs start at 1, so a ceiling of 1 is an empty page; 0 would mean "no ceiling"
+		return store.MessageWindow{Floor: joinedSeq, Ceiling: max(cursor.Seq, 1), Newest: true, Limit: limit}
+	default:
+		return store.MessageWindow{Floor: joinedSeq, Newest: true, Limit: limit}
+	}
+}
+
+// ListMessages returns the page of messages the cursor names, in ascending seq.
+func (s *Service) ListMessages(me *Member, conversationID uuid.UUID, cursor PageCursor) ([]models.MessageDTO, error) {
 	member, err := s.requireMembership(s.chats, me, conversationID)
 	if err != nil {
 		return nil, err
@@ -706,13 +734,8 @@ func (s *Service) ListMessages(me *Member, conversationID uuid.UUID, after *int6
 	if _, err := s.liveRoom(s.chats, conversationID); err != nil {
 		return nil, err
 	}
-	limit := config.GetMessagePageLimit()
-	var messages []models.Message
-	if after == nil {
-		messages, err = s.chats.ListLatestMessages(conversationID, member.JoinedSeq, limit)
-	} else {
-		messages, err = s.chats.ListMessagesAfter(conversationID, max(*after, member.JoinedSeq), limit)
-	}
+	window := messageWindow(cursor, member.JoinedSeq, config.GetMessagePageLimit())
+	messages, err := s.chats.ListMessages(conversationID, window)
 	if err != nil {
 		return nil, err
 	}

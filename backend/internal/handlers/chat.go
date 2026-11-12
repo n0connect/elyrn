@@ -23,9 +23,19 @@ import (
 
 const (
 	conversationsPath = "/api/v2/conversations"
-	// "after" is the only accepted query parameter; seq values are positive int64
+	// seq values are non-negative int64: at most 19 decimal digits
 	maxSeqDigits = 19
 )
+
+// pageQueries whitelists the messages route's query parameters: each names a cursor kind and
+// the lowest seq it accepts ("before=0" could only ever answer an empty page).
+var pageQueries = map[string]struct {
+	kind   chat.CursorKind
+	minSeq int64
+}{
+	"after":  {chat.CursorAfter, 0},
+	"before": {chat.CursorBefore, 1},
+}
 
 var chatService = chat.NewService()
 
@@ -275,35 +285,51 @@ func burnConversation(w http.ResponseWriter, r *http.Request, me *chat.Member, i
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// parseAfter accepts either no query at all or exactly "after=<positive-or-zero int64>".
-func parseAfter(r *http.Request) (*int64, bool) {
+// parsePageCursor accepts no query at all (the latest page) or exactly one whitelisted
+// "<name>=<decimal int64>" at or above that name's lowest seq; anything else is refused.
+func parsePageCursor(r *http.Request) (chat.PageCursor, bool) {
 	if r.URL.RawQuery == "" {
-		return nil, true
+		return chat.PageCursor{Kind: chat.CursorLatest}, true
 	}
 	values := r.URL.Query()
-	raw, present := values["after"]
-	if len(values) != 1 || !present || len(raw) != 1 || len(raw[0]) == 0 || len(raw[0]) > maxSeqDigits {
-		return nil, false
+	if len(values) != 1 {
+		return chat.PageCursor{}, false
 	}
-	for i := 0; i < len(raw[0]); i++ {
-		if raw[0][i] < '0' || raw[0][i] > '9' {
-			return nil, false
+	for name, raw := range values {
+		query, known := pageQueries[name]
+		if !known || len(raw) != 1 {
+			return chat.PageCursor{}, false
+		}
+		seq, ok := parseSeq(raw[0])
+		if !ok || seq < query.minSeq {
+			return chat.PageCursor{}, false
+		}
+		return chat.PageCursor{Kind: query.kind, Seq: seq}, true
+	}
+	return chat.PageCursor{}, false
+}
+
+// parseSeq accepts 1..maxSeqDigits ASCII digits that fit an int64 (no sign, no exponent).
+func parseSeq(raw string) (int64, bool) {
+	if len(raw) == 0 || len(raw) > maxSeqDigits {
+		return 0, false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, false
 		}
 	}
-	after, err := strconv.ParseInt(raw[0], 10, 64)
-	if err != nil {
-		return nil, false
-	}
-	return &after, true
+	seq, err := strconv.ParseInt(raw, 10, 64)
+	return seq, err == nil
 }
 
 func listMessages(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.UUID) {
-	after, ok := parseAfter(r)
+	cursor, ok := parsePageCursor(r)
 	if !ok {
 		apperr.Write(w, "listMessages", apperr.InvalidRequest)
 		return
 	}
-	messages, err := chatService.ListMessages(me, id, after)
+	messages, err := chatService.ListMessages(me, id, cursor)
 	if err != nil {
 		apperr.WriteError(w, "ListMessages", err)
 		return

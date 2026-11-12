@@ -40,8 +40,7 @@ type ChatRepository interface {
 
 	NextSeq(conversationID uuid.UUID) (int64, error)
 	CreateMessage(message *models.Message) error
-	ListMessagesAfter(conversationID uuid.UUID, afterSeq int64, limit int) ([]models.Message, error)
-	ListLatestMessages(conversationID uuid.UUID, floorSeq int64, limit int) ([]models.Message, error)
+	ListMessages(conversationID uuid.UUID, window MessageWindow) ([]models.Message, error)
 	AdvanceReadSeq(conversationID uuid.UUID, memberTag string, seq int64) error
 
 	CreateRoom(room *models.Room, creator *models.ConversationMember) error
@@ -65,6 +64,16 @@ type ChatRepository interface {
 // PurgeCounts reports what one retention pass removed.
 type PurgeCounts struct {
 	Messages, Invites, Rooms, Notes int64
+}
+
+// MessageWindow selects one page of a conversation: seq above Floor and, when Ceiling is
+// positive, below it. Newest takes the newest Limit of them (the latest page, or the page just
+// before a cursor) instead of the oldest; either way the page comes back in ascending seq.
+type MessageWindow struct {
+	Floor   int64
+	Ceiling int64 // 0: no upper bound
+	Newest  bool
+	Limit   int
 }
 
 // roomPurgeBatch bounds how many expired rooms one retention pass deletes; the rest go next pass
@@ -321,27 +330,25 @@ func (r *chatRepository) CreateMessage(message *models.Message) error {
 	return err
 }
 
-func (r *chatRepository) ListMessagesAfter(conversationID uuid.UUID, afterSeq int64, limit int) ([]models.Message, error) {
-	var messages []models.Message
-	err := r.db().Where("conversation_id = ? AND seq > ?", conversationID, afterSeq).
-		Order("seq ASC").Limit(limit).Find(&messages).Error
-	if err != nil {
-		chatRepoLogger.LogError("ChatRepository.ListMessagesAfter", err)
+// ListMessages is the one query behind every message page (MessageWindow).
+func (r *chatRepository) ListMessages(conversationID uuid.UUID, window MessageWindow) ([]models.Message, error) {
+	query := r.db().Where("conversation_id = ? AND seq > ?", conversationID, window.Floor)
+	if window.Ceiling > 0 {
+		query = query.Where("seq < ?", window.Ceiling)
 	}
-	return messages, err
-}
-
-// ListLatestMessages returns the newest `limit` messages after floorSeq in ascending order.
-func (r *chatRepository) ListLatestMessages(conversationID uuid.UUID, floorSeq int64, limit int) ([]models.Message, error) {
+	order := "seq ASC"
+	if window.Newest {
+		order = "seq DESC"
+	}
 	var messages []models.Message
-	err := r.db().Where("conversation_id = ? AND seq > ?", conversationID, floorSeq).
-		Order("seq DESC").Limit(limit).Find(&messages).Error
-	if err != nil {
-		chatRepoLogger.LogError("ChatRepository.ListLatestMessages", err)
+	if err := query.Order(order).Limit(window.Limit).Find(&messages).Error; err != nil {
+		chatRepoLogger.LogError("ChatRepository.ListMessages", err)
 		return nil, err
 	}
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
+	if window.Newest {
+		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+			messages[i], messages[j] = messages[j], messages[i]
+		}
 	}
 	return messages, nil
 }

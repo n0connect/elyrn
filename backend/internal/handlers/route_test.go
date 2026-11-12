@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"elyrn/internal/chat"
 )
 
 func TestParseConversationRoute_Whitelist(t *testing.T) {
@@ -50,22 +52,41 @@ func TestParseConversationRoute_Whitelist(t *testing.T) {
 	}
 }
 
-func TestParseAfter_Whitelist(t *testing.T) {
-	for query, want := range map[string]bool{
-		"":                           true,
-		"after=0":                    true,
-		"after=42":                   true,
-		"after=-1":                   false,
-		"after=1e3":                  false,
-		"after=":                     false,
-		"after=1&after=2":            false,
-		"after=1&limit=5":            false,
-		"before=1":                   false,
-		"after=99999999999999999999": false,
+func TestParsePageCursor_Whitelist(t *testing.T) {
+	valid := map[string]chat.PageCursor{
+		"":                           {Kind: chat.CursorLatest},
+		"after=0":                    {Kind: chat.CursorAfter, Seq: 0},
+		"after=42":                   {Kind: chat.CursorAfter, Seq: 42},
+		"before=1":                   {Kind: chat.CursorBefore, Seq: 1},
+		"before=9223372036854775807": {Kind: chat.CursorBefore, Seq: 9223372036854775807},
+	}
+	for query, want := range valid {
+		r := httptest.NewRequest("GET", "/api/v2/conversations/x/messages?"+query, nil)
+		if got, ok := parsePageCursor(r); !ok || got != want {
+			t.Errorf("query %q: got %+v ok=%v, want %+v", query, got, ok, want)
+		}
+	}
+	for _, query := range []string{
+		"after=-1",
+		"after=1e3",
+		"after=",
+		"after=+1",
+		"after=1&after=2",
+		"after=1&limit=5",
+		"after=99999999999999999999",
+		"before=0",
+		"before=-1",
+		"before=",
+		"before=0x10",
+		"before=1&before=2",
+		"after=1&before=2",
+		"before=9223372036854775808",
+		"limit=5",
+		"After=1",
 	} {
 		r := httptest.NewRequest("GET", "/api/v2/conversations/x/messages?"+query, nil)
-		if _, valid := parseAfter(r); valid != want {
-			t.Errorf("query %q: valid=%v want %v", query, valid, want)
+		if _, ok := parsePageCursor(r); ok {
+			t.Errorf("query %q accepted", query)
 		}
 	}
 }
