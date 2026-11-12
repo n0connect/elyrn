@@ -130,7 +130,7 @@ bash: \r: invalid command
 
 `elyrn.` uses memory-hard Argon2id key derivation on the server to protect derived auth keys:
 - **Default configuration:** `ARGON2_MEMORY_KIB=65536` (64 MiB per hash), `ARGON2_PARALLELISM=2` (or `4`).
-- **RAM Impact:** Each concurrent registration or login attempt allocates approximately **64-128 MiB of RAM** during the ~200ms calculation.
+- **RAM Impact:** Each concurrent registration (phase 2; login runs no Argon2id) allocates approximately **64-128 MiB of RAM** during the ~200ms calculation.
 
 ### Low-RAM Budget VPS Profile (512 MB - 1 GB RAM)
 

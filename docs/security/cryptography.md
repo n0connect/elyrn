@@ -18,7 +18,7 @@ All cryptographic operations strictly adhere to well-vetted, modern standards:
 | **X25519** | RFC 7748 | Elliptic-curve Diffie-Hellman key exchange |
 | **HKDF-SHA256** | RFC 5869 | Extract-and-expand key derivation |
 | **AES-256-GCM** | NIST SP 800-38D | Authenticated encryption with associated data |
-| **Argon2id** | RFC 9106 | Server-side memory-hard authentication hashing |
+| **Argon2id** | RFC 9106 | Hash of the auth key stored at registration (not read at login, see below) |
 | **HMAC-SHA256** | RFC 2104 | Database lookups, member tagging, and proxy client keys |
 | **PKCS#8 for X25519** | RFC 8410 | Encoding private keys for WebCrypto import |
 | **Base64URL** | RFC 4648 Section 5 | URL-safe string encoding (no padding `=` characters) |
@@ -67,6 +67,8 @@ The account number is a 32-byte (256-bit) cryptographically secure random value 
 ```
 
 Both Go (`backend/internal/identity`) and JavaScript (`frontend/js/crypto.js`) implement this exact derivation and are verified byte-for-byte in test suites.
+
+**How the server proves the auth key.** The server stores `account_lookup = HMAC-SHA256(pepper, auth_key)` and finds the account by it. At login it computes the lookup from the presented key, reads the account by it and compares the computed and stored lookups in constant time; an unknown key is compared against a fixed-length stand-in, so both outcomes do the same work. No Argon2id runs at login and no decoy hash is needed: `auth_key` is 256 bits of HKDF output from a 256-bit random AccountNumber, so there is no low-entropy secret for a memory-hard hash to slow down, and whether an account exists for a key can be learned only by holding the key. Registration phase 2 still computes and stores an Argon2id hash of the auth key (`account_hash`, paid for by a second proof of work); nothing reads it today, and whether to keep it is recorded as S-07 in [debt.md](../development/debt.md).
 
 ### 2. Browser Key Import (WebCrypto Non-Extractable)
 

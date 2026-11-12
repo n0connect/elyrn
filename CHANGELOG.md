@@ -7,6 +7,13 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **Login lockout through Argon2id.** Every login with a well-formed auth key ran a full Argon2id
+  verification (a decoy one for unknown keys) in `ARGON2_MAX_CONCURRENT` global slots, with no
+  proof of work, so anyone could keep the slots busy and every login answered 503. Login now
+  proves the key by its keyed lookup alone (`HMAC(pepper, auth key)`, compared in constant time,
+  the same work for known and unknown keys): a 256-bit key gains nothing from a memory-hard hash.
+  Argon2id runs only in registration phase 2, behind its proof of work; existing accounts and the
+  stored hash format are unchanged.
 - **Replay and reorder after a reload.** The client kept seen message ids and sender counters in
   memory only, so after a reload a malicious server could serve an old authentic message again
   as new, reorder messages, or withhold a device's own last messages so its next send reused a
@@ -171,7 +178,10 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 - The server answers every failure through one registry (`backend/internal/apperr`): each cause
   has a code, status, sentence and log level, and is logged once by code and operation. Status
   and body text are unchanged on the wire. A failed client-key secret or HMAC now answers 500
-  instead of a panic that dropped the connection.
+  instead of a panic that dropped the connection. Login's JSON-shaped failures
+  (`{"success":false,"message":...}`) are registered codes too (`E_LOGIN_*`), written in the same
+  bytes; registration is split into its two phases in the code. The MCP in-flight tests run the
+  real agent against the real server instead of a stand-in backend.
 - The project is now **elyrn.** (formerly noaddx.): the brand, the Go module, binaries, images,
   containers, release tags (`elyrn-openssl-*`, `elyrn-native-*`) and the prefixes of new codes
   (`elyrn:` invites, `elyrn#` rooms). Stored and wire names do not change (the `noaddx` HKDF

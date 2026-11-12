@@ -35,7 +35,7 @@ What an adversary learns if they obtain a full SQL database dump:
 | Adversary Model | What is Protected | What is NOT Protected |
 |---|---|---|
 | **Passive Network Observer (ISP, Wi-Fi snooper)** | - Message plaintext (E2E AES-256-GCM)<br>- Account numbers & credentials<br>- Message length (one of five padded sizes, 256 to 4096 bytes) | - Connection timing & packet frequency<br>- IP address connecting to Nginx (hidden from the server over the onion service)<br>- Total bytes transferred |
-| **Database Thief (Stolen SQL backup)** | - Message contents (encrypted client-side)<br>- Account numbers (Argon2id + HMAC)<br>- Cross-conversation user linkage (per-room HMAC tags)<br>- Fine-grained send timestamps (server stores no seconds/minutes) | - Total message count per room<br>- Internal message ordering within a single room<br>- Coarse day of scheduled message deletion |
+| **Database Thief (Stolen SQL backup)** | - Message contents (encrypted client-side)<br>- Account numbers (HMAC under the pepper; the Argon2id hash is stored but not read)<br>- Cross-conversation user linkage (per-room HMAC tags)<br>- Fine-grained send timestamps (server stores no seconds/minutes) | - Total message count per room<br>- Internal message ordering within a single room<br>- Coarse day of scheduled message deletion |
 | **Curious Server Operator (Has DB + `.env` + Master Keys)** | - Message plaintext (Keys are derived in browser WebCrypto; server never has private X25519 keys)<br>- Room codes and room member keys: the server only ever sees values derived from the code | - Social graph: operator can decrypt `member_ref_enc` to link users to conversations and rooms, and so see who sent a friend request to whom<br>- Active connection presence via realtime hub |
 | **Malicious Server at Runtime (Compromised backend)** | - Past messages sent to verified peers cannot be retroactively decrypted.<br>- Peer key substitution is detected by Bob via invite fingerprinting or safety numbers. | - **Web Security Limit:** A malicious server that serves modified JavaScript to the browser can exfiltrate private keys at execution time. |
 | **Session Cookie Interceptor** | - Cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` (`__Host-` prefixed in prod); the token never appears in a response body and no header can carry it.<br>- Cross-origin and same-site writes (other ports, sibling subdomains) are refused via `Sec-Fetch-Site`/`Origin`.<br>- Logout immediately invalidates all sessions via `session_epoch` bump; an already revoked token cannot trigger it. | - Access to the authenticated account until the session cookie expires (15m sliding window) or logout is invoked. |
@@ -88,6 +88,10 @@ To protect against cold-boot attacks and post-termination RAM dumps:
 - **Master keys:** for the process lifetime, zeroized on shutdown (above).
 - **Per-user server keys and conversation indexes:** only while a request that needs them runs.
 - **Stream tags and rate-limit keys:** HMACs under per-boot secrets, never persisted.
+
+## Login Cost and Availability
+
+Login costs one HMAC, one indexed query and one constant-time compare, for known and unknown keys alike; it does not run Argon2id. Earlier, every syntactically valid key ran a full Argon2id verification (a decoy for unknown keys) in `ARGON2_MAX_CONCURRENT` global slots without proof of work, so anyone could keep the slots busy and every login answered 503 (S-02). Argon2id now runs only in registration phase 2, behind a fresh proof of work; saturating it delays sign-ups, never logins. Response time still does not reveal whether an account exists, and the question has no attacker value: a 256-bit auth key cannot be guessed. Per-client and per-account rate limits stay.
 
 ---
 

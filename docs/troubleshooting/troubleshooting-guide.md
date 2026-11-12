@@ -147,7 +147,7 @@ Out of memory: Killed process 1234 (main) total-vm:854320kB, anon-rss:524100kB
 ```
 
 ### Cause
-Argon2id password hashing allocates `64 MiB` of RAM per concurrent registration or login request. On a 512MB or 1GB VPS, a burst of 3-4 concurrent users can exhaust system memory.
+Argon2id hashing allocates `64 MiB` of RAM per concurrent registration (phase 2; login runs no Argon2id). On a 512MB or 1GB VPS, a burst of 3-4 concurrent users can exhaust system memory.
 
 ### Fix
 Adjust Argon2id settings in `.env` for low-memory environments:

@@ -84,7 +84,9 @@ At startup the backend checks these keys against the database before it serves a
 
 ### 6. Argon2id Key Derivation Tuning
 
-Bounds: memory 8192-1048576 KiB (production floor 19456 KiB, the OWASP minimum), time 1-16, parallelism 1-255, salt and hash 16-64 bytes. Stored hashes are checked against the same bounds before verification.
+Argon2id runs only in registration phase 2: it hashes the auth key into `account_hash`. Login does not run it (the keyed lookup proves the key), so these settings size sign-up capacity only.
+
+Bounds: memory 8192-1048576 KiB (production floor 19456 KiB, the OWASP minimum), time 1-16, parallelism 1-255, salt and hash 16-64 bytes.
 
 
 | Variable | Type | Default | High-Security (Default) | Low-RAM VPS (1 GB RAM) |
@@ -96,7 +98,7 @@ Bounds: memory 8192-1048576 KiB (production floor 19456 KiB, the OWASP minimum),
 | `ARGON2_HASH_LENGTH` | int | `32` | 32 bytes | 32 bytes |
 | `ARGON2_MAX_CONCURRENT` | int | `4` | 4 (256 MiB peak) | 2 (64 MiB peak) |
 
-Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT` (1-64) bounds how many run at once, so peak memory is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. A login or registration that cannot get a slot within 3 seconds is answered with `503 Service Unavailable` (identically for known and unknown accounts) instead of growing memory without limit.
+Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT` (1-64) bounds how many run at once, so peak memory is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. A registration phase 2 that cannot get a slot within 3 seconds is answered with `503 Service Unavailable` (its pending registration stays redeemable) instead of growing memory without limit; logins are unaffected.
 
 ---
 

@@ -96,7 +96,7 @@ make test-all
 
 ### Option D: Fuzzing the Parsers
 
-Every parser that faces the network has a fuzz target: the stored Argon2id hash format, E2E ciphertext and its AAD bindings, the UUID / invite-token / ciphertext whitelists, PoW solutions and JSON request bodies. A target asserts that nothing panics and that whatever is accepted is genuinely valid (canonical encoding, correct key, issued challenge).
+Every parser that faces the network has a fuzz target, plus the stored Argon2id hash format (its verifier is test-only since login stopped reading the hash, S-02; it stays while the hash does, S-07): E2E ciphertext and its AAD bindings, the UUID / invite-token / ciphertext whitelists, PoW solutions and JSON request bodies. A target asserts that nothing panics and that whatever is accepted is genuinely valid (canonical encoding, correct key, issued challenge).
 
 ```bash
 cd backend

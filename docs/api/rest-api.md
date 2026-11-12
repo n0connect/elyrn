@@ -14,7 +14,7 @@ Requests are subject to strict JSON validation:
 - **Session Delivery:** The only credential is an HttpOnly, `SameSite=Strict` cookie: `noaddx_session` in development, `__Host-Session` (Secure, host-only) in production. The token never appears in a response body and the `Authorization` header is ignored, so page script can never read or replay it.
 - **Same-Origin Writes:** `POST`/`PUT`/`PATCH`/`DELETE` requests are refused with `403` unless the browser marks them `Sec-Fetch-Site: same-origin` (or, without that header, sends an `Origin` listed exactly in `ALLOWED_ORIGINS`). Clients that send neither header are not browsers and hold no ambient cookies.
 - **Sliding Expiration:** Sessions expire after `JWT_EXPIRATION_MINUTES` (default: 15m). If an active session is used past its half-life, the backend automatically issues a refreshed cookie.
-- **Saturation and outages:** `POST /api/v2/login` and phase 2 of `POST /api/v2/register` answer `503 Service Unavailable` when every Argon2id slot (`ARGON2_MAX_CONCURRENT`) stays busy for 3 seconds. Login also answers `503` while the database is unreachable: `401` always means the auth key matches no account, never that the server could not tell. Neither answer depends on whether the account exists; retry with backoff.
+- **Saturation and outages:** phase 2 of `POST /api/v2/register` answers `503 Service Unavailable` when every Argon2id slot (`ARGON2_MAX_CONCURRENT`) stays busy for 3 seconds. `POST /api/v2/login` runs no Argon2id and is never refused for that reason; it answers `503` only while the database is unreachable: `401` always means the auth key matches no account, never that the server could not tell. Neither answer depends on whether the account exists; retry with backoff.
 - **Global Invalidation:** `POST /api/v2/logout` with a live session increments the user's `session_epoch`, instantly invalidating every JWT issued for that account on every device. A token revoked earlier cannot trigger this (it no longer authenticates); if revocation fails the endpoint answers `500` instead of reporting success. The cookie is cleared in every case.
 
 ---
@@ -128,6 +128,8 @@ Requires solving a fresh, single-use PoW challenge.
 
 ### `POST /api/v2/login`
 Authenticates a user via their derived `auth_key`. The `AccountNumber` is **never** sent.
+
+The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_key)`, finds the account by it and compares the two in constant time. No Argon2id runs at login, so a flood of registrations cannot lock existing accounts out. Answers: `200` (logged in), `400` (body is not JSON), `401` (no account for this key, whatever the reason), `429` (per-client or per-account rate limit), `503` (database unreachable).
 
 - **Request Body:**
 ```json
