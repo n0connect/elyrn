@@ -31,6 +31,10 @@ const (
 	mcpRoomMembers  = 4
 	mcpRoomTTLHours = 24
 	mcpWaitCallID   = 1
+	// A page small enough that the messages below span several pages
+	mcpPageLimit   = 3
+	mcpPagedNotes  = 7
+	mcpFirstPageID = 10
 )
 
 type mcpAnswer struct {
@@ -251,4 +255,78 @@ func TestMCP_CancelEndsTheRealWaitAndFreesTheSlot(t *testing.T) {
 		t.Fatal("the slot stayed busy after the cancelled wait")
 	}
 	s.closeAndExpectEnd()
+}
+
+// roomRead calls room_read through MCP with the given extra arguments and returns its result.
+func (s *mcpSession) roomRead(id int, room, extra string) agent.ReadResult {
+	s.t.Helper()
+	s.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"room_read","arguments":{"room":%q%s}}}`, id, room, extra))
+	r := s.result(s.next(), id)
+	if r.IsError || len(r.Content) != 1 {
+		s.t.Fatalf("room_read%s: %+v", extra, r)
+	}
+	var page agent.ReadResult
+	if err := json.Unmarshal([]byte(r.Content[0].Text), &page); err != nil {
+		s.t.Fatalf("room_read%s: not a read result: %s", extra, r.Content[0].Text)
+	}
+	return page
+}
+
+// room_read with `before` pages a real room back to its first message through a real agent:
+// every page is the newest below the cursor, in ascending seq, and the walk ends on an empty
+// page holding exactly what was sent. Both cursors together are refused as an argument error.
+func TestMCP_RoomReadPagesBackToTheBeginning(t *testing.T) {
+	ctx := context.Background()
+	srv := clientServer(t, setup(t))
+	t.Setenv("MESSAGE_PAGE_LIMIT", fmt.Sprint(mcpPageLimit))
+	robot := newAgent(t, srv.URL, filepath.Join(t.TempDir(), "agent.json"))
+	created, err := robot.CreateRoom(ctx, mcpRoomMembers, mcpRoomTTLHours)
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	room := uuid.MustParse(created.Room)
+	sent := make([]int64, 0, mcpPagedNotes)
+	for i := 0; i < mcpPagedNotes; i++ {
+		note, err := robot.Send(ctx, room, fmt.Sprintf("note %d", i))
+		if err != nil || note.Seq == nil {
+			t.Fatalf("Send %d = %+v, %v", i, note, err)
+		}
+		sent = append(sent, *note.Seq)
+	}
+	s := startMCP(t, robot)
+
+	id := mcpFirstPageID
+	latest := s.roomRead(id, created.Room, "")
+	var walked []int64
+	page := latest.Messages
+	for steps := 0; len(page) > 0; steps++ {
+		if steps > mcpPagedNotes || len(page) > mcpPageLimit {
+			t.Fatalf("paging did not shrink: step %d, page %+v", steps, page)
+		}
+		for i := range page {
+			if i > 0 && page[i].Seq <= page[i-1].Seq {
+				t.Fatalf("page is not in ascending seq: %+v", page)
+			}
+		}
+		walked = append(append([]int64{}, seqsOf(page)...), walked...)
+		id++
+		page = s.roomRead(id, created.Room, fmt.Sprintf(`,"before":%d`, page[0].Seq)).Messages
+	}
+	expectSeqs(t, walked, sent, "messages walked back through room_read before")
+
+	id++
+	s.send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"room_read","arguments":{"room":%q,"after":1,"before":%d}}}`,
+		id, created.Room, sent[len(sent)-1]))
+	if r := s.result(s.next(), id); !r.IsError || !strings.Contains(r.Content[0].Text, string(agent.CodeArgument)) {
+		t.Fatalf("after and before together: %+v, want %s", r, agent.CodeArgument)
+	}
+	s.closeAndExpectEnd()
+}
+
+func seqsOf(messages []agent.Message) []int64 {
+	seqs := make([]int64, 0, len(messages))
+	for _, m := range messages {
+		seqs = append(seqs, m.Seq)
+	}
+	return seqs
 }

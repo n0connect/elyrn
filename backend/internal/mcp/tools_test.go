@@ -72,6 +72,12 @@ func TestToolArguments_AreValidatedBeforeAnythingIsSent(t *testing.T) {
 		{ToolRoomRead, `{"room":` + validRoom + `,"after":-1}`, agent.CodeArgument},
 		{ToolRoomRead, `{"room":` + validRoom + `,"after":9007199254740992}`, agent.CodeArgument},
 		{ToolRoomRead, `{"room":` + validRoom + `,"after":1e3}`, agent.CodeArgument},
+		{ToolRoomRead, `{"room":` + validRoom + `,"before":0}`, agent.CodeArgument},
+		{ToolRoomRead, `{"room":` + validRoom + `,"before":-1}`, agent.CodeArgument},
+		{ToolRoomRead, `{"room":` + validRoom + `,"before":9007199254740992}`, agent.CodeArgument},
+		{ToolRoomRead, `{"room":` + validRoom + `,"before":2.5}`, agent.CodeArgument},
+		{ToolRoomRead, `{"room":` + validRoom + `,"before":"5"}`, agent.CodeArgument},
+		{ToolRoomRead, `{"room":` + validRoom + `,"after":1,"before":5}`, agent.CodeArgument},
 		{ToolRoomWait, `{"room":` + validRoom + `}`, agent.CodeArgument},
 		{ToolRoomWait, `{"room":` + validRoom + `,"after":0,"timeout_seconds":0}`, agent.CodeArgument},
 		{ToolRoomWait, `{"room":` + validRoom + `,"after":0,"timeout_seconds":301}`, agent.CodeArgument},
@@ -139,5 +145,20 @@ func TestMessageTools_LabelReceivedTextAsData(t *testing.T) {
 		if tl := findTool(name); tl == nil || !strings.Contains(tl.description, dataNotInstructions) {
 			t.Errorf("%s does not label message text as data", name)
 		}
+	}
+}
+
+// The schema advertises the same history cursor the validation enforces: seq 0 has no history.
+func TestRoomRead_BeforeSchemaMatchesTheValidation(t *testing.T) {
+	tl := findTool(ToolRoomRead)
+	if tl == nil {
+		t.Fatal("room_read is not listed")
+	}
+	p, ok := tl.schema.Properties[argBefore]
+	if !ok || p.Minimum == nil || *p.Minimum != minBeforeSeq || p.Maximum == nil || *p.Maximum != maxSeqArg {
+		t.Fatalf("room_read before property %+v", p)
+	}
+	if slices.Contains(tl.schema.Required, argBefore) {
+		t.Fatal("before must stay optional")
 	}
 }

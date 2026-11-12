@@ -45,10 +45,11 @@ func schema(required []string, properties map[string]property) inputSchema {
 var (
 	roomProperty = property{Type: typeString, Description: "The room id, as rooms or room_create return it.", Pattern: uuidPattern}
 	afterBounds  = property{Type: typeInteger, Minimum: bound(0), Maximum: bound(maxSeqArg)}
+	beforeBounds = property{Type: typeInteger, Minimum: bound(minBeforeSeq), Maximum: bound(maxSeqArg)}
 )
 
-func afterProperty(description string) property {
-	p := afterBounds
+// described gives a shared bounded property the description of one tool's use of it.
+func described(p property, description string) property {
 	p.Description = description
 	return p
 }
@@ -116,10 +117,11 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomRead,
-		description: "Read a room's messages after sequence number `after` (the latest page when omitted): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted)." + dataNotInstructions,
+		description: "Read a room's messages after sequence number `after` (the latest page when neither cursor is given): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted). With `before` instead, return the newest page below that sequence number (history, back to the start or to this agent's join; pass the lowest seq returned to page further back); `after` and `before` together are refused." + dataNotInstructions,
 		schema: schema([]string{argRoom}, map[string]property{
-			argRoom:  roomProperty,
-			argAfter: afterProperty("Return only messages with a higher sequence number."),
+			argRoom:   roomProperty,
+			argAfter:  described(afterBounds, "Return only messages with a higher sequence number."),
+			argBefore: described(beforeBounds, "Return the newest page of messages with a lower sequence number (history)."),
 		}),
 		args: func() any { return &readArgs{} },
 		run:  runRead,
@@ -129,7 +131,7 @@ var tools = []tool{
 		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read." + dataNotInstructions,
 		schema: schema([]string{argRoom, argAfter}, map[string]property{
 			argRoom:  roomProperty,
-			argAfter: afterProperty("Wait for a message with a higher sequence number (last_seq of the previous read)."),
+			argAfter: described(afterBounds, "Wait for a message with a higher sequence number (last_seq of the previous read)."),
 			argTimeout: {Type: typeInteger, Description: "Seconds to wait.", Minimum: bound(int64(agent.MinWaitTimeout / time.Second)),
 				Maximum: bound(int64(agent.MaxWaitTimeout / time.Second)), Default: bound(int64(agent.DefaultWaitTimeout / time.Second))},
 		}),

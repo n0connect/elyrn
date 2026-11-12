@@ -117,7 +117,7 @@ the program with `E_AGENT_PROXY`.
 | `rooms` | none | `rooms`: per room `room`, `name`, `members`, `max_members`, `owner`, `expires_at`, `unread` |
 | `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`), `unverified_cards`, `safety_number` |
 | `room_send` | `room`, `text` (1..2000 characters) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same) |
-| `room_read` | `room`, `after` (optional; the latest page when omitted) | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `last_seq` |
+| `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `last_seq` |
 | `room_wait` | `room`, `after` (required), `timeout_seconds` (1..300, default 60) | as `room_read`, plus `timed_out: true` when nothing new arrived in time |
 | `room_leave` | `room` | `room`, `burned`; when the owner leaves, the room is burned for everyone and `burned` is `true` |
 
