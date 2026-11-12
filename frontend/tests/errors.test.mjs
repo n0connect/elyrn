@@ -10,6 +10,10 @@ for (const file of ['../js/log.js', '../js/errors.js']) {
     vm.runInContext(readFileSync(new URL(file, import.meta.url), 'utf8'), context);
 }
 const Errors = vm.runInContext('Errors', context);
+// The module throws the TypeError of its own realm (the vm context), not this file's.
+const ContextTypeError = vm.runInContext('TypeError', context);
+const throwsTypeError = (fn, message) =>
+    assert.throws(fn, error => error instanceof ContextTypeError && error.message === message);
 const CODE_SHAPE = /^[EW]_[A-Z0-9_]+$/;
 
 test('every registered failure has a code of the right shape, a matching severity and a sentence', () => {
@@ -50,7 +54,7 @@ test('the formatter fills named parameters and refuses a missing one', () => {
     const code = Errors.CODES.E_MESSAGE_TOO_MANY_CHARS;
     assert.equal(Errors.format(code, { max: 2000 }), 'max 2000 characters');
     for (const params of [undefined, null, {}, { other: 1 }, { max: undefined }, { max: null }]) {
-        assert.throws(() => Errors.format(code, params), TypeError);
+        throwsTypeError(() => Errors.format(code, params), 'missing parameter');
     }
     // The safe path shows the generic sentence instead of throwing
     assert.equal(Errors.message(code, {}), Errors.REGISTRY.E_BAD_PARAMS.text);
@@ -60,7 +64,7 @@ test('an unknown code yields the generic sentence and never throws', () => {
     const generic = Errors.REGISTRY.E_UNKNOWN_CODE.text;
     for (const code of [undefined, null, '', 'E_NOT_A_CODE', 'constructor', '__proto__', 'toString', 42, {}]) {
         assert.equal(Errors.message(code), generic);
-        assert.throws(() => Errors.format(code), TypeError);
+        throwsTypeError(() => Errors.format(code), 'unknown error code');
     }
 });
 
