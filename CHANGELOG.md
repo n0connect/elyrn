@@ -7,6 +7,18 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **One input contract, default deny.** Input checks were spread over handlers, utils and a
+  content-type middleware, and some inputs slipped through: duplicate JSON keys (the last won),
+  keys in any letter case, a registration body with unknown fields or trailing data (read as an
+  empty phase 1 request yet still served with a valid proof of work), query strings on the auth
+  routes, bodies on GET, DELETE and logout, and `Content-Type` parameters. Every route now
+  passes one gate (`internal/contract`) that admits exactly what its table declares: methods,
+  query parameters, `Content-Type: application/json` exactly, a body bound derived from each
+  endpoint's largest legitimate body (123 bytes for login instead of 1 MiB), and every field by
+  an anchored pattern plus a validator where a pattern cannot say everything. An input already
+  refused for one reason keeps its status and body (a request with several faults may now get
+  the gate's answer before a 401 or 429); the whole whitelist is
+  [docs/api/input-contract.md](docs/api/input-contract.md), generated from the table.
 - **TLS to the bundled database; production mode for Compose and onion instances.** The backend
   reached the bundled PostgreSQL in plain text, so the Compose stack could not pass the
   production checks and onion instances ran in development mode (unprefixed cookie without
