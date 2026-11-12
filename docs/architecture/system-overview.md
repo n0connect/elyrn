@@ -254,6 +254,12 @@ After a master key rotation a supervised goroutine (`chat.RunRewrap`) re-encrypt
 
 ---
 
+## Errors
+
+Every failure the server answers is registered in `backend/internal/apperr`: a typed code with a stable `E_...` id, its HTTP status, the public sentence and the log level. Handlers and middleware answer with `apperr.Write` (a known cause) or `apperr.WriteError` (an error from a service: sentinel errors map to codes through the one table in `sentinels.go`; anything else is `E_INTERNAL`, with the cause logged server side only). Each failure is logged once, by operation name and code, never with request data. Several causes deliberately share one public answer (for example every session or account miss is `401 Unauthorized`) so a client cannot tell them apart; the registry marks each such merge. The body is the plain-text sentence `http.Error` writes, which the browser maps in `frontend/js/errors.js`.
+
+---
+
 ## Graceful Shutdown & Memory Zeroization
 
 When the backend server receives `SIGINT` or `SIGTERM`:
