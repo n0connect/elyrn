@@ -12,6 +12,12 @@ make onion            # build and start everything, including tor
 make onion-address    # print the .onion address (about a minute after the first start)
 ```
 
+`make onion` runs only in **production mode**: set `APP_ENV=production` in `.env` first (it
+stops with an error otherwise). That turns on the `__Host-Session` cookie (`Secure`) and every
+production startup check; the backend reaches the bundled PostgreSQL over TLS 1.3 with the
+certificate checked (`make certs`, run by `make onion`). See
+[Production Mode](configuration-and-tuning.md#production-mode).
+
 ---
 
 ## How a request travels

@@ -7,6 +7,16 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **TLS to the bundled database; production mode for Compose and onion instances.** The backend
+  reached the bundled PostgreSQL in plain text, so the Compose stack could not pass the
+  production checks and onion instances ran in development mode (unprefixed cookie without
+  `Secure`). `make certs` (run by `make setup`, `make up` and `make onion`) now creates a private
+  CA and a server certificate in the git- and Docker-ignored `certs/` (keys 0600); PostgreSQL
+  accepts TCP only over TLS 1.3 and the backend verifies its certificate and name
+  (`verify-full`). Certificates renew within 30 days of expiry and a renewal recreates exactly
+  the container that loads them. `make onion` refuses to start unless `APP_ENV=production`.
+  Existing installations get the certificates at their next `make up`; data and `.env` are
+  untouched.
 - **Live updates held by one network.** The event stream hub allowed 4 streams per account and
   4,096 in all, first come first served, and accounts cost only a proof of work: a few hundred
   accounts from one network could hold every stream, and nobody else got live updates. Each

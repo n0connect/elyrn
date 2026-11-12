@@ -22,7 +22,7 @@ This guide provides deep, situation-aware setup instructions across **macOS (App
 
 ### Prerequisites
 
-Install Docker Desktop (or OrbStack / Colima) and, for running tests natively, Go 1.26+ and Node.js 20+ (`brew install go node`). The system `openssl` is enough for `make setup`: it only calls `openssl rand`, which LibreSSL implements with the platform CSPRNG.
+Install Docker Desktop (or OrbStack / Colima) and, for running tests natively, Go 1.26+ and Node.js 20+ (`brew install go node`). The system `openssl` is enough for `make setup`: it calls `openssl rand`, which LibreSSL implements with the platform CSPRNG, and `make certs` (the database TLS certificates) uses only `ecparam`, `req` and `x509`, which LibreSSL and OpenSSL both provide.
 
 Docker builds need nothing else: the OpenSSL engine compiles inside the image against Debian's OpenSSL 3.5 LTS. To run the **OpenSSL engine natively** (`make test-unit ENGINE=openssl`), install OpenSSL >= 3.2 development files and `pkg-config` (`brew install openssl@3 pkg-config`; Debian/Ubuntu: `apt install libssl-dev pkg-config`; on Ubuntu 22.04, whose OpenSSL is 3.0, use Docker or the native engine). The build stops with a clear error on older headers, and the binary refuses to start on an older runtime library.
 

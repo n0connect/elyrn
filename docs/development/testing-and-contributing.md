@@ -56,7 +56,8 @@ make test-unit ENGINE=native   # Go standard library engine
 
 #### 2. Full Suite (Requires Local Postgres running on 5432)
 ```bash
-# Step 1: Database and integration tests (override the port etc.: make test-db TEST_DB_PORT=5433)
+# Step 1: Database and integration tests against a separate local PostgreSQL (TEST_DB_* overrides);
+# never the bundled one: it holds live data and accepts TLS connections only
 make test-db
 
 # Step 2: Full Suite with Race Condition Detector

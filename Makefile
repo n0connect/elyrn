@@ -257,7 +257,8 @@ test-crypto:
 
 test-all: test-crypto test-unit
 
-# Database and integration tests against a local PostgreSQL (override: make test-db TEST_DB_PORT=5433)
+# Database and integration tests against a separate local PostgreSQL (TEST_DB_* overrides), never
+# the bundled one: it holds live data and accepts TLS connections only
 TEST_DB_HOST ?= 127.0.0.1
 TEST_DB_PORT ?= 5432
 TEST_DB_USER ?= postgres

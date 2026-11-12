@@ -17,6 +17,10 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | Backend container exits with code `137` | Linux Out-Of-Memory (OOM) Killer killed backend during Argon2id. | Reduce `ARGON2_MEMORY_KIB=32768` and enable host swap. |
 | Session lost immediately upon browser reload | Private/Incognito mode blocked IndexedDB storage. | Normal window or save AccountNumber to log in again. |
 | Backend restarts in a loop with `Key check failed` | `.env` does not belong to this database (regenerated, or an old master key removed too early). | Restore the original `.env`; see section 9. |
+| `bind source path does not exist: .../certs/postgres` (or `certs/ca`) | The stack was started without `make certs` (plain `docker compose up`). | `make certs`, or start with `make up`, which runs it. |
+| Backend log: `x509: certificate signed by unknown authority` or `certificate is not valid for any names` | `certs/` was replaced but a container still holds the old material, or `DOCKER_DB_HOST` names a host the certificate does not list. | `make up` (recreates what must reload); keep `DOCKER_DB_HOST=postgres`. |
+| `pg_hba.conf rejects connection ... no encryption` | A client connected to PostgreSQL over TCP without TLS; the bundled database refuses that. | Connect with TLS: `sslmode=verify-full sslrootcert=certs/ca/ca.crt` ([Database TLS](../operations/configuration-and-tuning.md#database-tls-make-certs)). |
+| `make onion` stops with `requires APP_ENV=production` | The onion service publishes the instance; development mode is refused. | Set `APP_ENV=production` in `.env` ([Production Mode](../operations/configuration-and-tuning.md#production-mode)). |
 | `pool overlaps` after adding `BACKEND_IP` or changing `COMPOSE_SUBNET` | `PROXY_IP`, `BACKEND_IP` and `TOR_IP` must all lie inside `COMPOSE_SUBNET`. | Move all four together in `.env`. |
 
 ---

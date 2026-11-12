@@ -61,7 +61,7 @@
 ## Quick Start
 
 ```bash
-make setup    # .env with fresh secrets (any openssl, LibreSSL included), mode 0600
+make setup    # .env with fresh secrets (any openssl, LibreSSL included), mode 0600, and database TLS certs
 make up       # build and start; open http://localhost
 ```
 

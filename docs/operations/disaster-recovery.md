@@ -14,6 +14,7 @@ what each failure looks like, what the system does about it, and what is left to
 | `ACCOUNT_LOOKUP_PEPPER` | `.env` (0600) | No account can be found again. No recovery. | With a copy of the database it links accounts to their conversations, like the master key. It **cannot be rotated**: the only remedy is a new instance. |
 | `JWT_SECRET` | `.env` (0600) | Everyone is logged out once; nothing else is affected. | Sessions can be forged until it is replaced. Replace it and restart: every session ends, accounts are untouched. |
 | `postgres_data` volume | Docker volume | Every account and conversation is gone; users create new identities. | See the database thief in the [threat model](../security/threat-model.md). |
+| `certs/` (database CA and server key) | Host directory, 0700, outside git and images (`make certs`) | Nothing is lost: the next `make up` creates new ones and recreates postgres and the backend. | Someone on the compose network could pose as the database to the backend. Rotate: `rm -rf certs && make up`. |
 | `tor_data` volume | Docker volume (`make onion`) | The onion address changes. | Someone can impersonate the onion address. See [the onion address key](onion-service.md#the-onion-address-key). |
 | An account number | The user's password manager | That identity is gone. There is no recovery, by design. | Full control of that identity: its conversations and its deletion. |
 
@@ -59,6 +60,7 @@ restored pepper commitment instead of pinning a new one:
 
 ```bash
 cp /safe/place/.env .env                     # the .env of the instance that wrote the backup
+make certs                                   # database TLS material (new certificates are fine)
 docker compose up -d postgres                # database only, no backend yet
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < backups/accounts-<time>.sql
 make up

@@ -28,6 +28,7 @@ make setup
 - Checks system dependencies (Docker Compose, openssl).
 - Generates a 256-bit CSPRNG `JWT_SECRET`, `ACCOUNT_LOOKUP_PEPPER` and `MASTER_KEY_ACTIVE`, plus a random `DB_PASSWORD`.
 - Populates `.env` with secure default values and strict permissions (`0600`).
+- Runs `make certs`: a private CA and a certificate for PostgreSQL in `certs/` (keys `0600`, never committed), so the backend reaches the database over TLS 1.3 only.
 
 ---
 
