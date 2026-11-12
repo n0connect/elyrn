@@ -13,13 +13,13 @@ import (
 )
 
 // The identity lives in one file (design D4): the server origin and the AccountNumber. Whoever
-// reads it is this agent, so it is created 0600 in a 0700 directory and refused when wider.
+// reads it is this agent, so it is created 0600 in a 0700 directory; how a wider one is refused
+// differs per operating system and lives in permissions_unix.go / permissions_windows.go only.
 const (
 	identityDirName      = "elyrn"
 	identityFileName     = "agent.json"
 	identityTempPattern  = ".agent-*.json"
 	identityDirMode      = fs.FileMode(0o700)
-	permissionsOpenMask  = fs.FileMode(0o077)
 	maxIdentityFileBytes = 1024
 )
 
@@ -28,7 +28,8 @@ type identityFile struct {
 	AccountNumber string `json:"account_number"`
 }
 
-// DefaultIdentityPath is <user config dir>/elyrn/agent.json (~/.config on Linux).
+// DefaultIdentityPath is <os.UserConfigDir>/elyrn/agent.json: ~/.config on Linux (or
+// $XDG_CONFIG_HOME), ~/Library/Application Support on macOS, %AppData% on Windows.
 func DefaultIdentityPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
@@ -42,10 +43,7 @@ func checkPrivate(info fs.FileInfo, wantDir bool) error {
 	if info.IsDir() != wantDir || (!wantDir && !info.Mode().IsRegular()) {
 		return fail(CodeIdentityFile, nil)
 	}
-	if info.Mode().Perm()&permissionsOpenMask != 0 {
-		return fail(CodeIdentityPermissions, nil)
-	}
-	return nil
+	return checkPrivateMode(info)
 }
 
 // loadIdentity returns nil, nil when no identity file exists yet.
@@ -141,19 +139,6 @@ func saveIdentity(path string, id *identityFile) error {
 		return fail(CodeIdentityFile, err)
 	}
 	return syncDir(dir)
-}
-
-// syncDir makes the new directory entry durable.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fail(CodeIdentityFile, err)
-	}
-	defer d.Close()
-	if err := d.Sync(); err != nil {
-		return fail(CodeIdentityFile, err)
-	}
-	return nil
 }
 
 func zeroBytes(b []byte) {

@@ -78,7 +78,7 @@ var sentences = map[Code]string{
 	CodeServerMismatch:      "This identity belongs to another server; start with that server's address, or move the identity file away to create a new identity.",
 	CodeOnionProxy:          "A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again.",
 	CodeProxy:               "The proxy configured in the environment (HTTPS_PROXY, HTTP_PROXY or ALL_PROXY) is malformed; fix or unset it and start again.",
-	CodeConfigDir:           "The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME) and start again.",
+	CodeConfigDir:           "The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again.",
 	CodeIdentityMissing:     "No identity exists yet; run elyrn-agent init --server URL, or call the identity tool.",
 	CodeIdentityPermissions: "The identity file or its directory is open to other users; chmod 700 the directory and 600 the file, then start again.",
 	CodeIdentityFile:        "The identity file could not be read or written, or is malformed; check the disk and the file, or move it away to create a new identity.",
