@@ -96,11 +96,17 @@ func (l *Logger) LogResponse(statusCode int, message string) {
 
 // LogError logs an error with context and stack trace (RULES.md §6.3)
 func (l *Logger) LogError(operation string, err error) {
+	l.LogErrorFrom(1, operation, err)
+}
+
+// LogErrorFrom is LogError for helpers that log on their caller's behalf: skip counts the
+// frames above LogErrorFrom's caller, so the recorded caller is the code that failed.
+func (l *Logger) LogErrorFrom(skip int, operation string, err error) {
 	if !enabled(LogLevelERROR) {
 		return
 	}
 	// Get caller info for stack trace
-	_, file, line, ok := runtime.Caller(1)
+	_, file, line, ok := runtime.Caller(skip + 1)
 	callerInfo := "unknown"
 	if ok {
 		callerInfo = fmt.Sprintf("%s:%d", file, line)

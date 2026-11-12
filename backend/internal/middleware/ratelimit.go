@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/config"
 	"elyrn/internal/utils"
 )
@@ -165,16 +166,14 @@ func (rl *RateLimiter) evictOldestLocked(n int) {
 func RateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := globalRateLimiter.loadConfig(); err != nil {
-			rateLimitLogger.LogError("RateLimitConfig", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "RateLimitMiddleware: config", err)
 			return
 		}
 
 		bucket := globalRateLimiter.getBucket("ip:" + ClientKey(r))
 
 		if !bucket.Allow() {
-			rateLimitLogger.Warn("Rate limit exceeded")
-			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			apperr.Write(w, "RateLimitMiddleware", apperr.RateLimited)
 			return
 		}
 

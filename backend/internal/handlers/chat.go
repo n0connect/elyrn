@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
 	"elyrn/internal/config"
@@ -26,63 +27,33 @@ const (
 	maxSeqDigits = 19
 )
 
-var (
-	chatLogger  = utils.NewLogger("CHAT")
-	chatService = chat.NewService()
-)
+var chatService = chat.NewService()
 
 // resolveMe turns the JWT-authenticated user into a chat member or writes the error.
 func resolveMe(w http.ResponseWriter, r *http.Request) (*chat.Member, bool) {
 	w.Header().Set("Cache-Control", "no-store")
 	userUUID, ok := auth.GetUserUUID(r.Context())
 	if !ok {
-		chatLogger.Error("resolveMe: user UUID not found in context")
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		apperr.Write(w, "resolveMe", apperr.SessionContextMissing)
 		return nil, false
 	}
 	me, err := chatService.ResolveMember(userUUID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			// The session outlived its account: same answer as no session at all
+			apperr.Write(w, "ResolveMember", apperr.MemberNotFound)
 			return nil, false
 		}
-		writeChatError(w, err, "ResolveMember")
+		apperr.WriteError(w, "ResolveMember", err)
 		return nil, false
 	}
 	return me, true
 }
 
-// writeChatError maps service errors to generic client messages; details stay in logs.
-func writeChatError(w http.ResponseWriter, err error, op string) {
-	switch {
-	case errors.Is(err, chat.ErrInvalidInput):
-		chatLogger.Warn("%s: rejected input: %v", op, err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-	case errors.Is(err, chat.ErrNotFound):
-		http.Error(w, "Not found", http.StatusNotFound)
-	case errors.Is(err, chat.ErrLimitReached):
-		http.Error(w, "Too many requests", http.StatusTooManyRequests)
-	case errors.Is(err, chat.ErrConflict):
-		http.Error(w, "Conflict", http.StatusConflict)
-	case errors.Is(err, chat.ErrRoomFull):
-		http.Error(w, "Room full", http.StatusConflict)
-	case errors.Is(err, chat.ErrStale):
-		// The roster changed since the sender fetched it: fetch it again and re-encrypt
-		http.Error(w, "Roster changed", http.StatusPreconditionFailed)
-	case errors.Is(err, chat.ErrIdentityUnset):
-		http.Error(w, "Forbidden", http.StatusForbidden)
-	case errors.Is(err, chat.ErrForbidden):
-		chatLogger.Warn("%s: refused", op)
-		http.Error(w, "Forbidden", http.StatusForbidden)
-	default:
-		chatLogger.LogError(op, err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
-}
-
+// rejectQuery refuses a query string on endpoints that take none.
 func rejectQuery(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.RawQuery != "" {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		apperr.Write(w, "rejectQuery", apperr.InvalidRequest)
 		return true
 	}
 	return false
@@ -92,16 +63,25 @@ func allowOrTooMany(w http.ResponseWriter, bucket string, me *chat.Member) bool 
 	if middleware.AllowKey(bucket + ":" + me.StreamTag) {
 		return true
 	}
-	chatLogger.Warn("rate limit exceeded: bucket=%s", bucket)
-	http.Error(w, "Too many requests", http.StatusTooManyRequests)
+	apperr.Write(w, "allowOrTooMany:"+bucket, apperr.RateLimited)
 	return false
+}
+
+// decodeOrReject decodes the JSON body into dst or answers 400; the decoder's message is not
+// logged (it can quote request bytes).
+func decodeOrReject(w http.ResponseWriter, r *http.Request, dst interface{}, op string) bool {
+	if err := utils.DecodeJSONRequest(r, dst); err != nil {
+		apperr.Write(w, op+": decode", apperr.InvalidRequest)
+		return false
+	}
+	return true
 }
 
 // MeHandler: GET returns the caller's identity public key so the client can detect a server
 // that swapped it (client compares against its own derivation); DELETE erases the account.
 func MeHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "MeHandler", apperr.MethodNotAllowed)
 		return
 	}
 	me, ok := resolveMe(w, r)
@@ -127,13 +107,16 @@ func deleteAccount(w http.ResponseWriter, r *http.Request, me *chat.Member) {
 		return
 	}
 	var req models.DeleteAccountRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil || !identity.ValidateEncodedKey(req.AuthKey) {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "deleteAccount") {
+		return
+	}
+	if !identity.ValidateEncodedKey(req.AuthKey) {
+		apperr.Write(w, "deleteAccount", apperr.InvalidRequest)
 		return
 	}
 	streams, err := chatService.DeleteAccount(me, req.AuthKey)
 	if err != nil {
-		writeChatError(w, err, "DeleteAccount")
+		apperr.WriteError(w, "DeleteAccount", err)
 		return
 	}
 	realtime.Default.Publish(streams, realtime.Event{Kind: realtime.KindConversation})
@@ -146,7 +129,7 @@ func deleteAccount(w http.ResponseWriter, r *http.Request, me *chat.Member) {
 // Each invite costs a fresh proof of work, like each registration phase.
 func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "CreateInviteHandler", apperr.MethodNotAllowed)
 		return
 	}
 	me, ok := resolveMe(w, r)
@@ -154,9 +137,7 @@ func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req models.CreateInviteRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		chatLogger.LogError("DecodeJSONRequest", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "CreateInviteHandler") {
 		return
 	}
 	if !requireProofOfWork(w, req.PoW, "invite") {
@@ -164,7 +145,7 @@ func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	token, expiresAt, err := chatService.CreateInvite(me)
 	if err != nil {
-		writeChatError(w, err, "CreateInvite")
+		apperr.WriteError(w, "CreateInvite", err)
 		return
 	}
 	utils.EncodeJSONResponse(w, models.InviteResponse{Token: token, ExpiresAt: expiresAt.Unix()}, http.StatusCreated)
@@ -173,7 +154,7 @@ func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 // RedeemInviteHandler pairs the caller with the invite creator (POST /api/v2/invites/redeem).
 func RedeemInviteHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "RedeemInviteHandler", apperr.MethodNotAllowed)
 		return
 	}
 	me, ok := resolveMe(w, r)
@@ -181,14 +162,12 @@ func RedeemInviteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req models.RedeemInviteRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		chatLogger.LogError("DecodeJSONRequest", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "RedeemInviteHandler") {
 		return
 	}
 	conversation, creatorStream, err := chatService.RedeemInvite(me, req.Token)
 	if err != nil {
-		writeChatError(w, err, "RedeemInvite")
+		apperr.WriteError(w, "RedeemInvite", err)
 		return
 	}
 	realtime.Default.Publish([]string{creatorStream}, realtime.Event{Kind: realtime.KindConversation})
@@ -238,7 +217,7 @@ func parseConversationRoute(path string) (conversationRoute, bool) {
 func ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 	route, ok := parseConversationRoute(r.URL.Path)
 	if !ok {
-		http.Error(w, "Not Found", http.StatusNotFound)
+		apperr.Write(w, "ConversationsHandler", apperr.RouteNotFound)
 		return
 	}
 	me, ok := resolveMe(w, r)
@@ -267,7 +246,7 @@ func ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 	case sub == "notes" && route.item != uuid.Nil && r.Method == http.MethodDelete:
 		deleteNote(w, r, me, id, route.item)
 	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "ConversationsHandler", apperr.MethodNotAllowed)
 	}
 }
 
@@ -277,7 +256,7 @@ func listConversations(w http.ResponseWriter, r *http.Request, me *chat.Member) 
 	}
 	conversations, err := chatService.ListConversations(me)
 	if err != nil {
-		writeChatError(w, err, "ListConversations")
+		apperr.WriteError(w, "ListConversations", err)
 		return
 	}
 	utils.EncodeJSONResponse(w, models.ConversationsResponse{Conversations: conversations}, http.StatusOK)
@@ -289,7 +268,7 @@ func burnConversation(w http.ResponseWriter, r *http.Request, me *chat.Member, i
 	}
 	peers, err := chatService.BurnConversation(me, id)
 	if err != nil {
-		writeChatError(w, err, "BurnConversation")
+		apperr.WriteError(w, "BurnConversation", err)
 		return
 	}
 	realtime.Default.Publish(peers, realtime.Event{Kind: realtime.KindConversation})
@@ -321,12 +300,12 @@ func parseAfter(r *http.Request) (*int64, bool) {
 func listMessages(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.UUID) {
 	after, ok := parseAfter(r)
 	if !ok {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		apperr.Write(w, "listMessages", apperr.InvalidRequest)
 		return
 	}
 	messages, err := chatService.ListMessages(me, id, after)
 	if err != nil {
-		writeChatError(w, err, "ListMessages")
+		apperr.WriteError(w, "ListMessages", err)
 		return
 	}
 	utils.EncodeJSONResponse(w, models.MessagesResponse{Messages: messages}, http.StatusOK)
@@ -337,14 +316,12 @@ func sendMessage(w http.ResponseWriter, r *http.Request, me *chat.Member, id uui
 		return
 	}
 	var req models.SendMessageRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		chatLogger.LogError("DecodeJSONRequest", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "sendMessage") {
 		return
 	}
 	seq, peers, err := chatService.SendMessage(me, id, req.ID, req.Ciphertext)
 	if err != nil {
-		writeChatError(w, err, "SendMessage")
+		apperr.WriteError(w, "SendMessage", err)
 		return
 	}
 	realtime.Default.Publish(peers, realtime.Event{Kind: realtime.KindMessage, ConversationID: id.String()})
@@ -356,13 +333,11 @@ func markRead(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.U
 		return
 	}
 	var req models.MarkReadRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		chatLogger.LogError("DecodeJSONRequest", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "markRead") {
 		return
 	}
 	if err := chatService.MarkRead(me, id, req.Seq); err != nil {
-		writeChatError(w, err, "MarkRead")
+		apperr.WriteError(w, "MarkRead", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -374,7 +349,7 @@ func markRead(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.U
 // Each room costs a proof of work, like each invite.
 func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "CreateRoomHandler", apperr.MethodNotAllowed)
 		return
 	}
 	me, ok := resolveMe(w, r)
@@ -382,14 +357,12 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req models.CreateRoomRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		chatLogger.LogError("DecodeJSONRequest", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "CreateRoomHandler") {
 		return
 	}
 	in, err := chat.ParseRoomInput(req.ID, req.Lookup, req.Card, req.Vault)
 	if err != nil {
-		writeChatError(w, err, "CreateRoom")
+		apperr.WriteError(w, "CreateRoom", err)
 		return
 	}
 	in.MaxMembers = req.MaxMembers
@@ -399,7 +372,7 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	conversation, err := chatService.CreateRoom(me, in)
 	if err != nil {
-		writeChatError(w, err, "CreateRoom")
+		apperr.WriteError(w, "CreateRoom", err)
 		return
 	}
 	realtime.Default.Publish([]string{me.StreamTag}, realtime.Event{Kind: realtime.KindConversation})
@@ -410,7 +383,7 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 // 201 for a new seat, 200 when the caller was already a member.
 func JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "JoinRoomHandler", apperr.MethodNotAllowed)
 		return
 	}
 	me, ok := resolveMe(w, r)
@@ -418,19 +391,17 @@ func JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req models.JoinRoomRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		chatLogger.LogError("DecodeJSONRequest", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "JoinRoomHandler") {
 		return
 	}
 	in, err := chat.ParseRoomInput(req.ID, req.Lookup, req.Card, req.Vault)
 	if err != nil {
-		writeChatError(w, err, "JoinRoom")
+		apperr.WriteError(w, "JoinRoom", err)
 		return
 	}
 	conversation, created, peers, err := chatService.JoinRoom(me, in)
 	if err != nil {
-		writeChatError(w, err, "JoinRoom")
+		apperr.WriteError(w, "JoinRoom", err)
 		return
 	}
 	status := http.StatusOK
@@ -447,7 +418,7 @@ func roomMembers(w http.ResponseWriter, r *http.Request, me *chat.Member, id uui
 	}
 	members, err := chatService.RoomMembers(me, id)
 	if err != nil {
-		writeChatError(w, err, "RoomMembers")
+		apperr.WriteError(w, "RoomMembers", err)
 		return
 	}
 	utils.EncodeJSONResponse(w, models.RoomMembersResponse{Members: members}, http.StatusOK)
@@ -459,7 +430,7 @@ func listNotes(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.
 	}
 	notes, err := chatService.ListNotes(me, id)
 	if err != nil {
-		writeChatError(w, err, "ListNotes")
+		apperr.WriteError(w, "ListNotes", err)
 		return
 	}
 	utils.EncodeJSONResponse(w, models.NotesResponse{Notes: notes}, http.StatusOK)
@@ -470,14 +441,12 @@ func sendNote(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.U
 		return
 	}
 	var req models.SendNoteRequest
-	if err := utils.DecodeJSONRequest(r, &req); err != nil {
-		chatLogger.LogError("DecodeJSONRequest", err)
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	if !decodeOrReject(w, r, &req, "sendNote") {
 		return
 	}
 	recipient, err := chatService.SendNote(me, id, req.ID, req.To, req.Blob)
 	if err != nil {
-		writeChatError(w, err, "SendNote")
+		apperr.WriteError(w, "SendNote", err)
 		return
 	}
 	realtime.Default.Publish([]string{recipient}, realtime.Event{Kind: realtime.KindConversation})
@@ -489,7 +458,7 @@ func deleteNote(w http.ResponseWriter, r *http.Request, me *chat.Member, id, not
 		return
 	}
 	if err := chatService.DeleteNote(me, id, noteID); err != nil {
-		writeChatError(w, err, "DeleteNote")
+		apperr.WriteError(w, "DeleteNote", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

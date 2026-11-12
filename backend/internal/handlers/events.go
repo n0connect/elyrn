@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/realtime"
 )
 
@@ -37,7 +38,7 @@ func formatEvent(ev realtime.Event) string {
 // EventsHandler streams content-free change notifications (GET /api/v2/events).
 func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "EventsHandler", apperr.MethodNotAllowed)
 		return
 	}
 	me, ok := resolveMe(w, r)
@@ -47,8 +48,9 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 
 	events, cancel, err := realtime.Default.Subscribe(me.StreamTag)
 	if err != nil {
-		chatLogger.Warn("EventsHandler: subscriber limit reached")
-		http.Error(w, "Too many requests", http.StatusTooManyRequests)
+		// Every Subscribe failure answers 429, as it always has: the subscriber cap, or a hub
+		// lock timeout under contention (both mean "retry later")
+		apperr.Write(w, "EventsHandler", apperr.SubscriberLimit)
 		return
 	}
 	defer cancel()

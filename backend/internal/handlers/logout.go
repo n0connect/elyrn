@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/auth"
 	"elyrn/internal/identity"
 	"elyrn/internal/middleware"
@@ -20,7 +21,7 @@ var logoutLogger = utils.NewLogger("LOGOUT")
 // cannot end the sessions created after it. A failed revocation is reported, never hidden.
 func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "LogoutHandler", apperr.MethodNotAllowed)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -32,13 +33,11 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, middleware.ErrNoSession):
 		// Nothing live to revoke: the browser is logged out once the cookie is gone
 	case err != nil:
-		logoutLogger.LogError("Authenticate", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "LogoutHandler: Authenticate", err)
 		return
 	default:
 		if err := userRepository.BumpSessionEpoch(user.UUID); err != nil {
-			logoutLogger.LogError("BumpSessionEpoch", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "LogoutHandler: BumpSessionEpoch", err)
 			return
 		}
 		if stream, err := identity.StreamTag(user.UUID); err == nil {

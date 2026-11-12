@@ -3,10 +3,8 @@ package middleware
 import (
 	"net/http"
 
-	"elyrn/internal/utils"
+	"elyrn/internal/apperr"
 )
-
-var originLogger = utils.NewLogger("ORIGIN")
 
 // stateChanging whitelists the methods that need same-origin proof; GET/HEAD/OPTIONS do not
 // change state, and CORS (no credentials, exact origins) already keeps their bodies same-origin.
@@ -31,13 +29,11 @@ func SameOriginWritesMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
 			if site != "same-origin" {
-				originLogger.Warn("cross-origin write rejected (fetch metadata)")
-				http.Error(w, "Forbidden", http.StatusForbidden)
+				apperr.Write(w, "SameOriginWritesMiddleware: fetch metadata", apperr.CrossOrigin)
 				return
 			}
 		} else if origin := r.Header.Get("Origin"); origin != "" && !isOriginAllowed(origin) {
-			originLogger.Warn("cross-origin write rejected (origin)")
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			apperr.Write(w, "SameOriginWritesMiddleware: origin", apperr.CrossOrigin)
 			return
 		}
 		next(w, r)

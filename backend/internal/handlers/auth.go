@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/auth"
 	"elyrn/internal/encryption"
 	"elyrn/internal/identity"
@@ -32,8 +33,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
-		authLogger.Warn("Invalid method for registration: %s", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "RegisterHandler", apperr.MethodNotAllowed)
 		return
 	}
 
@@ -66,8 +66,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		// Generate AccountNumber (256-bit CSPRNG, base64url encoded)
 		accountNumber, err := utils.GenerateAccountNumber()
 		if err != nil {
-			authLogger.LogError("GenerateAccountNumber", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "GenerateAccountNumber", err)
 			return
 		}
 
@@ -75,61 +74,51 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		// seeds the user's E2E identity) leaves server memory with this response
 		pending := auth.PendingIdentity{}
 		if pending.AuthKey, err = identity.DeriveAuthKey(accountNumber); err != nil {
-			authLogger.LogError("DeriveAuthKey", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "DeriveAuthKey", err)
 			return
 		}
 		if pending.PublicKey, err = identity.DerivePublicKey(accountNumber); err != nil {
-			authLogger.LogError("DerivePublicKey", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "DerivePublicKey", err)
 			return
 		}
 
 		// Compute lookup for collision check (almost impossible)
 		lookup, err := auth.ComputeAccountLookup(pending.AuthKey)
 		if err != nil {
-			authLogger.LogError("ComputeAccountLookup", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "ComputeAccountLookup", err)
 			return
 		}
 
 		// Check for collision - regenerate if needed (very unlikely but safe)
 		exists, err := userRepository.ExistsByAccountLookup(lookup)
 		if err != nil {
-			authLogger.LogError("ExistsByAccountLookup", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "ExistsByAccountLookup", err)
 			return
 		}
 		if exists {
-			// thanks user for almost impossible situation
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			// A 256-bit collision: practically impossible, answered as a plain server fault
+			apperr.Write(w, "RegisterHandler", apperr.AccountCollision)
 			return
 		}
 
 		// Generate pending ID and store AccountNumber server-side
 		pendingID, err := auth.GeneratePendingID()
 		if err != nil {
-			authLogger.LogError("GeneratePendingID", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "GeneratePendingID", err)
 			return
 		}
 
 		// Keep the derived identity (not the AccountNumber) until the user confirms
+		// A full store answers 503 (apperr.PendingStoreFull), anything else 500
 		if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
-			if errors.Is(err, auth.ErrPendingStoreFull) {
-				http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-				return
-			}
-			authLogger.LogError("StorePendingRegistration", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "StorePendingRegistration", err)
 			return
 		}
 
 		// Generate pending registration token (contains pending ID, not AccountNumber)
 		pendingToken, err := auth.SignPendingRegistrationToken(pendingID)
 		if err != nil {
-			authLogger.LogError("SignPendingRegistrationToken", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			apperr.WriteError(w, "SignPendingRegistrationToken", err)
 			return
 		}
 
@@ -154,8 +143,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	// This prevents Phase 1 PoW replay and ensures fresh proof-of-work for expensive Argon2id
 
 	if req.PendingToken == "" {
-		authLogger.Warn("No pending token provided for account confirmation")
-		http.Error(w, "Pending token required", http.StatusBadRequest)
+		apperr.Write(w, "RegisterHandler", apperr.PendingTokenRequired)
 		return
 	}
 
@@ -165,8 +153,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// SECURITY: Generic error message to prevent information leakage
 		// Don't distinguish between expired and invalid tokens
-		authLogger.Warn("Invalid or expired pending registration token")
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		apperr.Write(w, "VerifyPendingRegistrationToken", apperr.PendingTokenInvalid)
 		return
 	}
 	authKey, publicKey := pending.AuthKey, pending.PublicKey
@@ -174,60 +161,50 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	// Compute lookup and hash
 	lookup, err := auth.ComputeAccountLookup(authKey)
 	if err != nil {
-		authLogger.LogError("ComputeAccountLookup", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "ComputeAccountLookup", err)
 		return
 	}
 
 	// Check if account already exists (race condition or replay attack)
 	exists, err := userRepository.ExistsByAccountLookup(lookup)
 	if err != nil {
-		authLogger.LogError("ExistsByAccountLookup", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "ExistsByAccountLookup", err)
 		return
 	}
 	if exists {
 		// SECURITY: Generic error message to prevent enumeration
 		// Don't reveal that account exists - use same message as invalid token
-		authLogger.Warn("Account already exists (possible replay)")
 		auth.CompletePendingRegistration(pendingID)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		apperr.Write(w, "RegisterHandler", apperr.AccountExists)
 		return
 	}
 
 	// Hash auth key with Argon2id (bounded concurrency: a saturated server says so)
+	// ErrBusy answers 503 (apperr.Argon2Busy), anything else 500
 	accountHash, err := auth.HashAccountNumber(authKey)
-	if errors.Is(err, auth.ErrBusy) {
-		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-		return
-	}
 	if err != nil {
-		authLogger.LogError("HashAccountNumber", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "HashAccountNumber", err)
 		return
 	}
 
 	// Generate internal user UUID (for backward compatibility and JWT subject)
 	internalUUID, err := utils.GenerateInternalID()
 	if err != nil {
-		authLogger.LogError("GenerateInternalID", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "GenerateInternalID", err)
 		return
 	}
 
 	// Generate encryption key for user
 	userAESKey, err := encryption.GenerateUserAESKey()
 	if err != nil {
-		authLogger.LogError("GenerateUserAESKey", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "GenerateUserAESKey", err)
 		return
 	}
 
 	userKeyHex := hex.EncodeToString(userAESKey)
 	encryptedUserKey, err := encryption.EncryptWithMasterKey(userKeyHex)
 	if err != nil {
-		authLogger.LogError("EncryptWithMasterKey", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "EncryptWithMasterKey", err)
 		return
 	}
 	masterKeyID := encryption.ActiveMasterKeyID()
@@ -247,11 +224,10 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrConflict) {
 			// A concurrent confirmation of the same token created it first
 			auth.CompletePendingRegistration(pendingID)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			apperr.Write(w, "UserRepository.Create", apperr.AccountExists)
 			return
 		}
-		authLogger.LogError("UserRepository.Create", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "UserRepository.Create", err)
 		return
 	}
 	auth.CompletePendingRegistration(pendingID)
@@ -284,13 +260,11 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 // issued difficulty (consuming it), and otherwise writes 412 (missing) or 403 (invalid).
 func requireProofOfWork(w http.ResponseWriter, solution *models.PoWSolution, action string) bool {
 	if solution == nil {
-		authLogger.Warn("PoW solution missing for %s", action)
-		http.Error(w, "Proof of work required", http.StatusPreconditionFailed)
+		apperr.Write(w, "requireProofOfWork:"+action, apperr.PoWRequired)
 		return false
 	}
 	if !pow.ValidateSolution(solution) {
-		authLogger.Warn("Invalid PoW solution for %s", action)
-		http.Error(w, "Invalid proof of work", http.StatusForbidden)
+		apperr.Write(w, "requireProofOfWork:"+action, apperr.PoWInvalid)
 		return false
 	}
 	return true
@@ -308,8 +282,7 @@ func PoWChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodGet {
-		authLogger.Warn("Invalid method for PoW challenge: %s", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "PoWChallengeHandler", apperr.MethodNotAllowed)
 		return
 	}
 
@@ -317,17 +290,10 @@ func PoWChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	// Rate-limit key: HMAC(client IP) with a per-boot secret (forwarded headers trusted only from TRUSTED_PROXIES)
+	// ErrRateLimited answers 429, ErrCapacity 503 (apperr sentinel table), anything else 500
 	challenge, err := pow.GenerateChallenge(middleware.ClientKey(r))
-	switch {
-	case errors.Is(err, pow.ErrRateLimited):
-		http.Error(w, "Too many requests", http.StatusTooManyRequests)
-		return
-	case errors.Is(err, pow.ErrCapacity):
-		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
-		return
-	case err != nil:
-		authLogger.LogError("GenerateChallenge", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	if err != nil {
+		apperr.WriteError(w, "GenerateChallenge", err)
 		return
 	}
 
@@ -355,8 +321,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
-		authLogger.Warn("Invalid method for login: %s", r.Method)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		apperr.Write(w, "LoginHandler", apperr.MethodNotAllowed)
 		return
 	}
 
@@ -389,8 +354,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Apply per-account rate limit using lookup hash
 	if !middleware.AllowAccountLookup(lookup) {
-		authLogger.Warn("Login rate limit exceeded for account lookup")
-		http.Error(w, "Too many requests", http.StatusTooManyRequests)
+		apperr.Write(w, "LoginHandler: AllowAccountLookup", apperr.RateLimited)
 		return
 	}
 
@@ -398,7 +362,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// would tell the user their only key is worthless (and says nothing about the account)
 	user, err := userRepository.FindByAccountLookup(lookup)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		apperr.Write(w, "FindByAccountLookup", apperr.StoreUnavailable)
 		return
 	}
 	if err != nil {
@@ -407,7 +371,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		// not reveal whether an account exists (no user-enumeration timing side channel);
 		// a saturated server answers 503 for known and unknown accounts alike
 		if errors.Is(auth.EqualizeVerificationTiming(req.AuthKey), auth.ErrBusy) {
-			http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+			apperr.Write(w, "EqualizeVerificationTiming", apperr.Argon2Busy)
 			return
 		}
 		utils.EncodeJSONResponse(w, models.LoginResponse{Success: false, Message: "Invalid credentials"}, http.StatusUnauthorized)
@@ -417,7 +381,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Verify auth key hash
 	if err := auth.VerifyAccountNumberHash(user.AccountHash, req.AuthKey); err != nil {
 		if errors.Is(err, auth.ErrBusy) {
-			http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+			apperr.Write(w, "VerifyAccountNumberHash", apperr.Argon2Busy)
 			return
 		}
 		authLogger.Warn("Login failed: auth key hash verification failed")
@@ -437,8 +401,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Generate JWT token (using internal UUID as subject)
 	token, err := auth.SignToken(user.UUID, user.SessionEpoch)
 	if err != nil {
-		authLogger.LogError("SignToken", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		apperr.WriteError(w, "SignToken", err)
 		return
 	}
 

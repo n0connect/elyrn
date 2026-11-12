@@ -5,6 +5,7 @@ package server
 import (
 	"net/http"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/handlers"
 	"elyrn/internal/middleware"
 	"elyrn/internal/utils"
@@ -53,8 +54,7 @@ func NewMux() *http.ServeMux {
 	// Request Path Whitelist: Handle unknown paths with 404
 	// Only registered paths are allowed, all others return 404
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		serverLogger.Debug("Unknown path requested")
-		http.Error(w, "Not Found", http.StatusNotFound)
+		apperr.Write(w, "NewMux: unknown path", apperr.RouteNotFound)
 	})
 
 	serverLogger.Info("All routes registered successfully")

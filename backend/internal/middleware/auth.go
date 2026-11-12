@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/auth"
 	"elyrn/internal/config"
 	"elyrn/internal/models"
@@ -57,14 +58,13 @@ func JWTMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		user, session, err := Authenticate(r)
 		if err != nil {
 			if !errors.Is(err, ErrNoSession) {
-				authMiddlewareLogger.LogError("Authenticate", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				apperr.WriteError(w, "JWTMiddleware: Authenticate", err)
 				return
 			}
 			if auth.GetAuthCookie(r) != "" {
 				auth.ClearAuthCookie(w)
 			}
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			apperr.Write(w, "JWTMiddleware", apperr.NoSession)
 			return
 		}
 

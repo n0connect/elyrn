@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/config"
 	"elyrn/internal/utils"
 )
@@ -67,8 +68,7 @@ func CORSMiddleware(next http.HandlerFunc) http.HandlerFunc {
 				// If Preflight then return error
 				// SECURITY: Generic error message to prevent information leakage
 				if r.Method == http.MethodOptions {
-					corsLogger.Warn("CORS preflight from a non-whitelisted origin rejected")
-					http.Error(w, "Forbidden", http.StatusForbidden)
+					apperr.Write(w, "CORSMiddleware: preflight", apperr.CrossOrigin)
 					return
 				}
 				// Don't send headers for any other requests.
