@@ -156,7 +156,7 @@ func (c *client) solvePoW() *models.PoWSolution {
 	for nonce := 0; nonce < 1<<26; nonce++ {
 		n := strconv.Itoa(nonce)
 		if leadingZeroBits(sha256.Sum256([]byte(ch.Challenge+n+ch.Salt))) >= ch.Difficulty {
-			return &models.PoWSolution{Challenge: ch.Challenge, Salt: ch.Salt, Solution: n, Difficulty: ch.Difficulty}
+			return ch.Answer(n)
 		}
 	}
 	c.t.Fatal("PoW not solved")

@@ -53,11 +53,6 @@ func search(t testing.TB, ch *models.PoWChallenge, want bool) string {
 	return ""
 }
 
-func solutionFor(ch *models.PoWChallenge, nonce string) *models.PoWSolution {
-	return &models.PoWSolution{Challenge: ch.Challenge, Salt: ch.Salt, Solution: nonce,
-		Difficulty: ch.Difficulty, Timestamp: ch.Timestamp, TTL: ch.TTL}
-}
-
 // accepted reports whether the real validator admits (and spends) the solution.
 func accepted(solution *models.PoWSolution) bool {
 	return ValidateSolution(solution) == nil
@@ -96,7 +91,7 @@ func TestGenerateChallenge_IssuesAuthenticatedChallengeWithoutState(t *testing.T
 
 func TestValidateSolution_AcceptsRealSolutionExactlyOnce(t *testing.T) {
 	ch := issue(t)
-	solution := solutionFor(ch, search(t, ch, true))
+	solution := ch.Answer(search(t, ch, true))
 	if !accepted(solution) {
 		t.Fatal("a real solution was rejected")
 	}
@@ -107,11 +102,11 @@ func TestValidateSolution_AcceptsRealSolutionExactlyOnce(t *testing.T) {
 
 func TestValidateSolution_RejectsNonceBelowDifficulty(t *testing.T) {
 	ch := issue(t)
-	if accepted(solutionFor(ch, search(t, ch, false))) {
+	if accepted(ch.Answer(search(t, ch, false))) {
 		t.Fatal("a nonce that misses the difficulty was accepted")
 	}
 	// A failed attempt must not burn the challenge: the real solution still works
-	if !accepted(solutionFor(ch, search(t, ch, true))) {
+	if !accepted(ch.Answer(search(t, ch, true))) {
 		t.Fatal("real solution rejected after a failed attempt")
 	}
 }
@@ -119,7 +114,7 @@ func TestValidateSolution_RejectsNonceBelowDifficulty(t *testing.T) {
 // Regression: difficulty must come from the server-side entry, never the client.
 func TestValidateSolution_IgnoresClientDifficulty(t *testing.T) {
 	ch := issue(t)
-	forged := solutionFor(ch, search(t, ch, false))
+	forged := ch.Answer(search(t, ch, false))
 	forged.Difficulty = 0
 	if accepted(forged) {
 		t.Fatal("client-chosen difficulty=0 was honoured")
@@ -130,7 +125,7 @@ func TestValidateSolution_RejectsUnissuedChallenge(t *testing.T) {
 	ch := issue(t)
 	unissued := *ch
 	unissued.Challenge = newClientKey(t) // fresh CSPRNG bytes the server never issued
-	if accepted(solutionFor(&unissued, search(t, &unissued, true))) {
+	if accepted(unissued.Answer(search(t, &unissued, true))) {
 		t.Fatal("a solution for a challenge the server never issued was accepted")
 	}
 }
@@ -150,7 +145,7 @@ func TestValidateSolution_RejectsMalformedFields(t *testing.T) {
 			t.Fatalf("case %d: malformed solution accepted", i)
 		}
 	}
-	if !accepted(solutionFor(ch, nonce)) {
+	if !accepted(ch.Answer(nonce)) {
 		t.Fatal("malformed attempts must not burn the challenge")
 	}
 }
@@ -158,7 +153,7 @@ func TestValidateSolution_RejectsMalformedFields(t *testing.T) {
 func TestValidateSolution_ExpiresAfterTTL(t *testing.T) {
 	t.Setenv("POW_CHALLENGE_TTL_SEC", "1")
 	ch := issue(t)
-	solution := solutionFor(ch, search(t, ch, true))
+	solution := ch.Answer(search(t, ch, true))
 	time.Sleep(1100 * time.Millisecond)
 	if accepted(solution) {
 		t.Fatal("an expired challenge was accepted")
@@ -171,7 +166,7 @@ func TestValidateSolution_ExpiresAfterTTL(t *testing.T) {
 
 func TestValidateSolution_ConcurrentSubmissionsAcceptOnce(t *testing.T) {
 	ch := issue(t)
-	solution := solutionFor(ch, search(t, ch, true))
+	solution := ch.Answer(search(t, ch, true))
 	var admitted int32
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
@@ -215,7 +210,7 @@ func TestCleanup_EvictsExpiredSpentChallengesAndIdleLimiters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateChallenge: %v", err)
 	}
-	if !accepted(solutionFor(ch, search(t, ch, true))) {
+	if !accepted(ch.Answer(search(t, ch, true))) {
 		t.Fatal("a real solution was rejected")
 	}
 	if !spentEntry(ch) {
@@ -269,7 +264,7 @@ func TestDifficulty_ClampedToConfiguredRange(t *testing.T) {
 func TestValidateSolution_SpentSetIsBounded(t *testing.T) {
 	resetSpent(t)
 	ch := issue(t)
-	solution := solutionFor(ch, search(t, ch, true))
+	solution := ch.Answer(search(t, ch, true))
 	live := time.Now().Add(time.Hour).Unix()
 	spentMutex.Lock()
 	for i := 0; i < maxSpentChallenges; i++ {
@@ -360,7 +355,7 @@ func TestValidateSolution_VerifiesWithZeroStoredState(t *testing.T) {
 	if n := spentCount(); n != 0 {
 		t.Fatalf("issuing stored %d entries, want 0", n)
 	}
-	if !accepted(solutionFor(ch, search(t, ch, true))) {
+	if !accepted(ch.Answer(search(t, ch, true))) {
 		t.Fatal("a challenge with no stored entry did not verify")
 	}
 	if n := spentCount(); n != 1 || !spentEntry(ch) {
@@ -388,11 +383,11 @@ func TestValidateSolution_RejectsEachTamperedField(t *testing.T) {
 	for field, change := range tampered {
 		forged := *ch
 		change(&forged)
-		if accepted(solutionFor(&forged, search(t, &forged, true))) {
+		if accepted(forged.Answer(search(t, &forged, true))) {
 			t.Fatalf("tampered %s accepted", field)
 		}
 	}
-	if !accepted(solutionFor(ch, search(t, ch, true))) {
+	if !accepted(ch.Answer(search(t, ch, true))) {
 		t.Fatal("tampering attempts burned the real challenge")
 	}
 }
@@ -401,14 +396,14 @@ func TestValidateSolution_RejectsEachTamperedField(t *testing.T) {
 func TestValidateSolution_RejectsReplayOfSolvedChallenge(t *testing.T) {
 	ch := issue(t)
 	first := search(t, ch, true)
-	if !accepted(solutionFor(ch, first)) {
+	if !accepted(ch.Answer(first)) {
 		t.Fatal("a real solution was rejected")
 	}
 	n, err := strconv.Atoi(first)
 	if err != nil {
 		t.Fatalf("nonce %q: %v", first, err)
 	}
-	if err := ValidateSolution(solutionFor(ch, searchFrom(t, ch, n+1))); !errors.Is(err, ErrInvalidSolution) {
+	if err := ValidateSolution(ch.Answer(searchFrom(t, ch, n+1))); !errors.Is(err, ErrInvalidSolution) {
 		t.Fatal("a second solution of a spent challenge was not refused as invalid")
 	}
 }
@@ -421,14 +416,14 @@ func TestValidateSolution_ExpiresByTimestampPlusTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newChallenge: %v", err)
 	}
-	if accepted(solutionFor(old, search(t, old, true))) {
+	if accepted(old.Answer(search(t, old, true))) {
 		t.Fatal("a challenge past timestamp+ttl was accepted")
 	}
 	recent, err := newChallenge(time.Now().Add(-time.Duration(ttl/2)*time.Second), ttl, 18)
 	if err != nil {
 		t.Fatalf("newChallenge: %v", err)
 	}
-	if !accepted(solutionFor(recent, search(t, recent, true))) {
+	if !accepted(recent.Answer(search(t, recent, true))) {
 		t.Fatal("a challenge within timestamp+ttl was rejected")
 	}
 }
@@ -438,7 +433,7 @@ func TestValidateSolution_RejectsChallengeFromAnotherSecret(t *testing.T) {
 	restore := swapSecret(t)
 	ch := issue(t)
 	restore()
-	if accepted(solutionFor(ch, search(t, ch, true))) {
+	if accepted(ch.Answer(search(t, ch, true))) {
 		t.Fatal("a challenge issued under another secret was accepted")
 	}
 }

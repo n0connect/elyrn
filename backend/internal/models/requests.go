@@ -63,6 +63,13 @@ type PoWChallenge struct {
 	Salt       string `json:"salt"`
 }
 
+// Answer is the solution carrying nonce for this challenge. It echoes every issued field,
+// since the server authenticates them all against the salt (pow/mac.go) instead of storing them.
+func (c *PoWChallenge) Answer(nonce string) *PoWSolution {
+	return &PoWSolution{Challenge: c.Challenge, Salt: c.Salt, Solution: nonce,
+		Difficulty: c.Difficulty, Timestamp: c.Timestamp, TTL: c.TTL}
+}
+
 // DeleteAccountRequest re-proves the account: a live session alone cannot erase it
 type DeleteAccountRequest struct {
 	AuthKey string `json:"auth_key"` // HKDF(AccountNumber, "noaddx/auth"), as at login

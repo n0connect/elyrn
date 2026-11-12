@@ -214,8 +214,7 @@ func solve(ctx context.Context, ch *models.PoWChallenge) (*models.PoWSolution, e
 			return nil, fail(CodeInternal, err)
 		}
 		if pow.HasLeadingZeroBits(sum, ch.Difficulty) {
-			return &models.PoWSolution{Challenge: ch.Challenge, Salt: ch.Salt, Solution: strconv.FormatUint(nonce, 10),
-				Difficulty: ch.Difficulty, Timestamp: ch.Timestamp, TTL: ch.TTL}, nil
+			return ch.Answer(strconv.FormatUint(nonce, 10)), nil
 		}
 	}
 	return nil, fail(CodeProofOfWork, nil)
