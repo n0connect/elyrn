@@ -20,8 +20,8 @@ const (
 	// The salt carries the challenge's MAC (mac.go), so it keeps its issued width.
 	ChallengeBytes = 16
 	SaltBytes      = 16
-	// maxSolutionDigits: a nonce is a decimal uint64, which has at most 20 digits
-	maxSolutionDigits = 20
+	// MaxSolutionDigits: a nonce is a decimal uint64, which has at most 20 digits
+	MaxSolutionDigits = 20
 	// Challenge rate limit per client: phase 1 + phase 2 of one registration plus retries
 	challengesPerWindow = 5
 	challengeWindow     = time.Minute
@@ -255,7 +255,7 @@ func checkSolution(solution *models.PoWSolution, now time.Time) (int64, error) {
 	}
 	// Whitelist the shape of every client-supplied field before any computation
 	if !IsHexOfLen(solution.Challenge, ChallengeBytes) || !IsHexOfLen(solution.Salt, SaltBytes) ||
-		!isDecimal(solution.Solution, maxSolutionDigits) || solution.TTL <= 0 {
+		!isDecimal(solution.Solution, MaxSolutionDigits) || solution.TTL <= 0 {
 		powLogger.Warn("Malformed PoW solution rejected")
 		return 0, ErrInvalidSolution
 	}

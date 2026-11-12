@@ -54,7 +54,9 @@ const (
 	ciphertextOverhead = cryptoengine.GCMNonceSize + cryptoengine.GCMTagSize
 	minFrameBytes      = 256
 	maxFrameBytes      = 4096
-	minCiphertextBytes = ciphertextOverhead + minFrameBytes
+	MinCiphertextBytes = ciphertextOverhead + minFrameBytes
+	// MaxCiphertextBytes is the largest one-to-one ciphertext (MAX_MESSAGE_BYTES may lower it)
+	MaxCiphertextBytes = ciphertextOverhead + maxFrameBytes
 )
 
 func internalIDLength() (int, error) {
@@ -187,7 +189,7 @@ func ValidateCiphertext(encoded string) bool {
 		validationLogger.Error("ValidateCiphertext: MAX_MESSAGE_BYTES not configured")
 		return false
 	}
-	if len(encoded) < base64.RawURLEncoding.EncodedLen(minCiphertextBytes) ||
+	if len(encoded) < base64.RawURLEncoding.EncodedLen(MinCiphertextBytes) ||
 		len(encoded) > base64.RawURLEncoding.EncodedLen(maxBytes) ||
 		!accountNumberPattern.MatchString(encoded) {
 		return false
@@ -236,6 +238,9 @@ type RoomBlob struct {
 	Wraps  int
 	Digest []byte // the roster digest the sender encrypted for
 }
+
+// RoomMinBlobBytes is the smallest room message or note: one wrap and the smallest frame.
+const RoomMinBlobBytes = RoomHeaderBytes + RoomWrapBytes + minFrameBytes + cryptoengine.GCMTagSize
 
 // RoomMaxBlobBytes is the largest room message a room of maxMembers can carry.
 func RoomMaxBlobBytes(maxMembers int) int {

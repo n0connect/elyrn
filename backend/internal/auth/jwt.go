@@ -17,8 +17,8 @@ var (
 	jwtLogger       = utils.NewLogger("JWT")
 )
 
-// maxTokenBytes bounds what the JWT parser ever sees; a genuine token is ~250 bytes
-const maxTokenBytes = 1024
+// MaxTokenBytes bounds what the JWT parser ever sees; a genuine token is ~250 bytes
+const MaxTokenBytes = 1024
 
 // pendingSubject marks pending-registration tokens; it can never be a valid user id
 const pendingSubject = "pending_registration"
@@ -166,7 +166,7 @@ func SignPendingRegistrationToken(pendingID string) (string, error) {
 // pending registration token or is invalid/expired. The entry stays until the caller
 // completes it (CompletePendingRegistration) once the account exists.
 func VerifyPendingRegistrationToken(tokenString string) (string, PendingIdentity, error) {
-	if len(tokenString) == 0 || len(tokenString) > maxTokenBytes {
+	if len(tokenString) == 0 || len(tokenString) > MaxTokenBytes {
 		return "", PendingIdentity{}, ErrInvalidToken
 	}
 
@@ -225,7 +225,7 @@ func VerifyPendingRegistrationToken(tokenString string) (string, PendingIdentity
 // VerifyToken verifies a JWT token and returns the session it carries
 // Security: Validates signing method, issuer, audience, expiration and the subject's exact shape
 func VerifyToken(tokenString string) (*Session, error) {
-	if len(tokenString) == 0 || len(tokenString) > maxTokenBytes {
+	if len(tokenString) == 0 || len(tokenString) > MaxTokenBytes {
 		return nil, ErrInvalidToken
 	}
 

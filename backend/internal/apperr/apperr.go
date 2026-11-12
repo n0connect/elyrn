@@ -24,6 +24,7 @@ type Code int
 const (
 	// Request shape
 	MethodNotAllowed Code = iota + 1
+	HeadNotAllowed
 	InvalidRequest
 	RouteNotFound
 	UnsupportedMediaType
@@ -67,6 +68,7 @@ const (
 
 	// Server faults
 	AccountCollision
+	InputUnchecked
 	Internal
 )
 
@@ -95,8 +97,9 @@ const (
 type shape int
 
 const (
-	shapeText shape = iota // http.Error: "<sentence>\n", text/plain, nosniff
-	shapeJSON              // {"success":false,"message":"<sentence>"}\n, application/json
+	shapeText  shape = iota // http.Error: "<sentence>\n", text/plain, nosniff
+	shapeJSON               // {"success":false,"message":"<sentence>"}\n, application/json
+	shapeEmpty              // status line only: no body, no Content-Type (HEAD on the auth routes)
 )
 
 // entry is what the registry knows about one code.
@@ -112,7 +115,10 @@ type entry struct {
 // for several causes, so a client cannot tell them apart) are marked MERGE.
 var registry = map[Code]entry{
 	MethodNotAllowed: {"E_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed, sayMethodNotAllowed, utils.LogLevelWARN, shapeText},
-	InvalidRequest:   {"E_INVALID_REQUEST", http.StatusBadRequest, sayInvalidRequest, utils.LogLevelWARN, shapeText},
+	// HEAD on register, login and the PoW challenge always answered a bare 405 (link previews
+	// and health probes); the sentence is registered but never written (shapeEmpty)
+	HeadNotAllowed: {"E_HEAD_NOT_ALLOWED", http.StatusMethodNotAllowed, sayMethodNotAllowed, utils.LogLevelDEBUG, shapeEmpty},
+	InvalidRequest: {"E_INVALID_REQUEST", http.StatusBadRequest, sayInvalidRequest, utils.LogLevelWARN, shapeText},
 	// MERGE: a malformed /conversations path answers like an unregistered path, so probing
 	// the route shape learns nothing beyond "no such route"
 	RouteNotFound:        {"E_ROUTE_NOT_FOUND", http.StatusNotFound, sayRouteNotFound, utils.LogLevelDEBUG, shapeText},
@@ -173,7 +179,10 @@ var registry = map[Code]entry{
 
 	// MERGE: a phase-1 account-number collision is reported as a plain server fault
 	AccountCollision: {"E_ACCOUNT_COLLISION", http.StatusInternalServerError, sayInternalServerErr, utils.LogLevelERROR, shapeText},
-	Internal:         {"E_INTERNAL", http.StatusInternalServerError, sayInternalServerErr, utils.LogLevelERROR, shapeText},
+	// MERGE: a handler reached without the input contract's gate (a wiring fault) is a plain
+	// server fault; it never runs on input nobody checked
+	InputUnchecked: {"E_INPUT_UNCHECKED", http.StatusInternalServerError, sayInternalServerErr, utils.LogLevelERROR, shapeText},
+	Internal:       {"E_INTERNAL", http.StatusInternalServerError, sayInternalServerErr, utils.LogLevelERROR, shapeText},
 }
 
 var logger = utils.NewLogger("APPERR")
@@ -186,6 +195,13 @@ func lookup(code Code) entry {
 	}
 	logger.Error("unregistered error code %d", int(code))
 	return registry[Internal]
+}
+
+// Describe returns a code's stable id and HTTP status, for documents generated from tables
+// that name codes (internal/contract).
+func Describe(code Code) (id string, status int) {
+	e := lookup(code)
+	return e.id, e.status
 }
 
 // Write logs the failure once (operation name and code id, at the code's level; never
@@ -218,11 +234,14 @@ func WriteCause(w http.ResponseWriter, op string, code Code, err error) {
 
 // send is the only place a failure reaches the wire, in the code's registered shape.
 func send(w http.ResponseWriter, e entry) {
-	if e.shape == shapeJSON {
+	switch e.shape {
+	case shapeJSON:
 		sendJSON(w, e)
-		return
+	case shapeEmpty:
+		w.WriteHeader(e.status)
+	default:
+		sendText(w, e)
 	}
-	sendText(w, e)
 }
 
 // sendText keeps the bytes the call sites always produced through http.Error: the sentence

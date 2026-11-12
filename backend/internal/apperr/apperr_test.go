@@ -49,7 +49,7 @@ func TestRegistryEntriesWellFormed(t *testing.T) {
 		if _, ok := knownLevels[e.level]; !ok {
 			t.Errorf("%s: unknown log level %q", e.id, e.level)
 		}
-		if e.shape != shapeText && e.shape != shapeJSON {
+		if e.shape != shapeText && e.shape != shapeJSON && e.shape != shapeEmpty {
 			t.Errorf("%s: unknown wire shape %d", e.id, int(e.shape))
 		}
 	}
@@ -71,6 +71,10 @@ var jsonWire = map[Code]struct {
 	LoginNoAccount:     {401, `{"success":false,"message":"Invalid credentials"}`},
 	LoginLegacyAccount: {401, `{"success":false,"message":"Invalid credentials"}`},
 }
+
+// emptyWire pins the answers with a status line only: HEAD on register, login and the PoW
+// challenge answered a bare 405 (w.WriteHeader) before the input contract's gate took it over.
+var emptyWire = map[Code]int{HeadNotAllowed: http.StatusMethodNotAllowed}
 
 // TestWireAnswers pins every code to the exact (status, body) the server answered before the
 // registry existed; clients compare these bytes.
@@ -108,10 +112,18 @@ func TestWireAnswers(t *testing.T) {
 		IdentityUnset:         {403, "Forbidden"},
 		Forbidden:             {403, "Forbidden"},
 		AccountCollision:      {500, "Internal server error"},
+		InputUnchecked:        {500, "Internal server error"},
 		Internal:              {500, "Internal server error"},
 	}
-	if len(want)+len(jsonWire) != len(registry) {
-		t.Fatalf("pinned %d answers, registry has %d", len(want)+len(jsonWire), len(registry))
+	if len(want)+len(jsonWire)+len(emptyWire) != len(registry) {
+		t.Fatalf("pinned %d answers, registry has %d", len(want)+len(jsonWire)+len(emptyWire), len(registry))
+	}
+	for code, status := range emptyWire {
+		rec := httptest.NewRecorder()
+		Write(rec, "test", code)
+		if rec.Code != status || rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
+			t.Errorf("code %d: got %d %q %v, want a bare %d", int(code), rec.Code, rec.Body.String(), rec.Header(), status)
+		}
 	}
 	for code, w := range want {
 		rec := httptest.NewRecorder()
