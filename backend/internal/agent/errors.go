@@ -7,6 +7,7 @@ package agent
 
 import (
 	"errors"
+	"strconv"
 )
 
 // Code is a registered failure code.
@@ -105,7 +106,7 @@ var sentences = map[Code]string{
 	CodeRoomCreate:    "The room could not be stored after several fresh codes; retry in a minute.",
 	CodeRoster:        "The member list of this room failed verification; retry, and do not trust this server with the room if it persists.",
 	CodeRosterChanged: "The room's members kept changing while the message was being sent; read the room, then send again.",
-	CodeMessageText:   "The text is empty, longer than 2000 characters, contains control characters or does not fit one message; shorten or clean it and send again.",
+	CodeMessageText:   "The text is empty, longer than " + strconv.Itoa(MaxMessageChars) + " characters, contains control characters or does not fit one message; shorten or clean it and send again.",
 	CodeSendUncertain: "The server did not confirm the message; read the room to see whether it arrived before sending it again.",
 	CodeInternal:      "An internal error occurred in the agent; retry, and report it if it persists.",
 }

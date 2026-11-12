@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"elyrn/internal/config"
 	"elyrn/internal/e2e"
 	"elyrn/internal/models"
 )
@@ -23,7 +24,7 @@ func (a *Agent) CreateRoom(ctx context.Context, maxMembers, ttlHours int) (*Room
 			return fail(CodeRoomLimit, nil)
 		}
 		for attempt := 0; attempt < maxCreateAttempts; attempt++ {
-			code, err := e2e.NewRoomCode(maxMembers, uint32(time.Now().Unix()/hourSeconds+int64(ttlHours)+1))
+			code, err := e2e.NewRoomCode(maxMembers, uint32(time.Now().Unix()/hourSeconds+int64(ttlHours)+config.RoomExpiryRoundHours))
 			if err != nil {
 				return fail(CodeInternal, err)
 			}

@@ -13,14 +13,15 @@ import (
 	"time"
 
 	"elyrn/internal/auth"
+	"elyrn/internal/utils"
 )
 
 const (
 	headerAccept      = "Accept"
-	headerContentType = "Content-Type"
+	headerContentType = utils.HeaderContentType
 	headerUserAgent   = "User-Agent"
-	mimeJSON          = "application/json"
-	mimeEventStream   = "text/event-stream"
+	mimeJSON          = utils.MIMEJSON
+	mimeEventStream   = utils.MIMEEventStream
 	userAgent         = "elyrn-agent"
 )
 

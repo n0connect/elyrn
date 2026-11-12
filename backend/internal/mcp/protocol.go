@@ -39,7 +39,8 @@ const (
 // for another one is answered with the newest (the client then decides).
 var supportedVersions = [...]string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
 
-// rpcNumbers maps the registered protocol codes to their JSON-RPC 2.0 numbers.
+// rpcNumbers maps the registered protocol codes to their JSON-RPC 2.0 numbers (the reserved
+// codes of JSON-RPC 2.0 §5.1; a tool the server does not know is an invalid param in MCP).
 var rpcNumbers = map[agent.Code]int{
 	agent.CodeRPCParse:    -32700,
 	agent.CodeRPCRequest:  -32600,

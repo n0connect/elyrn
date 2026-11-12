@@ -7,27 +7,28 @@ import (
 	"time"
 
 	"elyrn/internal/config"
+	"elyrn/internal/models"
 	"elyrn/internal/utils"
 )
 
 // logger is the one log home of elyrn-agent: utils writes to stderr, stdout carries MCP only.
 var logger = utils.NewLogger("AGENT")
 
-// Paths of the server API this client uses (docs/api/rest-api.md).
+// Paths of the server API this client uses (docs/api/rest-api.md); models holds the contract.
 const (
-	pathChallenge     = "/api/v2/pow/challenge"
-	pathRegister      = "/api/v2/register"
-	pathLogin         = "/api/v2/login"
-	pathMe            = "/api/v2/me"
-	pathRooms         = "/api/v2/rooms"
-	pathRoomsJoin     = "/api/v2/rooms/join"
-	pathConversations = "/api/v2/conversations"
-	pathEvents        = "/api/v2/events"
-	pathMessages      = "/messages"
-	pathMembers       = "/members"
-	pathRead          = "/read"
-	queryAfter        = "after"
-	queryBefore       = "before"
+	pathChallenge     = models.PathPoWChallenge
+	pathRegister      = models.PathRegister
+	pathLogin         = models.PathLogin
+	pathMe            = models.PathMe
+	pathRooms         = models.PathRooms
+	pathRoomsJoin     = models.PathRoomsJoin
+	pathConversations = models.PathConversations
+	pathEvents        = models.PathEvents
+	pathMessages      = "/" + models.SubMessages
+	pathMembers       = "/" + models.SubMembers
+	pathRead          = "/" + models.SubRead
+	queryAfter        = models.QueryAfter
+	queryBefore       = models.QueryBefore
 )
 
 // Timeouts: every exchange is bounded (RULES.md §17.1).
@@ -81,6 +82,6 @@ const (
 const (
 	MinRoomMembers  = config.MinRoomMembers
 	MaxRoomMembers  = config.MaxRoomMembersBound
-	MinRoomTTLHours = 1
+	MinRoomTTLHours = config.MinRoomTTLHours
 	MaxRoomTTLHours = config.MaxRoomTTLHoursBound
 )

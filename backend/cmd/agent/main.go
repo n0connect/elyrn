@@ -33,6 +33,8 @@ const (
 	exitOK        = 0
 	exitFailure   = 1
 	exitUsage     = 2
+	// codeSentenceFormat logs a failure as "<code>: <sentence>"
+	codeSentenceFormat = "%s: %s"
 )
 
 var mainLogger = utils.NewLogger("AGENT-MAIN")
@@ -131,11 +133,11 @@ func report(err error) int {
 		return exitOK
 	}
 	code := agent.CodeOf(err)
-	mainLogger.Error("%s: %s", code, agent.Sentence(code))
+	mainLogger.Error(codeSentenceFormat, code, agent.Sentence(code))
 	return exitFailure
 }
 
 func usage() int {
-	mainLogger.Error("%s: %s", agent.CodeUsage, agent.Sentence(agent.CodeUsage))
+	mainLogger.Error(codeSentenceFormat, agent.CodeUsage, agent.Sentence(agent.CodeUsage))
 	return exitUsage
 }
