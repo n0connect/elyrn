@@ -463,7 +463,8 @@ const ElyrnRoomCrypto = (() => {
                 mk = await aesOpen(kek, ZERO_NONCE, wrap, wrapAAD);
                 break;
             } catch (e) {
-                // Someone else's wrap
+                // Someone else's wrap: a message carries one wrap per member and only ours opens,
+                // so a failure here is the expected case; none opening is thrown just below
             }
         }
         if (!mk || mk.length !== KEY_BYTES) {

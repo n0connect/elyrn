@@ -237,7 +237,9 @@ const Rooms = (() => {
                 if (note.text.length > MAX_NOTE_CHARS) continue;
                 opened.push({ id: raw.id, from: senderOf(conv.room, note.sender) || null, aura: await ElyrnCrypto.aura(note.sender), invite: note.text });
             } catch (e) {
-                // Not for us, or tampered with
+                // Not for us, or tampered with: a note sealed for another member never opens here
+                // by design, and the server can add notes at will, so each is dropped unlogged
+                // rather than letting the server fill the console
             }
         }
         return opened;

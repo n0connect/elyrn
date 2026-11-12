@@ -309,9 +309,10 @@ const Chat = (() => {
 
     // ---------- messages ----------
 
-    // Serialised per conversation so SSE pokes and manual opens never interleave
+    // Serialised per conversation so SSE pokes and manual opens never interleave. A failed sync
+    // is logged and the chain stays usable: the next poke or open syncs from where this one stopped.
     function sync(conv) {
-        conv.syncChain = conv.syncChain.then(() => syncNow(conv)).catch(() => {});
+        conv.syncChain = conv.syncChain.then(() => syncNow(conv)).catch(error => Log.error(Errors.INTERNAL.E_SYNC_FAILED, error));
         return conv.syncChain;
     }
 

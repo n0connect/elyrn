@@ -467,9 +467,10 @@ async function finishRegistration() {
     const identity = await deriveSession(accountNumber);
 
     // The account number was copied for the user to save; do not leave it in the clipboard
-    // (clipboard histories and cross-device sync would keep it). Best effort only.
+    // (clipboard histories and cross-device sync would keep it). Best effort only: a page
+    // without focus may not write the clipboard, and registration must not fail over it.
     if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText('').catch(() => {});
+        navigator.clipboard.writeText('').catch(error => Log.warn(Errors.INTERNAL.W_CLIPBOARD_NOT_CLEARED, error));
     }
 
     // Clear pending state

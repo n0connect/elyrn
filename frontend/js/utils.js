@@ -86,7 +86,8 @@ async function handleErrorResponse(response) {
     // Use replace() instead of href to prevent back button issues
     if (redirectUrl) {
         // Read response body in background (non-blocking) to prevent potential issues
-        // But don't wait for it - redirect immediately
+        // But don't wait for it - redirect immediately. A failed read is ignored: the page is
+        // being left, and nothing in the body is ever shown.
         if (!response.bodyUsed) {
             const contentType = response.headers.get('content-type');
             if (contentType && contentType.includes('application/json')) {
@@ -157,6 +158,7 @@ async function apiCall(method, path, body) {
             data = null;
         }
     } else {
+        // Drained only to free the connection; data stays null either way, so a failed read changes nothing
         await response.text().catch(() => '');
     }
     return { ok: response.ok, status: response.status, data: data };
