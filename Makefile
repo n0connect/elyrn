@@ -160,6 +160,9 @@ check-hardening:
 		$(DOCKER_COMPOSE) $$files --profile onion config --format json \
 			| python3 -I scripts/check-hardening.py "$$layout" || exit 1; \
 	done
+	@grep -qx 'location /api/ { return 404; }' nginx-site.conf \
+		|| { echo "[FAIL] nginx-site.conf: the /api/ default-deny line is missing"; exit 1; }
+	@echo "[OK] check-hardening: nginx /api/ ends in default deny"
 
 $(ENV_FILE):
 	@$(MAKE) setup

@@ -6,7 +6,7 @@ nginx publishes a port, on loopback. `make check-hardening` fails if the rendere
 (production and development layouts) loses any control below or gains a forbidden one.
 
 ```bash
-make check-hardening     # rendered config of both layouts
+make check-hardening     # rendered config of both layouts + nginx's /api/ default deny
 ```
 
 ---
@@ -94,16 +94,38 @@ being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too
 | Unprivileged ports 8080 (clearnet) and 8081 (onion) | `nginx.conf` `listen` |
 | `server_tokens off`, no access log, errors at `crit` | `nginx-site.conf` top |
 | Method whitelist for the whole site: GET, HEAD, POST, DELETE, OPTIONS, else 405 | `nginx-site.conf` `if ($request_method ...)` |
-| Body bound 1 MiB | `client_max_body_size` |
+| Body bound 1k outside `/api/`; per API location below | `client_max_body_size` |
 | Headers: 1k buffer, at most 4 × 8k | `client_header_buffer_size`, `large_client_header_buffers` |
 | Timeouts: header and body 10 s, send 30 s, keepalive 30 s, upstream connect 5 s | `client_*_timeout`, `send_timeout`, `keepalive_timeout`, `proxy_connect_timeout` |
 | Redirects never name the internal port | `absolute_redirect off` |
 | Dotfiles never served (first regex location) | `location ~ /\.` |
-| Path whitelist: `/`, static files, status pages, `/api/`; everything else 404 | `location / { return 404; }` |
-| Rate limit 20 r/s per client (burst 40), per Tor circuit behind the onion listener | `nginx.conf` `limit_req_zone`, `limit_req` in the `/api/` locations |
+| Path whitelist: `/`, static files, status pages, the API below; everything else 404 | `location / { return 404; }` |
+| Rate limit 20 r/s per client (burst 40), per Tor circuit behind the onion listener | `nginx.conf` `limit_req_zone`, [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
 | Onion listener open to the tor container only, PROXY header required | `nginx.conf` `allow ${TOR_IP}; deny all;` |
-| Forwarding headers set by nginx alone | `proxy_set_header` in the `/api/` locations |
+| Forwarding headers set by nginx alone | [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
 | CSP, Trusted Types, isolation headers | `nginx-site.conf` `add_header` (unchanged) |
+
+**API whitelist.** `/api/` mirrors the [input contract](../api/input-contract.md): one location
+per route group, exact anchored paths (`{id}`, `{note}` as canonical UUIDv4), the contract's
+methods (HEAD passes with GET and the backend answers it; OPTIONS passes for CORS preflight), and
+a body bound at the smallest round size above the contract's. Anything else under `/api/` ends
+in `location /api/ { return 404; }`.
+
+| Paths (`/api/v2/…`) | Methods | Body bound (contract) |
+|---|---|---|
+| `pow/challenge`, `conversations` | GET | 1k (none) |
+| `events` | GET | 1k (none) |
+| `me` | GET, DELETE | 1k (123) |
+| `login`, `logout`, `invites`, `invites/redeem` | POST | 1k (≤ 292) |
+| `register`, `rooms`, `rooms/join` | POST | 2k (≤ 1351) |
+| `conversations/{id}/read` | POST | 1k (93) |
+| `conversations/{id}/members` | GET | 1k (none) |
+| `conversations/{id}/messages`, `…/notes` | GET, POST | 8k (≤ 7873) |
+| `conversations/{id}`, `conversations/{id}/notes/{note}` | DELETE | 1k (none) |
+
+A method outside the list answers 405, as the backend would; an unknown path 404; a body over
+the bound 413. The status pages accept bodies up to 8k, because an intercepted API error is
+redirected there with its body. The backend's gate still checks everything again.
 
 ## Images
 

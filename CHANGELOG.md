@@ -7,6 +7,12 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **nginx mirrors the input contract.** `/api/` was one prefix proxied whole, with a 1 MiB body
+  limit. nginx now admits only the contract's routes (exact paths, canonical UUIDv4 segments),
+  their methods and a body bound per route group at the smallest round size above the
+  contract's (1k, 2k or 8k), and ends in `location /api/ { return 404; }`. Answers are what the
+  backend would give: 405 for another method, 404 for another path, plus 413 for an oversized
+  body before it reaches the backend.
 - **Restricted containers (S-08).** Every service now drops all capabilities (PostgreSQL keeps
   `CHOWN`, `DAC_READ_SEARCH`, `FOWNER`, `SETUID`, `SETGID` for its start as root, then runs as
   uid 70), runs with a read-only root, `no-new-privileges`, Docker's default seccomp profile and
