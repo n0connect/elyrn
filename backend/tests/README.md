@@ -114,7 +114,7 @@ Migration testleri backend baslamadan once:
 
 ### Detayli Bilgi
 
-Bkz: `tests/database/README.md` ve `tests/MIGRATION_TEST_GUIDE.md`
+Bkz: `tests/database/README.md`
 
 ## Test Kategorileri
 
