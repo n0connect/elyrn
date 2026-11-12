@@ -2,8 +2,9 @@ name: ci
 
 on:
   push:
+    # The branch and the test database names are kept as "noaddx" across the rename to elyrn.
     branches: [main, noaddx-dev]
-    tags: ["noaddx-*"]
+    tags: ["elyrn-*"]
   pull_request:
 
 permissions:
@@ -75,9 +76,9 @@ jobs:
       - name: Production build (same flags as the Dockerfile)
         run: |
           if [ "${{ matrix.engine }}" = openssl ]; then
-            CGO_ENABLED=1 go build -tags openssl -trimpath -buildvcs=false -ldflags="-s -w" -o /tmp/noaddx ./cmd/server
+            CGO_ENABLED=1 go build -tags openssl -trimpath -buildvcs=false -ldflags="-s -w" -o /tmp/elyrn ./cmd/server
           else
-            CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o /tmp/noaddx ./cmd/server
+            CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o /tmp/elyrn ./cmd/server
           fi
 
   equivalence:
@@ -130,16 +131,16 @@ jobs:
         engine: [openssl, native]
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --build-arg ENGINE=${{ matrix.engine }} -f dev.backend.Dockerfile -t noaddx-backend:${{ matrix.engine }} .
-      - run: docker build -f dev.frontend.Dockerfile -t noaddx-frontend .
-      - run: docker build -f tor.Dockerfile -t noaddx-tor .
+      - run: docker build --build-arg ENGINE=${{ matrix.engine }} -f dev.backend.Dockerfile -t elyrn-backend:${{ matrix.engine }} .
+      - run: docker build -f dev.frontend.Dockerfile -t elyrn-frontend .
+      - run: docker build -f tor.Dockerfile -t elyrn-tor .
       - name: nginx renders and accepts its config; tor accepts its config with the onion defenses
         run: |
-          docker run --rm --add-host noaddx-backend:127.0.0.1 -e TOR_IP=172.29.73.11 noaddx-frontend nginx -t
-          docker run --rm --add-host frontend:172.29.73.10 noaddx-tor --verify-config
+          docker run --rm --add-host elyrn-backend:127.0.0.1 -e TOR_IP=172.29.73.11 elyrn-frontend nginx -t
+          docker run --rm --add-host frontend:172.29.73.10 elyrn-tor --verify-config
       - name: image runs as the unprivileged user and passes its self-test
         run: |
-          docker run --rm --entrypoint id noaddx-backend:${{ matrix.engine }} | grep -q 'uid=10001'
+          docker run --rm --entrypoint id elyrn-backend:${{ matrix.engine }} | grep -q 'uid=10001'
           docker run --rm -e JWT_SECRET="$(openssl rand -hex 32)" -e MASTER_KEY_ACTIVE="$(openssl rand -hex 32)" \
             -e MASTER_KEY_ACTIVE_ID=ci -e ACCOUNT_LOOKUP_PEPPER="$(openssl rand -hex 32)" -e DB_PASSWORD="$(openssl rand -hex 16)" \
-            -e DB_HOST=127.0.0.1 noaddx-backend:${{ matrix.engine }} 2>&1 | grep -q 'self-test passed'
+            -e DB_HOST=127.0.0.1 elyrn-backend:${{ matrix.engine }} 2>&1 | grep -q 'self-test passed'

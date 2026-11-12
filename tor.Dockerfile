@@ -1,4 +1,4 @@
-# Publishes noaddx. as a Tor onion service (make onion). tor runs unprivileged and connects only
+# Publishes elyrn. as a Tor onion service (make onion). tor runs unprivileged and connects only
 # to nginx's onion listener; the service identity key lives in the tor_data volume.
 FROM debian:trixie-slim
 

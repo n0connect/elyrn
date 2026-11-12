@@ -22,7 +22,8 @@ Non-goals: moderation (kicking a member), editing a room's limits after creation
 ## The Room Code
 
 ```text
-code = "noaddx#" || base64url( S (32) || max_members (1) || expires_hour (4, big-endian) )
+code = "elyrn#" || base64url( S (32) || max_members (1) || expires_hour (4, big-endian) )
+(codes made before the rename carry "noaddx#" and are still accepted)
 ```
 
 - `S` is 32 bytes from the creator's platform CSPRNG (`crypto.getRandomValues`). It is the room's only secret.

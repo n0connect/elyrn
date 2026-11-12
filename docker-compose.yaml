@@ -1,9 +1,10 @@
+# The project name keys the volumes (the Postgres data, the onion key): kept as "noaddx" across the rename to elyrn.
 name: noaddx
 
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: noaddx-postgres
+    container_name: elyrn-postgres
     security_opt:
       - no-new-privileges:true
     environment:
@@ -31,8 +32,8 @@ services:
       args:
         # Crypto engine compiled in: openssl (default) or native; both are byte-for-byte equivalent
         ENGINE: ${ENGINE:-openssl}
-    image: noaddx-backend:${ENGINE:-openssl}
-    container_name: noaddx-backend
+    image: elyrn-backend:${ENGINE:-openssl}
+    container_name: elyrn-backend
     # Static binary running as a non-root user: nothing to write, no capabilities needed
     read_only: true
     cap_drop:
@@ -117,7 +118,7 @@ services:
     build:
       context: .
       dockerfile: dev.frontend.Dockerfile
-    container_name: noaddx-frontend
+    container_name: elyrn-frontend
     security_opt:
       - no-new-privileges:true
     environment:
@@ -141,8 +142,8 @@ services:
     build:
       context: .
       dockerfile: tor.Dockerfile
-    image: noaddx-tor
-    container_name: noaddx-tor
+    image: elyrn-tor
+    container_name: elyrn-tor
     read_only: true
     cap_drop:
       - ALL

@@ -6,7 +6,7 @@ This guide provides deep, situation-aware setup instructions across **macOS (App
 
 ## Hardware & Architecture Overview
 
-`noaddx.` is engineered to be portable and lightweight:
+`elyrn.` is engineered to be portable and lightweight:
 - **Backend:** Go 1.26+ with one of two byte-for-byte equivalent crypto engines: OpenSSL 3.5 LTS through cgo (default) or the Go standard library (`ENGINE=native`, `CGO_ENABLED=0`); the image builds a stripped, reproducible static binary and runs it as an unprivileged user.
 - **Frontend:** Vanilla modern JavaScript using the native W3C WebCrypto API (no webpack, no npm bundle dependencies for runtime).
 - **Docker Images:** `golang:1.27.3-bookworm` (build), `debian:bookworm-slim`, `postgres:15-alpine` and `nginx:1.30-alpine` have official multi-architecture support for both `linux/amd64` and `linux/arm64`.
@@ -28,7 +28,7 @@ Docker builds need nothing else: the OpenSSL engine compiles inside the image ag
 
 ### Docker Desktop on macOS
 - Ensure Docker Desktop is running.
-- **Apple Silicon Tip:** In Docker Desktop Settings -> *General*, ensure **"Use Rosetta for x86/amd64 emulation on Apple Silicon"** is enabled if cross-compiling, but for `noaddx.`, let Docker build natively for `linux/arm64` (fastest compilation and execution).
+- **Apple Silicon Tip:** In Docker Desktop Settings -> *General*, ensure **"Use Rosetta for x86/amd64 emulation on Apple Silicon"** is enabled if cross-compiling, but for `elyrn.`, let Docker build natively for `linux/arm64` (fastest compilation and execution).
 
 ---
 
@@ -81,7 +81,7 @@ docker ps
 
 ## Windows 10 / 11 Installation (via WSL2)
 
-`noaddx.` relies on a standard Makefile, Linux-targeted Docker images, and Unix socket conventions. **Running directly on native Windows PowerShell/CMD is not supported; you MUST use WSL2.**
+`elyrn.` relies on a standard Makefile, Linux-targeted Docker images, and Unix socket conventions. **Running directly on native Windows PowerShell/CMD is not supported; you MUST use WSL2.**
 
 ### The CRLF vs. LF Line-Ending Trap
 
@@ -128,7 +128,7 @@ bash: \r: invalid command
 
 ## Memory Sizing & VPS Optimization (Argon2id)
 
-`noaddx.` uses memory-hard Argon2id key derivation on the server to protect derived auth keys:
+`elyrn.` uses memory-hard Argon2id key derivation on the server to protect derived auth keys:
 - **Default configuration:** `ARGON2_MEMORY_KIB=65536` (64 MiB per hash), `ARGON2_PARALLELISM=2` (or `4`).
 - **RAM Impact:** Each concurrent registration or login attempt allocates approximately **64-128 MiB of RAM** during the ~200ms calculation.
 

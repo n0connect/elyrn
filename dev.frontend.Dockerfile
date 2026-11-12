@@ -8,7 +8,7 @@ RUN find /usr/share/nginx/html -type d -exec chmod 755 {} + \
 # The image's entrypoint renders the template (${TOR_IP}) into conf.d/default.conf at start;
 # an unset TOR_IP leaves an invalid allow rule and nginx refuses to start
 COPY nginx.conf /etc/nginx/templates/default.conf.template
-COPY nginx-site.conf /etc/nginx/noaddx/site.conf
+COPY nginx-site.conf /etc/nginx/elyrn/site.conf
 
 EXPOSE 80 8081
 

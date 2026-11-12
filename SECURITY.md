@@ -1,6 +1,6 @@
 # Security Policy
 
-noaddx. exists to protect people who need it to; security reports are the most valuable
+elyrn. exists to protect people who need it to; security reports are the most valuable
 contribution this project can receive.
 
 ## Reporting a Vulnerability
@@ -15,7 +15,7 @@ changelog if you want it. Please allow a fix to ship before publishing details.
 
 ## Supported Versions
 
-Only the latest commit on `main` is supported. noaddx. is pre-release (`1.0-dev`): stored data
+Only the latest commit on `main` is supported. elyrn. is pre-release (`1.0-dev`): stored data
 formats and protocol labels may change, and fixes are not backported.
 
 ## Scope

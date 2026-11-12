@@ -1,11 +1,11 @@
 name: release
 
-# make release pushes noaddx-{openssl,native}-vX.Y.Z; each tag gets a release carrying the
+# make release pushes elyrn-{openssl,native}-vX.Y.Z; each tag gets a release carrying the
 # frontend manifest and its Sigstore signature, so anyone can check that an instance serves
 # exactly the released client (docs/security/verifying-the-client.md).
 on:
   push:
-    tags: ['noaddx-openssl-v*', 'noaddx-native-v*']
+    tags: ['elyrn-openssl-v*', 'elyrn-native-v*']
 
 permissions: {}
 

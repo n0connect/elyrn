@@ -21,8 +21,8 @@ COPY backend/ .
 
 # Reproducible, stripped binary (RULES.md §14.1); the engine is fixed at compile time
 RUN case "$ENGINE" in \
-      openssl) CGO_ENABLED=1 go build -tags openssl -trimpath -buildvcs=false -ldflags="-s -w" -o /out/noaddx ./cmd/server ;; \
-      native)  CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/noaddx ./cmd/server ;; \
+      openssl) CGO_ENABLED=1 go build -tags openssl -trimpath -buildvcs=false -ldflags="-s -w" -o /out/elyrn ./cmd/server ;; \
+      native)  CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/elyrn ./cmd/server ;; \
       *) echo "ENGINE must be openssl or native (got '$ENGINE')" >&2; exit 1 ;; \
     esac
 
@@ -33,14 +33,14 @@ ARG ENGINE
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates wget $([ "$ENGINE" = openssl ] && echo libssl3t64) \
   && rm -rf /var/lib/apt/lists/* \
-  && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin noaddx
+  && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin elyrn
 
-COPY --from=builder /out/noaddx /usr/local/bin/noaddx
+COPY --from=builder /out/elyrn /usr/local/bin/elyrn
 
-LABEL org.opencontainers.image.title="noaddx backend" \
-      noaddx.crypto-engine="${ENGINE}"
+LABEL org.opencontainers.image.title="elyrn backend" \
+      elyrn.crypto-engine="${ENGINE}"
 
 USER 10001:10001
 EXPOSE 8080
 
-CMD ["/usr/local/bin/noaddx"]
+CMD ["/usr/local/bin/elyrn"]

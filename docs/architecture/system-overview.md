@@ -1,6 +1,6 @@
 # System Architecture
 
-`noaddx.` is an anonymous, end-to-end encrypted messaging system designed from the ground up to minimize stored metadata, eliminate recoverable identifiers, and protect against curious database operators, data breaches, and active network eavesdroppers.
+`elyrn.` is an anonymous, end-to-end encrypted messaging system designed from the ground up to minimize stored metadata, eliminate recoverable identifiers, and protect against curious database operators, data breaches, and active network eavesdroppers.
 
 ---
 
@@ -93,7 +93,7 @@ Alice (Creator)                           Server                               B
   |                                         |                                    |
   | Alice computes code:                    |                                    |
   | fp = SHA256("noaddx/invite-fp" || token || alicePub)[0:16]                |
-  | code = "noaddx:" + b64url(token || fp)                                    |
+  | code = "elyrn:" + b64url(token || fp)  (legacy "noaddx:" accepted)      |
   |                                         |                                    |
   | -- Transmitted out-of-band (Signal, Paper, In-Person) ---------------------->|
   |                                         |                                    |
@@ -154,7 +154,7 @@ AAD = "NADM" (4 bytes)
 
 ## Database Design & Graph Isolation
 
-`noaddx.` enforces strict relational isolation so that a database leak reveals minimal structural intelligence.
+`elyrn.` enforces strict relational isolation so that a database leak reveals minimal structural intelligence.
 
 ```text
                       +----------------------+

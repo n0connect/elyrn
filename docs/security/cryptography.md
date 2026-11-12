@@ -1,6 +1,11 @@
 # Cryptography Specification
 
-This document details the exact cryptographic standards, key derivation functions, wire framing, and authenticated encryption employed by **noaddx.**
+This document details the exact cryptographic standards, key derivation functions, wire framing, and authenticated encryption employed by **elyrn.**
+
+The project was called noaddx. before; `noaddx` remains the protocol namespace. Every HKDF salt
+and info label (`noaddx.v1`, `noaddx/...`), every hash prefix and the stored names keep it and
+never change, so keys and records made before the rename stay valid. Only the code prefixes the
+app emits changed (`elyrn:`, `elyrn#`); `noaddx:` and `noaddx#` codes are still accepted.
 
 ---
 
@@ -150,7 +155,8 @@ Rooms ([design](../architecture/rooms.md)) use the same primitives and frame pad
 ### 1. From the room code
 
 ```text
-code = "noaddx#" || base64url( S (32 random bytes) || max_members (1) || expires_hour (4, big-endian) )
+code = "elyrn#" || base64url( S (32 random bytes) || max_members (1) || expires_hour (4, big-endian) )
+(codes made before the rename carry "noaddx#" and are still accepted)
 
 room id  = UUIDv4 bits over HKDF(S, salt "noaddx.v1", info "noaddx/room/id",     16)
 lookup   =                  HKDF(S, salt "noaddx.v1", info "noaddx/room/lookup", 32)   → server stores HMAC(pepper, lookup)
@@ -227,7 +233,7 @@ The solution is valid if and only if `hash` contains at least `Difficulty` leadi
 
 ## Visual Identity Verification (Aura & Safety Numbers)
 
-Because users have no usernames, `noaddx.` provides two symmetric, deterministic verification mechanisms:
+Because users have no usernames, `elyrn.` provides two symmetric, deterministic verification mechanisms:
 
 1. **Aura (`frontend/js/utils.js`):**
    - A friendly adjective-noun combination (e.g., *"Amber Fox"*, *"Quiet Orbit"*) + a symmetric 5x5 pixel SVG glyph.

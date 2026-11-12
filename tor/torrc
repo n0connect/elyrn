@@ -1,10 +1,11 @@
-# noaddx. onion service (tor >= 0.4.8). This tor only publishes the service: it offers no
+# elyrn. onion service (tor >= 0.4.8). This tor only publishes the service: it offers no
 # SOCKS proxy and relays no traffic for others.
 SocksPort 0
 DataDirectory /var/lib/tor
 # notice level never includes client data (an onion service never learns client addresses)
 Log notice stdout
 
+# The key directory is kept as "noaddx" across the rename to elyrn: moving it would change the onion address.
 HiddenServiceDir /var/lib/tor/noaddx
 HiddenServiceVersion 3
 # Every connection reaches nginx's onion listener prefixed with a PROXY header whose source

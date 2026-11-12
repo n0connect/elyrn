@@ -1,5 +1,5 @@
 # ==============================================================================
-# noaddx. Makefile
+# elyrn. Makefile
 # ==============================================================================
 
 SHELL := /bin/bash
@@ -24,7 +24,8 @@ GO_TAGS_native :=
 CGO_openssl := 1
 CGO_native := 0
 
-# Release tags: noaddx-<engine>-vX.Y.Z on main; noaddx-<engine>-dev follow noaddx-dev
+# Release tags: elyrn-<engine>-vX.Y.Z on main; elyrn-<engine>-dev follow noaddx-dev
+# The branch, the onion key directory and the database names are kept as "noaddx" across the rename to elyrn.
 DEV_BRANCH := noaddx-dev
 RELEASE_BRANCH := main
 COMPOSE_ENV := ENGINE=$(ENGINE)
@@ -43,7 +44,7 @@ MANIFEST ?= frontend.sha256
 ## -----------------------------------------------------------------------------
 
 help:
-	@echo "noaddx. build system"
+	@echo "elyrn. build system"
 	@echo "======================"
 	@echo "Usage: make [target]"
 	@echo ""
@@ -72,9 +73,9 @@ help:
 	@echo "  test-db       Run Go database and integration tests (requires local PostgreSQL)"
 	@echo ""
 	@echo "Release Targets:"
-	@echo "  build-ref     Build the backend image of any tag or commit: make build-ref REF=noaddx-openssl-v1.0.0"
-	@echo "  tag-dev       Test both engines, then move noaddx-{openssl,native}-dev to $(DEV_BRANCH) HEAD"
-	@echo "  release       Test both engines on $(RELEASE_BRANCH), tag noaddx-{openssl,native}-VERSION: make release VERSION=v1.0.0"
+	@echo "  build-ref     Build the backend image of any tag or commit: make build-ref REF=elyrn-openssl-v1.0.0"
+	@echo "  tag-dev       Test both engines, then move elyrn-{openssl,native}-dev to $(DEV_BRANCH) HEAD"
+	@echo "  release       Test both engines on $(RELEASE_BRANCH), tag elyrn-{openssl,native}-VERSION: make release VERSION=v1.0.0"
 	@echo "  manifest      Write $(MANIFEST): SHA-256 of every file the frontend serves (signed in each release)"
 	@echo "  verify-frontend  Check an instance serves exactly $(MANIFEST): make verify-frontend URL=https://host"
 	@echo ""
@@ -150,7 +151,7 @@ onion: check-docker $(ENV_FILE)
 	@echo "     make onion-address"
 
 onion-address:
-	@docker exec noaddx-tor cat /var/lib/tor/noaddx/hostname 2>/dev/null \
+	@docker exec elyrn-tor cat /var/lib/tor/noaddx/hostname 2>/dev/null \
 		|| echo "[INFO] Not published yet: run make onion, then retry in a minute"
 
 start: up
@@ -176,7 +177,7 @@ clean:
 	@echo "[INFO] Cleaning containers, volumes and test artifacts..."
 	@$(DOCKER_COMPOSE) -f docker-compose.test.yaml down -v --rmi local 2>/dev/null || true
 	@$(COMPOSE_ALL) down -v --rmi local 2>/dev/null || true
-	@docker images --filter "reference=*noaddx*" -q | xargs docker rmi -f 2>/dev/null || true
+	@docker images --filter "reference=*elyrn*" -q | xargs docker rmi -f 2>/dev/null || true
 	@rm -rf test-results
 	@echo "[OK] Clean complete"
 
@@ -239,34 +240,34 @@ test-db:
 ## -----------------------------------------------------------------------------
 
 # Builds the backend image of any tag or commit from git history (not the working tree).
-# The engine follows the tag name (noaddx-openssl-* / noaddx-native-*) unless ENGINE is given.
+# The engine follows the tag name (elyrn-openssl-* / elyrn-native-*) unless ENGINE is given.
 build-ref: check-docker
 	@if [ -z "$(REF)" ]; then echo "[ERROR] usage: make build-ref REF=<tag|commit> [ENGINE=openssl|native]"; exit 1; fi
 	@git rev-parse --verify --quiet "$(REF)^{commit}" >/dev/null || { echo "[ERROR] unknown ref: $(REF)"; exit 1; }
 	@engine="$(ENGINE)"; \
-	case "$(REF)" in noaddx-openssl-*) engine=openssl ;; noaddx-native-*) engine=native ;; esac; \
+	case "$(REF)" in elyrn-openssl-*) engine=openssl ;; elyrn-native-*) engine=native ;; esac; \
 	if [ "$(origin ENGINE)" = "command line" ] && [ "$$engine" != "$(ENGINE)" ]; then \
 		echo "[ERROR] REF $(REF) is a $$engine release; drop ENGINE or pick a matching tag"; exit 1; fi; \
 	echo "[INFO] Building $(REF) ($$(git rev-parse --short "$(REF)^{commit}")) with the $$engine engine..."; \
 	git archive --format=tar "$(REF)" | docker build --build-arg ENGINE=$$engine -f dev.backend.Dockerfile \
-		-t "noaddx-backend:$$(echo '$(REF)' | tr '/:' '--')" - && \
-	echo "[OK] Image: noaddx-backend:$$(echo '$(REF)' | tr '/:' '--')"
+		-t "elyrn-backend:$$(echo '$(REF)' | tr '/:' '--')" - && \
+	echo "[OK] Image: elyrn-backend:$$(echo '$(REF)' | tr '/:' '--')"
 
 # Moves the dev tags to the tested HEAD of the dev branch (both engines must pass first)
 tag-dev: check-clean-branch-dev test-engines
-	@for engine in $(ENGINES); do git tag -f -a "noaddx-$$engine-dev" -m "noaddx. $$engine engine, development build ($$(git rev-parse --short HEAD))" HEAD >/dev/null; done
-	@git push -f origin $(foreach e,$(ENGINES),refs/tags/noaddx-$(e)-dev)
-	@echo "[OK] noaddx-openssl-dev and noaddx-native-dev -> $$(git rev-parse --short HEAD)"
+	@for engine in $(ENGINES); do git tag -f -a "elyrn-$$engine-dev" -m "elyrn. $$engine engine, development build ($$(git rev-parse --short HEAD))" HEAD >/dev/null; done
+	@git push -f origin $(foreach e,$(ENGINES),refs/tags/elyrn-$(e)-dev)
+	@echo "[OK] elyrn-openssl-dev and elyrn-native-dev -> $$(git rev-parse --short HEAD)"
 
 # Tags one tested commit of the release branch for both engines: make release VERSION=v1.0.0
 release: check-clean-branch-release test-engines
 	@if ! echo "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$'; then echo "[ERROR] VERSION must look like v1.2.3"; exit 1; fi
 	@for engine in $(ENGINES); do \
-		if git rev-parse -q --verify "refs/tags/noaddx-$$engine-$(VERSION)" >/dev/null; then echo "[ERROR] noaddx-$$engine-$(VERSION) exists"; exit 1; fi; \
+		if git rev-parse -q --verify "refs/tags/elyrn-$$engine-$(VERSION)" >/dev/null; then echo "[ERROR] elyrn-$$engine-$(VERSION) exists"; exit 1; fi; \
 	done
-	@for engine in $(ENGINES); do git tag -a "noaddx-$$engine-$(VERSION)" -m "noaddx. $(VERSION) ($$engine crypto engine)" HEAD; done
-	@git push origin $(foreach e,$(ENGINES),refs/tags/noaddx-$(e)-$(VERSION))
-	@echo "[OK] Released $(VERSION): $(foreach e,$(ENGINES),noaddx-$(e)-$(VERSION))"
+	@for engine in $(ENGINES); do git tag -a "elyrn-$$engine-$(VERSION)" -m "elyrn. $(VERSION) ($$engine crypto engine)" HEAD; done
+	@git push origin $(foreach e,$(ENGINES),refs/tags/elyrn-$(e)-$(VERSION))
+	@echo "[OK] Released $(VERSION): $(foreach e,$(ENGINES),elyrn-$(e)-$(VERSION))"
 
 check-clean-branch-dev:
 	@[ "$$(git rev-parse --abbrev-ref HEAD)" = "$(DEV_BRANCH)" ] || { echo "[ERROR] check out $(DEV_BRANCH) first"; exit 1; }

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="noaddx." width="330">
+  <img src="assets/banner.svg" alt="elyrn." width="330">
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
 
 ---
 
-**noaddx.** is a browser-based messenger built to keep as little as possible about its users: an identity is one random 256-bit account number, every message is encrypted in the browser, and the server stores only padded ciphertext and pseudonyms it cannot link across conversations. It can be published as a Tor onion service without switching off a single server-side defense.
+**elyrn.** is a browser-based messenger built to keep as little as possible about its users: an identity is one random 256-bit account number, every message is encrypted in the browser, and the server stores only padded ciphertext and pseudonyms it cannot link across conversations. It can be published as a Tor onion service without switching off a single server-side defense.
 
 ## Documentation
 
@@ -96,7 +96,7 @@ Alice (Creator)                         Server                                  
   | POST /api/v2/invites {pow} --------> | stores HMAC(token) +                   |
   |                                      | AES-GCM(creator_uuid, master_key)      |
   |<---------------------------- token   |                                        |
-  | code = "noaddx:" + b64url(token || SHA-256("noaddx/invite-fp" || token || alicePub)[0:16])
+  | code = "elyrn:" + b64url(token || SHA-256("noaddx/invite-fp" || token || alicePub)[0:16])
   | ---------------- out of band (Signal, paper, in person) --------------------->|
   |                                      | <----------------- POST /api/v2/invites/redeem {token}
   |                                      | atomically deletes invite, creates conversation
@@ -107,7 +107,7 @@ Alice (Creator)                         Server                                  
 
 The fingerprint never touches the server. Because it binds to the single-use token, two invites created by the same person share no bytes. Every invite costs a fresh, single-use proof of work.
 
-**Rooms** work without pairing: a room code (`noaddx#…`) carries a secret from which the room id, a lookup (the only value the server sees, stored as an HMAC) and a card key are derived. Members announce per-room keys in cards only code holders can make; every message has its own key, wrapped for each member with `X25519(ephemeral, R) || X25519(sender, R)` so the wrap also proves the sender. Details: [Rooms](docs/architecture/rooms.md), [Cryptography](docs/security/cryptography.md#room-messaging-encryption).
+**Rooms** work without pairing: a room code (`elyrn#…`) carries a secret from which the room id, a lookup (the only value the server sees, stored as an HMAC) and a card key are derived. Members announce per-room keys in cards only code holders can make; every message has its own key, wrapped for each member with `X25519(ephemeral, R) || X25519(sender, R)` so the wrap also proves the sender. Details: [Rooms](docs/architecture/rooms.md), [Cryptography](docs/security/cryptography.md#room-messaging-encryption).
 
 ### 3. Message Framing & AAD Binding
 
@@ -169,9 +169,9 @@ make test-all     # Run both Go unit tests and frontend crypto tests
 make test-db      # Database + integration tests against a local PostgreSQL (TEST_DB_* overrides)
 
 # Releases (both engines are tested first)
-make release VERSION=v1.0.0           # on main: tags noaddx-openssl-v1.0.0 and noaddx-native-v1.0.0
-make tag-dev                          # on noaddx-dev: moves noaddx-openssl-dev / noaddx-native-dev
-make build-ref REF=noaddx-native-v1.0.0  # build the image of any tag or commit
+make release VERSION=v1.0.0           # on main: tags elyrn-openssl-v1.0.0 and elyrn-native-v1.0.0
+make tag-dev                          # on noaddx-dev: moves elyrn-openssl-dev / elyrn-native-dev
+make build-ref REF=elyrn-native-v1.0.0  # build the image of any tag or commit
 
 # Verifying a deployment
 make manifest                         # SHA-256 of every served frontend file (signed in each release)
@@ -202,10 +202,10 @@ make backup-accounts                  # accounts only (never messages) to backup
 
 ## License
 
-noaddx. is free software under the [GNU Affero General Public License v3.0](LICENSE). Run a modified version as a network service, and you must offer its users the source.
+elyrn. is free software under the [GNU Affero General Public License v3.0](LICENSE). Run a modified version as a network service, and you must offer its users the source.
 
 <br>
 
 <p align="center">
-  <sub><b>noaddx.</b> · no email · no phone · no address</sub>
+  <sub><b>elyrn.</b> · no email · no phone · no address</sub>
 </p>

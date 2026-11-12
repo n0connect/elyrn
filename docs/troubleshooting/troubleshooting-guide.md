@@ -87,7 +87,7 @@ git config --global core.autocrlf input
 ### Symptom
 Running `make up` fails during Docker startup:
 ```text
-Error response from daemon: driver failed programming external connectivity on endpoint noaddx-frontend:
+Error response from daemon: driver failed programming external connectivity on endpoint elyrn-frontend:
 Bind for 0.0.0.0:80 failed: port is already allocated
 ```
 
@@ -121,7 +121,7 @@ Another web server (Nginx, Apache, IIS) or database server (local PostgreSQL) is
 ## 5. Docker Backend Database Connection Failure
 
 ### Symptom
-The `noaddx-backend` container restarts repeatedly. Logs show:
+The `elyrn-backend` container restarts repeatedly. Logs show:
 ```text
 failed to connect to `host=localhost user=postgres database=noaddx`: dial tcp 127.0.0.1:5432: connect: connection refused
 ```
@@ -185,7 +185,7 @@ In this mode, `keystore.js` keeps private keys in volatile memory only.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `make onion-address` says *Not published yet* | tor is still bootstrapping into the Tor network (about a minute on first start). | Wait, then retry; `docker logs noaddx-tor` must show `Bootstrapped 100%`. |
+| `make onion-address` says *Not published yet* | tor is still bootstrapping into the Tor network (about a minute on first start). | Wait, then retry; `docker logs elyrn-tor` must show `Bootstrapped 100%`. |
 | Tor Browser shows the page, but **new identity** / **login** does nothing | JavaScript is off ("Safest" security level) or Tor Browser is older than 15 (no X25519 in WebCrypto). | Security level **Standard**; update Tor Browser. |
 | `nginx: [emerg] invalid parameter "${TOR_IP}"` | The frontend image was started without `TOR_IP` (outside compose). | Set `TOR_IP` (compose defaults it to `172.29.73.11`); nginx refuses to start rather than open the onion port to anyone. |
 | Every onion request answers `403` | The connection does not come from the tor container: `TOR_IP` differs from the tor container's address. | Keep `TOR_IP` and the tor service's `ipv4_address` equal (both come from `.env`). |
@@ -219,7 +219,7 @@ The server listed a room whose vault does not open for this account, or whose me
 The roster lacked this member's own card, listed more members than the code allows, or attributed a card wrongly. Nothing is encrypted for such a list. Reload; if it persists, the server is tampering with the room.
 
 ### "no such room — the code is wrong, or the room expired or was burned"
-The server answers a wrong code, an unknown room and an expired room the same way (`404`), so it cannot tell you which. Check the code was copied whole (57 characters starting with `noaddx#`); a room also stops answering at the hour its code names.
+The server answers a wrong code, an unknown room and an expired room the same way (`404`), so it cannot tell you which. Check the code was copied whole (56 characters starting with `elyrn#`, or 57 for an older `noaddx#` code); a room also stops answering at the hour its code names.
 
 ### A message to a room is not sent and the member list changes
 Someone joined or left between fetching the member list and sending (`412`). The browser fetches the list again and re-encrypts under the same message id, twice at most. If it still fails the room is changing faster than that; send again.

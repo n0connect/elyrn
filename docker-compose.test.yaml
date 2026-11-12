@@ -1,12 +1,13 @@
 # docker-compose.test.yaml - Test environment
 # Usage: make test
 
+# Project and database names are kept as "noaddx" across the rename to elyrn.
 name: noaddx-test
 
 services:
   postgres-test:
     image: postgres:15-alpine
-    container_name: noaddx-postgres-test
+    container_name: elyrn-postgres-test
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -25,8 +26,8 @@ services:
       dockerfile: test.Dockerfile
       args:
         ENGINE: ${ENGINE:-openssl}
-    image: noaddx-test-runner:${ENGINE:-openssl}
-    container_name: noaddx-test-runner
+    image: elyrn-test-runner:${ENGINE:-openssl}
+    container_name: elyrn-test-runner
     depends_on:
       postgres-test:
         condition: service_healthy

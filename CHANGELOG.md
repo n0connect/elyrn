@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to noaddx. are recorded here. Security fixes are always listed explicitly
+All notable changes to elyrn. are recorded here. Security fixes are always listed explicitly
 (see [SECURITY.md](SECURITY.md)). The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
@@ -137,6 +137,11 @@ All notable changes to noaddx. are recorded here. Security fixes are always list
 
 ### Changed
 
+- The project is now **elyrn.** (formerly noaddx.): the brand, the Go module, binaries, images,
+  containers, release tags (`elyrn-openssl-*`, `elyrn-native-*`) and the prefixes of new codes
+  (`elyrn:` invites, `elyrn#` rooms). Stored and wire names do not change (the `noaddx` HKDF
+  labels, the IndexedDB and database names, the development cookie), so identities, rooms and
+  sessions carry over, and `noaddx:` and `noaddx#` codes are still accepted.
 - The retention run purges every five minutes instead of hourly, so expired rooms do not linger.
 - nginx revalidates the page and its assets on every load (`Cache-Control: no-cache`, mostly
   `304`): with a one-hour cache, browsers ran a new page with old scripts after an upgrade.

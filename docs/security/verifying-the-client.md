@@ -1,13 +1,13 @@
 # Verifying the Client
 
-All of noaddx.'s cryptography runs in JavaScript that the server sends to the browser. A
+All of elyrn.'s cryptography runs in JavaScript that the server sends to the browser. A
 compromised or coerced server could send a different script and read everything, so "the
 server never sees plaintext" holds only if the served client is the released one. Every
 release lets anyone check that, without trusting the server or its operator.
 
 ## What a release carries
 
-The release workflow (`.github/workflows/release.yml`) runs on each `noaddx-*-vX.Y.Z` tag and
+The release workflow (`.github/workflows/release.yml`) runs on each `elyrn-*-vX.Y.Z` tag and
 attaches two files:
 
 | File | Contents |
@@ -25,7 +25,7 @@ identity and recorded in Sigstore's public transparency log.
 
    ```bash
    cosign verify-blob --bundle frontend.sha256.sigstore.json \
-     --certificate-identity-regexp '^https://github\.com/n0connect/noaddx/\.github/workflows/release\.yml@refs/tags/noaddx-' \
+     --certificate-identity-regexp '^https://github\.com/n0connect/noaddx/\.github/workflows/release\.yml@refs/tags/elyrn-' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
      frontend.sha256
    ```
