@@ -21,7 +21,7 @@ function copyToClipboard(text) {
         try {
             document.execCommand('copy');
         } catch (error) {
-            console.error('Failed to copy text:', error);
+            Log.error(Errors.INTERNAL.E_CLIPBOARD_FALLBACK_FAILED, error);
         } finally {
             textArea.remove();
         }
@@ -29,72 +29,11 @@ function copyToClipboard(text) {
 }
 
 // ========================================
-// ERROR MAPPING (SECURITY: Prevent information leakage)
-// ========================================
-
-// Map API error messages to generic user-facing messages
-// SECURITY: Never show raw API error messages to users
-const USER_ERROR_MESSAGES = {
-    // Authentication errors
-    'Invalid credentials': 'Invalid credentials',
-    'Unauthorized': 'Unauthorized',
-    'Invalid request': 'Invalid request',
-    'Pending token required': 'Invalid request',
-    
-    // Generic errors
-    'Internal server error': 'Internal server error',
-    'Method not allowed': 'Method not allowed',
-    'Not found': 'Invalid request',
-    'Too many requests': 'Too many requests',
-    'Service unavailable': 'Service unavailable',
-    'Forbidden': 'Forbidden',
-    'Unsupported Media Type': 'Invalid request',
-    
-    // Default fallback
-    'default': 'Request failed'
-};
-
-// Get user-friendly error message from API response
-// SECURITY: Always returns generic message, never leaks internal details
-function getUserFriendlyError(apiMessage, statusCode) {
-    if (!apiMessage) {
-        // Map by status code if no message
-        switch(statusCode) {
-            case 400: return 'Invalid request';
-            case 401: return 'Unauthorized';
-            case 403: return 'Forbidden';
-            case 404: return 'Invalid request';
-            case 429: return 'Too many requests';
-            case 500: return 'Internal server error';
-            default: return USER_ERROR_MESSAGES.default;
-        }
-    }
-    
-    // Normalize message (case-insensitive, trim whitespace)
-    const normalized = apiMessage.trim();
-    
-    // Check exact match first
-    if (USER_ERROR_MESSAGES[normalized]) {
-        return USER_ERROR_MESSAGES[normalized];
-    }
-    
-    // Check case-insensitive match
-    for (const [key, value] of Object.entries(USER_ERROR_MESSAGES)) {
-        if (key.toLowerCase() === normalized.toLowerCase()) {
-            return value;
-        }
-    }
-    
-    // Default fallback - never show raw API message
-    return USER_ERROR_MESSAGES.default;
-}
-
-// ========================================
 // ERROR HANDLING & STATUS PAGE REDIRECTS
 // ========================================
 
 // Handle error responses and redirect to appropriate status pages
-async function handleErrorResponse(response, context = '') {
+async function handleErrorResponse(response) {
     const status = response.status;
     
     // Determine redirect URL first (before reading body)
@@ -138,12 +77,8 @@ async function handleErrorResponse(response, context = '') {
         
         default:
             // Unknown errors - show general error message
-            // SECURITY: Never show status code to user
-            if (typeof showError === 'function') {
-                showError('Request failed');
-            } else {
-                console.error(`Unexpected error (${status}):`, context);
-            }
+            // SECURITY: Never show status code to user (the log keeps it)
+            Errors.report(Errors.CODES.E_REQUEST_FAILED, null, { status: status });
             return; // No redirect for unknown errors
     }
     
@@ -178,14 +113,14 @@ async function fetchWithErrorHandling(url, options = {}) {
         const response = await fetch(url, fetchOptions);
 
         if (!response.ok) {
-            await handleErrorResponse(response, url);
+            await handleErrorResponse(response);
             return null; // Return null on error to prevent further processing
         }
 
         return response;
     } catch (error) {
         // Network error - redirect to 500 error page immediately
-        console.error('Network error:', error);
+        Log.error(Errors.INTERNAL.E_NETWORK_UNREACHABLE, error);
         window.location.replace('/9a24ed32-d32d-4b4b-a70e-a0bfd39f6710.html');
         return null;
     }

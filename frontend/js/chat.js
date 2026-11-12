@@ -16,7 +16,6 @@ const Chat = (() => {
     const MAX_CIPHERTEXT_CHARS = 11000;
     // A roster can change between fetching it and sending (412): fetch, re-encrypt, retry, bounded
     const MAX_ROSTER_RETRIES = 2;
-    const LOOKALIKE_WARNING = 'two members share a name — tell them apart by glyph and code';
 
     let me = null;                    // { privateKey, publicKey, roomsRoot, aura, ttlDays, limits }
     const conversations = new Map();  // id -> conversation state
@@ -48,7 +47,7 @@ const Chat = (() => {
         if (!me) return;
         stop();
         Keystore.wipe();
-        showWarning('session ended — log in again');
+        Errors.report(Errors.CODES.W_SESSION_ENDED);
         showLogin();
     }
 
@@ -158,7 +157,7 @@ const Chat = (() => {
         const result = await api('GET', '/conversations');
         if (!me) return;
         if (!result.ok || !result.data || !Array.isArray(result.data.conversations)) {
-            if (result.status !== 401) showError('could not load conversations');
+            if (result.status !== 401) Errors.report(Errors.CODES.E_CONVERSATIONS_NOT_LOADED, null, result);
             return;
         }
 
@@ -186,7 +185,7 @@ const Chat = (() => {
                 // A conversation's kind, peer key and room code can never change; treat as tampering
                 if (isRoom !== Boolean(existing.room) ||
                     (isRoom ? !Rooms.refreshView(existing.room, item) : existing.peerPublicKey !== item.peer_public_key)) {
-                    showError(isRoom ? 'room data changed unexpectedly — room hidden' : 'peer key changed unexpectedly — conversation hidden');
+                    Errors.report(isRoom ? Errors.CODES.E_ROOM_DATA_CHANGED : Errors.CODES.E_PEER_KEY_CHANGED);
                     conversations.delete(item.id);
                     continue;
                 }
@@ -208,7 +207,7 @@ const Chat = (() => {
                 if (activeId === id) {
                     activeId = null;
                     showHome();
-                    showWarning(gone.room ? 'this room is gone — burned or expired' : 'this conversation was burned');
+                    Errors.report(gone.room ? Errors.CODES.W_ROOM_GONE : Errors.CODES.W_CONVERSATION_BURNED);
                 }
             }
         }
@@ -261,7 +260,7 @@ const Chat = (() => {
             const seen = item.id + ' ' + (item.room && item.room.vault);
             if (!rejectedRooms.has(seen)) {
                 rejectedRooms.add(seen);
-                showError('a room failed verification against its code — hidden');
+                Errors.report(Errors.CODES.E_ROOM_UNVERIFIED, null, e);
             }
             return null;
         }
@@ -327,7 +326,7 @@ const Chat = (() => {
             return;
         }
         if (!result.ok || !result.data || !Array.isArray(result.data.messages)) {
-            showError('could not load messages');
+            Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
             return;
         }
         conv.loaded = true;
@@ -426,12 +425,12 @@ const Chat = (() => {
 
         const validation = validateMessageText(input.value);
         if (!validation.valid) {
-            if (input.value.trim() !== '') showError(validation.error);
+            if (input.value.trim() !== '') Errors.report(validation.error, validation.params);
             return;
         }
 
         if (conv.room && Rooms.expired(conv.room)) {
-            showWarning('this room has expired');
+            Errors.report(Errors.CODES.W_ROOM_EXPIRED);
             return;
         }
         if (conv.room && !conv.room.roster && !(await loadRoster(conv))) return;
@@ -468,14 +467,14 @@ const Chat = (() => {
                 bump(conv.id);
                 await sync(conv);
             } else if (result.status === 429) {
-                showWarning('slow down — too many messages');
+                Errors.report(Errors.CODES.W_MESSAGE_RATE_LIMITED);
             } else if (result.status === 404) {
                 scheduleRefresh();
             } else if (result.status !== 401) {
-                showError('message not sent');
+                Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, result);
             }
         } catch (e) {
-            showError('message not sent');
+            Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, e);
         } finally {
             sendBtn.disabled = false;
             input.focus();
@@ -498,8 +497,8 @@ const Chat = (() => {
         const issued = await api('GET', '/pow/challenge');
         if (me !== owner) return null;
         if (!issued.ok || !issued.data || !issued.data.challenge) {
-            if (issued.status === 429) showWarning('too many attempts — wait a minute');
-            else if (issued.status !== 401) showError('could not create invite');
+            if (issued.status === 429) Errors.report(Errors.CODES.W_POW_RATE_LIMITED);
+            else if (issued.status !== 401) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, issued);
             return null;
         }
         const pow = await solvePowChallenge(issued.data.challenge);
@@ -508,11 +507,11 @@ const Chat = (() => {
         const result = await api('POST', '/invites', { pow: pow });
         if (me !== owner) return null;
         if (result.status === 429) {
-            showWarning('invite limit reached — wait for one to be used or expire');
+            Errors.report(Errors.CODES.W_INVITE_LIMIT);
             return null;
         }
         if (!result.ok || !result.data || typeof result.data.token !== 'string' || !Number.isSafeInteger(result.data.expires_at)) {
-            if (result.status !== 401) showError('could not create invite');
+            if (result.status !== 401) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, result);
             return null;
         }
         try {
@@ -521,7 +520,7 @@ const Chat = (() => {
                 expiresAt: result.data.expires_at
             };
         } catch (e) {
-            showError('server returned a malformed invite');
+            Errors.report(Errors.CODES.E_INVITE_MALFORMED, null, e);
             return null;
         }
     }
@@ -537,7 +536,7 @@ const Chat = (() => {
             invite = await requestInvite(owner);
         } catch (e) {
             // The worker refused the challenge or found no solution within its budget
-            if (me === owner) showError('could not create invite');
+            if (me === owner) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, e);
         }
         if (me !== owner) return;  // stop() ended this run and put the panel away
         run.stopScramble();
@@ -556,9 +555,9 @@ const Chat = (() => {
         inviteRun = null;
         try {
             await copyToClipboard(invite.code);
-            showSuccess('invite copied');
+            showSuccess(Errors.NOTICE.INVITE_COPIED);
         } catch (e) {
-            showWarning('copy it manually');
+            Errors.report(Errors.CODES.W_COPY_MANUALLY);
         }
     }
 
@@ -567,7 +566,7 @@ const Chat = (() => {
         const input = document.getElementById('inviteInput');
         const validation = validateJoinCode(input.value);
         if (!validation.valid) {
-            showError(validation.error);
+            Errors.report(validation.error, validation.params);
             return;
         }
         const id = validation.kind === 'room' ? await joinRoom(validation.sanitized) : await redeemInvite(validation.sanitized);
@@ -582,27 +581,27 @@ const Chat = (() => {
     // conversation id, or null once the reason has been shown.
     async function redeemInvite(invite) {
         if (await ElyrnCrypto.fingerprintMatches(invite, me.publicKey)) {
-            showWarning('that is your own invite — send it to someone else');
+            Errors.report(Errors.CODES.W_OWN_INVITE);
             return null;
         }
         const result = await api('POST', '/invites/redeem', { token: invite.token });
         if (result.status === 404) {
-            showError('invite expired or already used');
+            Errors.report(Errors.CODES.E_INVITE_SPENT);
             return null;
         }
         if (result.status === 429) {
-            showWarning('too many attempts — wait a moment');
+            Errors.report(Errors.CODES.W_TOO_MANY_ATTEMPTS);
             return null;
         }
         const conv = result.data && result.data.conversation;
         if (!result.ok || !conv || !validateConversationId(conv.id) || !isPublicKey(conv.peer_public_key)) {
-            if (result.status !== 401) showError('could not join');
+            if (result.status !== 401) Errors.report(Errors.CODES.E_JOIN_FAILED, null, result);
             return null;
         }
         // The server chose which key we got; the invite code says which key we should get
         if (!(await ElyrnCrypto.fingerprintMatches(invite, conv.peer_public_key))) {
             await api('DELETE', `/conversations/${conv.id}`);
-            showError('verification FAILED: the server substituted the peer key. conversation burned.');
+            Errors.report(Errors.CODES.E_PEER_KEY_SUBSTITUTED);
             return null;
         }
         showSuccess('connected');
@@ -620,7 +619,7 @@ const Chat = (() => {
             if (e.status === 404) {
                 scheduleRefresh();
             } else if (e.status !== 401) {
-                showError('the member list failed verification — not sending to it');
+                Errors.report(Errors.CODES.E_ROSTER_UNVERIFIED, null, e);
             }
             return false;
         }
@@ -639,7 +638,7 @@ const Chat = (() => {
         if (activeId !== conv.id) return;
         const unseen = [...room.lookalikes].filter(key => !room.warned.has(key));
         unseen.forEach(key => room.warned.add(key));
-        if (unseen.length > 0) showWarning(LOOKALIKE_WARNING);
+        if (unseen.length > 0) Errors.report(Errors.CODES.W_LOOKALIKE_MEMBERS);
         markLookalikes(room.lookalikes);
     }
 
@@ -664,7 +663,7 @@ const Chat = (() => {
 
     async function joinRoom(code) {
         if (Date.now() >= code.expiresHour * 3600000) {
-            showError('this room has expired');
+            Errors.report(Errors.CODES.E_ROOM_CODE_EXPIRED);
             return null;
         }
         const result = await Rooms.join(api, me.roomsRoot, code);
@@ -673,13 +672,13 @@ const Chat = (() => {
             return result.id;
         }
         if (result.status === 404) {
-            showError('no such room — the code is wrong, or the room expired or was burned');
+            Errors.report(Errors.CODES.E_ROOM_NOT_FOUND);
         } else if (result.status === 409) {
-            showWarning('this room is full');
+            Errors.report(Errors.CODES.W_ROOM_FULL);
         } else if (result.status === 429) {
-            showWarning('too many attempts or too many conversations — wait a moment');
+            Errors.report(Errors.CODES.W_ROOM_JOIN_RATE_LIMITED);
         } else if (result.status !== 401) {
-            showError('could not join the room');
+            Errors.report(Errors.CODES.E_ROOM_JOIN_FAILED, null, result);
         }
         return null;
     }
@@ -707,9 +706,9 @@ const Chat = (() => {
         if (!created.code) {
             roomRun = null;
             resetRoomPanel();
-            if (created.status === 429) showWarning('too many rooms or attempts — wait a moment');
-            else if (created.status === 400) showError('the server refused the room — check your device clock');
-            else if (created.status !== 401) showError('could not create room');
+            if (created.status === 429) Errors.report(Errors.CODES.W_ROOM_CREATE_RATE_LIMITED);
+            else if (created.status === 400) Errors.report(Errors.CODES.E_ROOM_CLOCK_REFUSED);
+            else if (created.status !== 401) Errors.report(Errors.CODES.E_ROOM_NOT_CREATED, null, created);
             return;
         }
         await revealRoomCode(created.code, ElyrnRoomCrypto.parseRoomCode(created.code).expiresHour * 3600);
@@ -721,9 +720,9 @@ const Chat = (() => {
         scheduleRefresh();
         try {
             await copyToClipboard(created.code);
-            showSuccess('room code copied');
+            showSuccess(Errors.NOTICE.ROOM_CODE_COPIED);
         } catch (e) {
-            showWarning('copy it manually');
+            Errors.report(Errors.CODES.W_COPY_MANUALLY);
         }
     }
 
@@ -753,9 +752,9 @@ const Chat = (() => {
         if (!conv) return;
         try {
             await copyToClipboard(Rooms.codeText(conv));
-            showSuccess('room code copied');
+            showSuccess(Errors.NOTICE.ROOM_CODE_COPIED);
         } catch (e) {
-            showWarning('copy it manually');
+            Errors.report(Errors.CODES.W_COPY_MANUALLY);
         }
     }
 
@@ -773,14 +772,14 @@ const Chat = (() => {
                 conv.room.requested.add(entry.publicKey);
                 showSuccess(`friend request sent to ${entry.aura.name}`);
             } else if (result.status === 409) {
-                showWarning('you already have a request waiting with them');
+                Errors.report(Errors.CODES.W_FRIEND_REQUEST_PENDING);
             } else if (result.status === 404) {
-                showWarning('they are no longer in this room');
+                Errors.report(Errors.CODES.W_FRIEND_GONE);
             } else if (result.status !== 401) {
-                showError('friend request not sent');
+                Errors.report(Errors.CODES.E_FRIEND_REQUEST_NOT_SENT, null, result);
             }
         } catch (e) {
-            if (me === owner) showError('friend request not sent');
+            if (me === owner) Errors.report(Errors.CODES.E_FRIEND_REQUEST_NOT_SENT, null, e);
         } finally {
             friendRun = false;
             if (me === owner) await refreshRoomPanels(conv);
@@ -791,7 +790,7 @@ const Chat = (() => {
     async function acceptNote(conv, note) {
         const validation = validateInviteCode(note.invite);
         if (!validation.valid) {
-            showError('that friend request is malformed — ignored');
+            Errors.report(Errors.CODES.E_FRIEND_REQUEST_MALFORMED);
             await ignoreNote(conv, note);
             return;
         }
@@ -816,7 +815,7 @@ const Chat = (() => {
         if (!conv) return;
         const next = !conv.verified;
         if (!(await Keystore.setVerified(conv.id, conv.peerPublicKey, next))) {
-            showWarning('could not save verification on this device');
+            Errors.report(Errors.CODES.W_VERIFICATION_NOT_SAVED);
             return;
         }
         conv.verified = next;
@@ -856,7 +855,7 @@ const Chat = (() => {
             showSuccess(leaving ? 'you left the room' : 'burned');
             scheduleRefresh();
         } else if (result.status !== 401) {
-            showError(leaving ? 'could not leave the room' : 'could not burn conversation');
+            Errors.report(leaving ? Errors.CODES.E_ROOM_NOT_LEFT : Errors.CODES.E_CONVERSATION_NOT_BURNED, null, result);
         }
     }
 
@@ -892,7 +891,7 @@ const Chat = (() => {
         if (!me) return;
         const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            showWarning('live updates paused — reload to resume');
+            Errors.report(Errors.CODES.W_LIVE_UPDATES_PAUSED);
             return;
         }
         reconnectAttempts++;

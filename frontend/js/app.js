@@ -73,7 +73,7 @@ function setupEventListeners() {
             await copyToClipboard(command);
             showSuccess('command copied');
         } catch (e) {
-            showWarning('copy it manually');
+            Errors.report(Errors.CODES.W_COPY_MANUALLY);
         }
     });
 
@@ -129,9 +129,9 @@ function setupEventListeners() {
         if (!code) return;
         try {
             await copyToClipboard(code);
-            showSuccess('invite copied');
+            showSuccess(Errors.NOTICE.INVITE_COPIED);
         } catch (e) {
-            showWarning('copy it manually');
+            Errors.report(Errors.CODES.W_COPY_MANUALLY);
         }
     });
     document.getElementById('joinBtn').addEventListener('click', () => Chat.join());
@@ -148,9 +148,9 @@ function setupEventListeners() {
         if (!code || !code.startsWith(ElyrnRoomCrypto.CODE_PREFIX)) return;
         try {
             await copyToClipboard(code);
-            showSuccess('room code copied');
+            showSuccess(Errors.NOTICE.ROOM_CODE_COPIED);
         } catch (e) {
-            showWarning('copy it manually');
+            Errors.report(Errors.CODES.W_COPY_MANUALLY);
         }
     });
     document.getElementById('membersBtn').addEventListener('click', () => Chat.toggleMembers());

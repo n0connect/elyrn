@@ -98,7 +98,7 @@ async function enterApp(identity, persist) {
     if (!check.ok || !check.data || check.data.public_key !== identity.publicKey || ttlDays < 1 || ttlDays > 365 || !limits) {
         await Keystore.wipe();
         if (check.ok) {
-            showError('identity mismatch — the server returned a different public key');
+            Errors.report(Errors.CODES.E_IDENTITY_MISMATCH);
             await apiCall('POST', '/logout');
         }
         showMainMenu();
@@ -139,7 +139,7 @@ async function login() {
     const accountNumberInput = accountNumberInputElement.value.trim();
 
     if (!accountNumberInput) {
-        errorElement.textContent = 'please enter account number';
+        Errors.inline(errorElement, Errors.CODES.E_LOGIN_EMPTY);
         return;
     }
 
@@ -149,7 +149,7 @@ async function login() {
         .trim();             // Remove leading/trailing hidden whitespace
 
     if (ElyrnCrypto.codeBody(normalizedAccountNumber, ElyrnCrypto.INVITE_PREFIXES) !== null) {
-        errorElement.textContent = 'that is an invite — log in first, then use join';
+        Errors.inline(errorElement, Errors.CODES.E_LOGIN_INVITE_PASTED);
         return;
     }
 
@@ -157,7 +157,7 @@ async function login() {
         normalizedAccountNumber.length !== ACCOUNT_NUMBER_LEN ||
         !ACCOUNT_NUMBER_REGEX.test(normalizedAccountNumber)
     ) {
-        errorElement.textContent = 'invalid format';
+        Errors.inline(errorElement, Errors.CODES.E_LOGIN_FORMAT);
         return;
     }
 
@@ -181,12 +181,12 @@ async function login() {
         const data = await response.json();
 
         if (!data) {
-            errorElement.textContent = getUserFriendlyError(null, response.status);
+            Errors.inline(errorElement, Errors.fromApi(null, response.status));
             return;
         }
 
         if (data.success) {
-            successElement.textContent = 'deriving your keys…';
+            successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
             const identity = await deriveSession(normalizedAccountNumber);
             accountNumberInputElement.value = '';
             errorElement.textContent = '';
@@ -194,12 +194,10 @@ async function login() {
             await enterApp(identity, true);
         } else {
             // SECURITY: Map API error message to generic user-facing message
-            const userMsg = getUserFriendlyError(data.message, response.status);
-            errorElement.textContent = userMsg.toLowerCase();
+            Errors.inline(errorElement, Errors.fromApi(data.message, response.status));
         }
     } catch (error) {
-        errorElement.textContent = 'request failed';
-        console.error('Login error:', error && error.name);
+        Errors.inline(errorElement, Errors.CODES.E_REQUEST_FAILED, null, error);
     } finally {
         loginBtn.disabled = false;
     }
@@ -214,7 +212,7 @@ let pendingRegistrationToken = null;  // Zero-trust: token from backend
 function startAccountNumberScramble(accountNumberElement, successElement, accountNumberDisplay) {
     // Safety checks
     if (!accountNumberElement || !successElement || !accountNumberDisplay) {
-        console.error('startAccountNumberScramble: missing required elements');
+        Log.error(Errors.INTERNAL.E_SCRAMBLE_ELEMENTS_MISSING);
         return;
     }
     
@@ -223,7 +221,7 @@ function startAccountNumberScramble(accountNumberElement, successElement, accoun
     const accountNumberBox = accountNumberDisplay.querySelector('.account-number-box');
     if (accountNumberBox) accountNumberBox.classList.add('show');
     
-    successElement.textContent = 'Generating your special Account Number';
+    successElement.textContent = Errors.NOTICE.GENERATING_ACCOUNT_NUMBER;
     accountNumberElement.classList.add('generating');
 
     stopAccountNumberScramble();
@@ -259,13 +257,13 @@ async function copyAccountNumber() {
     // Show masking animation
     accountNumberElement.classList.remove('generating');
     accountNumberElement.classList.add('masking');
-    successElement.textContent = 'securing your identifier...';
+    successElement.textContent = Errors.NOTICE.SECURING_IDENTIFIER;
     
     // Animate to all asterisks
     await animateToMask(accountNumberElement);
     
     // First, get PoW challenge from backend
-    successElement.textContent = 'Preparing security challenge...';
+    successElement.textContent = Errors.NOTICE.PREPARING_CHALLENGE;
 
     try {
         const issued = await getPowChallenge();
@@ -273,12 +271,12 @@ async function copyAccountNumber() {
             throw new Error('Failed to get PoW challenge');
         }
 
-        successElement.textContent = 'Securing your account...';
+        successElement.textContent = Errors.NOTICE.SECURING_ACCOUNT;
 
         // Solve the PoW challenge
         const powSolution = await solvePowChallenge(issued.challenge);
 
-        successElement.textContent = 'Generating your special Account Number';
+        successElement.textContent = Errors.NOTICE.GENERATING_ACCOUNT_NUMBER;
 
         // Get Account Number from backend (Phase 1 - no account creation)
         const response = await fetchWithErrorHandling(`${API_BASE_URL}/register`, {
@@ -305,9 +303,9 @@ async function copyAccountNumber() {
         
         if (!data || !data.success) {
             // SECURITY: Map API error message to generic user-facing message
-            const userMsg = getUserFriendlyError(data?.message, response.status);
-            errorElement.textContent = userMsg.toLowerCase();
-            accountNumberElement.textContent = 'error - try again';
+            Errors.inline(errorElement, Errors.fromApi(data?.message, response.status));
+            // Logged once, by the line above
+            accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
             // Re-enable copy button on error
             if (copyBtn) {
                 copyBtn.disabled = false;
@@ -320,7 +318,7 @@ async function copyAccountNumber() {
         
         if (!realAccountNumber || realAccountNumber.length !== ACCOUNT_NUMBER_LEN || !pendingToken) {
             // SECURITY: Generic error message
-            errorElement.textContent = getUserFriendlyError(null, response.status).toLowerCase();
+            Errors.inline(errorElement, Errors.fromApi(null, response.status));
             // Re-enable copy button on error
             if (copyBtn) {
                 copyBtn.disabled = false;
@@ -337,24 +335,23 @@ async function copyAccountNumber() {
         
         accountNumberElement.classList.remove('masking');
         accountNumberElement.classList.add('revealed');
-        successElement.textContent = 'your account number is ready! click continue to create account.';
+        successElement.textContent = Errors.NOTICE.ACCOUNT_NUMBER_READY;
         
         // Copy to clipboard
         try {
             await copyToClipboard(realAccountNumber);
             showSuccess('Account number copied to clipboard!');
         } catch (e) {
-            showWarning('Could not copy automatically. Please copy manually.');
+            Errors.report(Errors.CODES.W_ACCOUNT_NUMBER_NOT_COPIED);
         }
         
         // Enable continue button
         continueBtn.disabled = false;
         
     } catch (error) {
-        // SECURITY: Generic error message, detailed error only in console
-        errorElement.textContent = getUserFriendlyError(null, 500).toLowerCase();
-        console.error('AccountNumber generation error:', error && error.name);
-        accountNumberElement.textContent = 'error - try again';
+        // SECURITY: Generic error message; the log keeps only the error's name
+        Errors.inline(errorElement, Errors.fromApi(null, 500), null, error);
+        accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
         // Re-enable copy button on error
         if (copyBtn) {
             copyBtn.disabled = false;
@@ -394,15 +391,13 @@ function animateInputToMask(inputElement, originalValue) {
 // Phase 2 never leaves the page. The account number on screen is already saved by the user,
 // and the server keeps it redeemable until the account exists, so a failure says so and the
 // user presses continue again (with a fresh proof of work).
-const REGISTRATION_RETRY = 'your account number is still valid, press continue again';
-
-function failRegistrationStep(status) {
-    const reason = status === 0 ? 'connection lost'
-        : status === 429 ? 'too many attempts, wait a minute'
-        : status >= 500 ? 'server busy'
-        : 'request refused';
+function failRegistrationStep(status, cause) {
+    const code = status === 0 ? Errors.CODES.E_REGISTER_CONNECTION_LOST
+        : status === 429 ? Errors.CODES.E_REGISTER_RATE_LIMITED
+        : status >= 500 ? Errors.CODES.E_REGISTER_SERVER_BUSY
+        : Errors.CODES.E_REGISTER_REFUSED;
     document.getElementById('registerSuccess').textContent = '';
-    document.getElementById('registerError').textContent = `${reason} — ${REGISTRATION_RETRY}`;
+    Errors.inline(document.getElementById('registerError'), code, null, cause || { status: status });
 }
 
 async function continueWithAccountNumber() {
@@ -413,20 +408,20 @@ async function continueWithAccountNumber() {
 
     // Validate that we have a real AccountNumber (not masked)
     if (!generatedAccountNumber || generatedAccountNumber.includes('*') || generatedAccountNumber.length !== ACCOUNT_NUMBER_LEN) {
-        showError('Please generate your account number first');
+        Errors.report(Errors.CODES.E_ACCOUNT_NUMBER_MISSING);
         return;
     }
 
     // Zero-trust: We need the pending token from Phase 1
     if (!pendingRegistrationToken) {
-        showError('Session expired. Please try again.');
+        Errors.report(Errors.CODES.E_REGISTRATION_EXPIRED);
         cancelRegistration();
         return;
     }
 
     // One attempt at a time: a double click would race two confirmations
     continueBtn.disabled = true;
-    successElement.textContent = 'preparing security challenge...';
+    successElement.textContent = Errors.NOTICE.PREPARING_CHALLENGE;
     errorElement.textContent = '';
 
     try {
@@ -437,10 +432,10 @@ async function continueWithAccountNumber() {
             return;
         }
 
-        successElement.textContent = 'securing your account...';
+        successElement.textContent = Errors.NOTICE.SECURING_ACCOUNT;
         const powSolution = await solvePowChallenge(issued.challenge);
 
-        successElement.textContent = 'creating your account...';
+        successElement.textContent = Errors.NOTICE.CREATING_ACCOUNT;
 
         // Phase 2: Create account using pending token (not Account Number from frontend);
         // the HttpOnly session cookie is set by the response
@@ -458,9 +453,8 @@ async function continueWithAccountNumber() {
             failRegistrationStep(result.status);
         }
     } catch (error) {
-        // SECURITY: Generic error message, detailed error only in console
-        console.error('Account creation error:', error && error.name);
-        failRegistrationStep(0);
+        // SECURITY: Generic error message; the log keeps only the error's name
+        failRegistrationStep(0, error);
     } finally {
         continueBtn.disabled = !pendingRegistrationToken;
     }
@@ -469,7 +463,7 @@ async function continueWithAccountNumber() {
 // Account created: derive the E2E identity locally from the account number we hold
 async function finishRegistration() {
     const accountNumber = pendingRegistrationAccountNumber;
-    document.getElementById('registerSuccess').textContent = 'deriving your keys…';
+    document.getElementById('registerSuccess').textContent = Errors.NOTICE.DERIVING_KEYS;
     const identity = await deriveSession(accountNumber);
 
     // The account number was copied for the user to save; do not leave it in the clipboard
@@ -505,8 +499,7 @@ async function recoverRegistration() {
     pendingRegistrationAccountNumber = null;
     pendingRegistrationToken = null;
     showRegisterForm();
-    document.getElementById('registerError').textContent =
-        'that account number expired before the account was created — discard it and copy a new one';
+    Errors.inline(document.getElementById('registerError'), Errors.CODES.E_ACCOUNT_NUMBER_EXPIRED);
 }
 
 async function logout() {
@@ -518,7 +511,7 @@ async function logout() {
     document.getElementById('accountNumberInput').value = '';
     if (!result.ok) {
         // This device is logged out either way; say so if other sessions could not be revoked
-        showWarning('logged out here, but the server could not be reached: other sessions stay valid until they expire');
+        Errors.report(Errors.CODES.W_LOGOUT_SERVER_UNREACHABLE, null, result);
     }
 }
 
@@ -530,7 +523,7 @@ async function deleteIdentity() {
     const accountNumber = String(input.value).normalize('NFKC').trim();
     input.value = '';
     if (accountNumber.length !== ACCOUNT_NUMBER_LEN || !ACCOUNT_NUMBER_REGEX.test(accountNumber)) {
-        showError('invalid account number');
+        Errors.report(Errors.CODES.E_DELETE_INVALID_NUMBER);
         return;
     }
 
@@ -539,16 +532,16 @@ async function deleteIdentity() {
     try {
         const identity = await ElyrnCrypto.deriveIdentity(accountNumber);
         if (identity.publicKey !== Chat.publicKey()) {
-            showError('that is not the account number of this identity');
+            Errors.report(Errors.CODES.E_DELETE_WRONG_IDENTITY);
             return;
         }
         const result = await apiCall('DELETE', '/me', { auth_key: await ElyrnCrypto.deriveAuthKey(accountNumber) });
         if (result.status === 429) {
-            showWarning('too many attempts — wait a moment');
+            Errors.report(Errors.CODES.W_TOO_MANY_ATTEMPTS);
             return;
         }
         if (!result.ok) {
-            showError('identity not deleted');
+            Errors.report(Errors.CODES.E_IDENTITY_NOT_DELETED, null, result);
             return;
         }
         Chat.stop();
@@ -556,7 +549,7 @@ async function deleteIdentity() {
         showMainMenu();
         showSuccess('identity deleted');
     } catch (error) {
-        showError('identity not deleted');
+        Errors.report(Errors.CODES.E_IDENTITY_NOT_DELETED, null, error);
     } finally {
         button.disabled = false;
     }

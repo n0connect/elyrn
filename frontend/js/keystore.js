@@ -64,7 +64,7 @@ const Keystore = (() => {
             return true;
         } catch (e) {
             // Private windows may block IndexedDB: identity then lives in memory only
-            console.warn('keystore: persistence unavailable');
+            Log.warn(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return false;
         }
     }

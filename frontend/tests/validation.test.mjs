@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa });
-for (const file of ['../js/crypto.js', '../js/room-crypto.js', '../validation.js']) {
+for (const file of ['../js/log.js', '../js/errors.js', '../js/crypto.js', '../js/room-crypto.js', '../validation.js']) {
     vm.runInContext(readFileSync(new URL(file, import.meta.url), 'utf8'), context);
 }
 const neutralize = (text) => vm.runInContext('neutralizeReceivedText', context)(text);

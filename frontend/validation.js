@@ -13,29 +13,29 @@ const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F‪-‮⁦
 /**
  * Validates a chat message before encryption
  * @param {string} input - Raw composer value
- * @returns {object} - {valid: boolean, sanitized: string, error: string}
+ * @returns {object} - {valid: boolean, sanitized: string, error: string, params?: object}; error is an Errors code
  */
 function validateMessageText(input) {
     if (typeof input !== 'string') {
-        return { valid: false, sanitized: '', error: 'invalid input' };
+        return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_INVALID };
     }
 
     const normalized = input.replace(/\r\n?/g, '\n').trim();
 
     if (normalized.length === 0) {
-        return { valid: false, sanitized: '', error: 'message is empty' };
+        return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_EMPTY };
     }
 
     if ([...normalized].length > MAX_MESSAGE_CHARS) {
-        return { valid: false, sanitized: '', error: `max ${MAX_MESSAGE_CHARS} characters` };
+        return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_TOO_MANY_CHARS, params: { max: MAX_MESSAGE_CHARS } };
     }
 
     if (FORBIDDEN_TEXT_CHARS.test(normalized)) {
-        return { valid: false, sanitized: '', error: 'message contains control characters' };
+        return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_CONTROL_CHARS };
     }
 
     if (!ElyrnCrypto.payloadFits(normalized)) {
-        return { valid: false, sanitized: '', error: 'message too long' };
+        return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_TOO_LONG };
     }
 
     return { valid: true, sanitized: normalized, error: '' };
@@ -68,23 +68,23 @@ function looksLikeAccountNumber(input) {
 /**
  * Validates an invite code (elyrn:<43 base64url chars>; the legacy noaddx: prefix is accepted)
  * @param {string} input
- * @returns {object} - {valid: boolean, sanitized: object|null, error: string}
+ * @returns {object} - {valid: boolean, sanitized: object|null, error: string}; error is an Errors code
  */
 function validateInviteCode(input) {
     const value = typeof input === 'string' ? input.trim() : '';
 
     if (value.length === 0) {
-        return { valid: false, sanitized: null, error: 'paste an invite first' };
+        return { valid: false, sanitized: null, error: Errors.CODES.E_INVITE_EMPTY };
     }
 
     if (looksLikeAccountNumber(value)) {
-        return { valid: false, sanitized: null, error: 'that looks like an account number — never share it. ask for an invite instead' };
+        return { valid: false, sanitized: null, error: Errors.CODES.E_INVITE_IS_ACCOUNT_NUMBER };
     }
 
     try {
         return { valid: true, sanitized: ElyrnCrypto.parseInviteCode(value), error: '' };
     } catch (e) {
-        return { valid: false, sanitized: null, error: 'invalid invite' };
+        return { valid: false, sanitized: null, error: Errors.CODES.E_INVITE_INVALID };
     }
 }
 
@@ -92,12 +92,12 @@ function validateInviteCode(input) {
  * Validates what the join field takes: an invite code (elyrn:…) or a room code (elyrn#…),
  * either also under its legacy noaddx prefix
  * @param {string} input
- * @returns {object} - {valid: boolean, kind: 'invite'|'room', sanitized: object|null, error: string}
+ * @returns {object} - {valid: boolean, kind: 'invite'|'room', sanitized: object|null, error: string}; error is an Errors code
  */
 function validateJoinCode(input) {
     const value = typeof input === 'string' ? input.trim() : '';
     if (value.length === 0) {
-        return { valid: false, kind: 'invite', sanitized: null, error: 'paste an invite or a room code first' };
+        return { valid: false, kind: 'invite', sanitized: null, error: Errors.CODES.E_JOIN_CODE_EMPTY };
     }
     if (ElyrnCrypto.codeBody(value, ElyrnRoomCrypto.CODE_PREFIXES) === null) {
         return Object.assign(validateInviteCode(value), { kind: 'invite' });
@@ -105,7 +105,7 @@ function validateJoinCode(input) {
     try {
         return { valid: true, kind: 'room', sanitized: ElyrnRoomCrypto.parseRoomCode(value), error: '' };
     } catch (e) {
-        return { valid: false, kind: 'room', sanitized: null, error: 'invalid room code' };
+        return { valid: false, kind: 'room', sanitized: null, error: Errors.CODES.E_ROOM_CODE_INVALID };
     }
 }
 
