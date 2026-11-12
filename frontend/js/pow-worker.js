@@ -1,7 +1,8 @@
 // pow-worker.js
 // Web Worker for Proof of Work computation
 
-// Pure JavaScript SHA-256 implementation
+// Pure JavaScript SHA-256 implementation. Every number in it (round constants, initial hash,
+// rotation and shift amounts, 64-byte blocks, padding and length layout) is FIPS 180-4's own.
 function sha256(message) {
     // Convert string to byte array
     const msg = new TextEncoder().encode(message);
@@ -148,6 +149,13 @@ function hasNLeadingZeros(hexString, n) {
 // Main message handler for the Web Worker
 const HEX_32_BYTES = /^[0-9a-f]{32}$/;
 const MAX_DIFFICULTY = 32;
+// The budget is 2^BUDGET_MARGIN_BITS times the expected work, never more than MAX_ATTEMPTS
+const BUDGET_MARGIN_BITS = 4;
+const MAX_ATTEMPTS = 2 ** 31;
+// A progress message every this many attempts
+const PROGRESS_EVERY = 10000;
+// The only failure text the page is ever sent: it says nothing about why
+const FAILURE_TEXT = 'Processing failed';
 
 // Only work on a task with the exact shape the server issues
 function isValidTask(task) {
@@ -160,12 +168,12 @@ function isValidTask(task) {
 // Expected work is 2^difficulty hashes; 16x that fails with probability e^-16 (~1e-7).
 // Capped so a bogus difficulty cannot pin the worker forever.
 function attemptBudget(difficulty) {
-    return Math.min(2 ** (difficulty + 4), 2 ** 31);
+    return Math.min(2 ** (difficulty + BUDGET_MARGIN_BITS), MAX_ATTEMPTS);
 }
 
 self.onmessage = function(e) {
     if (!isValidTask(e.data)) {
-        self.postMessage({ success: false, error: 'Processing failed', attempts: 0 });
+        self.postMessage({ success: false, error: FAILURE_TEXT, attempts: 0 });
         return;
     }
     const { challenge, difficulty, salt } = e.data;
@@ -187,7 +195,7 @@ self.onmessage = function(e) {
         }
 
         // Post a progress update now and then
-        if (nonce % 10000 === 0) {
+        if (nonce % PROGRESS_EVERY === 0) {
             self.postMessage({
                 progress: true,
                 attempts: nonce,
@@ -199,7 +207,7 @@ self.onmessage = function(e) {
     // No solution within the budget (vanishingly unlikely for a genuine challenge)
     self.postMessage({
         success: false,
-        error: 'Processing failed',
+        error: FAILURE_TEXT,
         attempts: maxAttempts
     });
 };

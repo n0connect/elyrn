@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Check if current URL is valid for frontend
     if (!isValidFrontendRoute()) {
         // Redirect to 404 page for invalid routes
-        window.location.replace('/e0ab670f-6801-4475-b337-c08d5adb9e73.html');
+        window.location.replace(STATUS_PAGES.NOT_FOUND);
         return;
     }
 

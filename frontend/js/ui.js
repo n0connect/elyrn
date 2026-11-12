@@ -6,6 +6,36 @@
 
 const VIEW_IDS = ['mainMenu', 'loginContainer', 'registerContainer', 'robotContainer', 'appContainer'];
 
+// Time units: an hour is the room code's own unit (room-crypto.js)
+const SECOND_MS = 1000;
+const HOUR_MS = ElyrnRoomCrypto.HOUR_MS;
+const HOURS_PER_DAY = 24;
+const DAY_MS = HOURS_PER_DAY * HOUR_MS;
+// A time left reads in days from two days on, in hours below that
+const DAYS_SHOWN_FROM_HOURS = 48;
+
+// The login page focuses its field once the eye animation has been set up again
+const LOGIN_FOCUS_DELAY_MS = 100;
+// Scramble, mask and reveal pacing (the mask is shared with auth.js's input field)
+const MASK_CHAR = '*';
+const SCRAMBLE_MASK_CHANCE = 0.08;
+const SCRAMBLE_STEP_MS = 120;
+const MASK_CHARS_PER_STEP = 3;
+const MASK_MAX_STEPS = 20;
+const MASK_STEP_MS = 50;
+const REVEAL_CHARS_PER_STEP = 3;
+const REVEAL_STEP_MS = 40;
+
+// A gap notice repeats a count only up to here: the count comes from the sender's counter
+const MAX_GAP_SHOWN = 999;
+// The message list follows new messages while it is scrolled within this of the bottom
+const PINNED_SLACK_PX = 48;
+// The composer grows with its text up to this height, then scrolls
+const COMPOSER_MAX_HEIGHT_PX = 140;
+// What the room form offers first, within the server's limits
+const DEFAULT_ROOM_MEMBERS = 8;
+const DEFAULT_ROOM_TTL_HOURS = 24;
+
 // Elements marked data-hidden start hidden through the stylesheet; the view code reads and
 // toggles element.style.display, so mirror that state into it once (CSSOM, CSP-safe).
 document.querySelectorAll('[data-hidden]').forEach(element => {
@@ -35,7 +65,7 @@ function showLogin() {
             initEyeAnimation();
         }
         document.getElementById('accountNumberInput').focus();
-    }, 100);
+    }, LOGIN_FOCUS_DELAY_MS);
 }
 
 function showRegisterForm() {
@@ -94,12 +124,12 @@ function startScramble(element, length, prefix = '') {
     const draw = () => {
         let scrambled = prefix;
         for (let i = 0; i < length; i++) {
-            scrambled += Math.random() < 0.08 ? '*' : SCRAMBLE_CHARS.charAt(Math.floor(Math.random() * SCRAMBLE_CHARS.length));
+            scrambled += Math.random() < SCRAMBLE_MASK_CHANCE ? MASK_CHAR : SCRAMBLE_CHARS.charAt(Math.floor(Math.random() * SCRAMBLE_CHARS.length));
         }
         element.textContent = scrambled;
     };
     draw();
-    const timer = setInterval(draw, 120);
+    const timer = setInterval(draw, SCRAMBLE_STEP_MS);
     return () => clearInterval(timer);
 }
 
@@ -109,20 +139,20 @@ function animateToMask(element, prefix = '') {
         const masked = element.textContent.slice(prefix.length).split('');
         let step = 0;
         const timer = setInterval(() => {
-            for (let i = 0; i < 3; i++) {
+            for (let i = 0; i < MASK_CHARS_PER_STEP; i++) {
                 const index = Math.floor(Math.random() * masked.length);
                 if (masked[index] !== undefined) {
-                    masked[index] = '*';
+                    masked[index] = MASK_CHAR;
                 }
             }
             element.textContent = prefix + masked.join('');
             step++;
-            if (masked.every(c => c === '*') || step > 20) {
+            if (masked.every(c => c === MASK_CHAR) || step > MASK_MAX_STEPS) {
                 clearInterval(timer);
-                element.textContent = prefix + '*'.repeat(masked.length);
+                element.textContent = prefix + MASK_CHAR.repeat(masked.length);
                 resolve();
             }
-        }, 50);
+        }, MASK_STEP_MS);
     });
 }
 
@@ -130,7 +160,7 @@ function animateToMask(element, prefix = '') {
 function revealText(element, value, prefix = '') {
     return new Promise((resolve) => {
         const body = value.slice(prefix.length);
-        const shown = '*'.repeat(body.length).split('');
+        const shown = MASK_CHAR.repeat(body.length).split('');
         const order = Array.from(shown.keys());
         for (let i = order.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -138,7 +168,7 @@ function revealText(element, value, prefix = '') {
         }
         let step = 0;
         const timer = setInterval(() => {
-            for (let i = 0; i < 3 && step < order.length; i++, step++) {
+            for (let i = 0; i < REVEAL_CHARS_PER_STEP && step < order.length; i++, step++) {
                 shown[order[step]] = body[order[step]];
             }
             element.textContent = prefix + shown.join('');
@@ -147,7 +177,7 @@ function revealText(element, value, prefix = '') {
                 element.textContent = value;
                 resolve();
             }
-        }, 40);
+        }, REVEAL_STEP_MS);
     });
 }
 
@@ -157,10 +187,11 @@ function revealText(element, value, prefix = '') {
 function drawGlyph(canvas, grid) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, 5, 5);
+    const size = ElyrnCrypto.AURA_GRID_SIZE;
+    ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--fg').trim() || '#000';
-    for (let row = 0; row < 5; row++) {
-        for (let col = 0; col < 5; col++) {
+    for (let row = 0; row < size; row++) {
+        for (let col = 0; col < size; col++) {
             if (grid[row][col]) {
                 ctx.fillRect(col, row, 1, 1);
             }
@@ -170,8 +201,8 @@ function drawGlyph(canvas, grid) {
 
 function createGlyph(grid) {
     const canvas = document.createElement('canvas');
-    canvas.width = 5;
-    canvas.height = 5;
+    canvas.width = ElyrnCrypto.AURA_GRID_SIZE;
+    canvas.height = ElyrnCrypto.AURA_GRID_SIZE;
     canvas.className = 'aura-glyph';
     drawGlyph(canvas, grid);
     return canvas;
@@ -376,7 +407,7 @@ function createGapElement(missing, from) {
     // The count comes from the sender's own counter; cap what we repeat back
     item.textContent = missing === 1
         ? `⚠ 1 message from ${who} never arrived`
-        : missing <= 999 ? `⚠ ${missing} messages from ${who} never arrived` : `⚠ messages from ${who} never arrived`;
+        : missing <= MAX_GAP_SHOWN ? `⚠ ${missing} messages from ${who} never arrived` : `⚠ messages from ${who} never arrived`;
     return item;
 }
 
@@ -431,7 +462,7 @@ function createMessageElement(message) {
 // Appends messages (already sorted by seq) and keeps the view pinned to the bottom
 function appendMessages(messages) {
     const list = document.getElementById('messageList');
-    const pinned = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+    const pinned = list.scrollHeight - list.scrollTop - list.clientHeight < PINNED_SLACK_PX;
     const empty = list.querySelector('.empty-message');
     if (empty && messages.length > 0) {
         empty.remove();
@@ -461,7 +492,7 @@ function setComposerHint(ttlDays) {
 
 // Messages go with the room, or after the usual retention if that comes first
 function setRoomComposerHint(expiresAt, ttlDays) {
-    const vanish = Math.min(expiresAt, Date.now() + ttlDays * 86400000);
+    const vanish = Math.min(expiresAt, Date.now() + ttlDays * DAY_MS);
     document.getElementById('composerHint').textContent =
         `vanishes ${formatTimeLeft(vanish)} · enter to send · shift+enter for a new line`;
 }
@@ -470,7 +501,7 @@ function updateComposerMeta() {
     const input = document.getElementById('messageInput');
     document.getElementById('charCount').textContent = `${[...input.value].length}/${MAX_MESSAGE_CHARS}`;
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+    input.style.height = Math.min(input.scrollHeight, COMPOSER_MAX_HEIGHT_PX) + 'px';
 }
 
 // ---------- formatting ----------
@@ -489,13 +520,13 @@ function formatTime(ms) {
 function formatTimeLeft(atMs) {
     const left = atMs - Date.now();
     if (left <= 0) return 'now';
-    const hours = Math.floor(left / 3600000);
-    if (hours >= 48) return `in ${Math.floor(hours / 24)}d`;
+    const hours = Math.floor(left / HOUR_MS);
+    if (hours >= DAYS_SHOWN_FROM_HOURS) return `in ${Math.floor(hours / HOURS_PER_DAY)}d`;
     return hours >= 1 ? `in ${hours}h` : 'within the hour';
 }
 
 function formatExpiry(expiresAtSeconds) {
-    const hours = Math.max(0, Math.round((expiresAtSeconds * 1000 - Date.now()) / 3600000));
+    const hours = Math.max(0, Math.round((expiresAtSeconds * SECOND_MS - Date.now()) / HOUR_MS));
     return hours >= 1 ? `in ${hours}h` : 'within the hour';
 }
 
@@ -555,7 +586,7 @@ function setRoomLimits(maxMembers, ttlChoices) {
         const option = document.createElement('option');
         option.value = String(n);
         option.textContent = `${n} people`;
-        option.selected = n === Math.min(8, maxMembers);
+        option.selected = n === Math.min(DEFAULT_ROOM_MEMBERS, maxMembers);
         members.appendChild(option);
     }
     const ttl = document.getElementById('roomTtlSelect');
@@ -563,8 +594,9 @@ function setRoomLimits(maxMembers, ttlChoices) {
     ttlChoices.forEach(hours => {
         const option = document.createElement('option');
         option.value = String(hours);
-        option.textContent = hours === 1 ? '1 hour' : hours % 24 === 0 ? `${hours / 24} day${hours === 24 ? '' : 's'}` : `${hours} hours`;
-        option.selected = hours === 24 || ttlChoices.length === 1;
+        option.textContent = hours === 1 ? '1 hour'
+            : hours % HOURS_PER_DAY === 0 ? `${hours / HOURS_PER_DAY} day${hours === HOURS_PER_DAY ? '' : 's'}` : `${hours} hours`;
+        option.selected = hours === DEFAULT_ROOM_TTL_HOURS || ttlChoices.length === 1;
         ttl.appendChild(option);
     });
 }
@@ -593,7 +625,7 @@ async function revealRoomCode(code, expiresAtSeconds) {
     await revealText(codeElement, code, ElyrnRoomCrypto.CODE_PREFIX);
     codeElement.classList.remove('masking');
     codeElement.classList.add('revealed');
-    document.getElementById('roomExpiry').textContent = formatTimeLeft(expiresAtSeconds * 1000);
+    document.getElementById('roomExpiry').textContent = formatTimeLeft(expiresAtSeconds * SECOND_MS);
     document.getElementById('roomStatus').style.display = 'none';
     document.getElementById('roomHint').style.display = 'block';
     document.getElementById('copyRoomBtn').disabled = false;

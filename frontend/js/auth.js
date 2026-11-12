@@ -16,6 +16,11 @@ const powWorkerPolicy = window.trustedTypes
     })
     : null;
 
+// The most a server may set for message retention and for a room's lifetime: a /me answer
+// outside these is refused like a mismatched identity
+const MAX_MESSAGE_TTL_DAYS = 365;
+const MAX_ROOM_TTL_HOURS = 720;
+
 function powWorkerURL() {
     return powWorkerPolicy ? powWorkerPolicy.createScriptURL(POW_WORKER_PATH) : POW_WORKER_PATH;
 }
@@ -85,7 +90,7 @@ function roomLimits(data) {
     const members = data && data.room_max_members;
     const hours = data && data.room_max_ttl_hours;
     if (!Number.isSafeInteger(members) || members < ElyrnRoomCrypto.MIN_MEMBERS || members > ElyrnRoomCrypto.MAX_MEMBERS ||
-        !Number.isSafeInteger(hours) || hours < 1 || hours > 720) {
+        !Number.isSafeInteger(hours) || hours < 1 || hours > MAX_ROOM_TTL_HOURS) {
         return null;
     }
     return { maxMembers: members, maxTTLHours: hours };
@@ -95,7 +100,7 @@ async function enterApp(identity, persist) {
     const check = await apiCall('GET', '/me');
     const ttlDays = check.data && Number.isSafeInteger(check.data.message_ttl_days) ? check.data.message_ttl_days : 0;
     const limits = roomLimits(check.data);
-    if (!check.ok || !check.data || check.data.public_key !== identity.publicKey || ttlDays < 1 || ttlDays > 365 || !limits) {
+    if (!check.ok || !check.data || check.data.public_key !== identity.publicKey || ttlDays < 1 || ttlDays > MAX_MESSAGE_TTL_DAYS || !limits) {
         await Keystore.wipe();
         if (check.ok) {
             Errors.report(Errors.CODES.E_IDENTITY_MISMATCH);
@@ -386,20 +391,20 @@ function animateInputToMask(inputElement, originalValue) {
         
         const maskInterval = setInterval(() => {
             // Mask 2-3 random characters per step
-            for (let i = 0; i < 3; i++) {
+            for (let i = 0; i < MASK_CHARS_PER_STEP; i++) {
                 const randomIndex = Math.floor(Math.random() * masked.length);
-                masked[randomIndex] = '*';
+                masked[randomIndex] = MASK_CHAR;
             }
             inputElement.value = masked.join('');
             step++;
             
             // Check if all masked
-            if (masked.every(c => c === '*') || step > 20) {
+            if (masked.every(c => c === MASK_CHAR) || step > MASK_MAX_STEPS) {
                 clearInterval(maskInterval);
-                inputElement.value = '*'.repeat(masked.length);
+                inputElement.value = MASK_CHAR.repeat(masked.length);
                 resolve();
             }
-        }, 50);
+        }, MASK_STEP_MS);
     });
 }
 
@@ -422,7 +427,7 @@ async function continueWithAccountNumber() {
     const continueBtn = document.getElementById('continueBtn');
 
     // Validate that we have a real AccountNumber (not masked)
-    if (!generatedAccountNumber || generatedAccountNumber.includes('*') || generatedAccountNumber.length !== ACCOUNT_NUMBER_LEN) {
+    if (!generatedAccountNumber || generatedAccountNumber.includes(MASK_CHAR) || generatedAccountNumber.length !== ACCOUNT_NUMBER_LEN) {
         Errors.report(Errors.CODES.E_ACCOUNT_NUMBER_MISSING);
         return;
     }

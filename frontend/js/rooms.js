@@ -9,7 +9,8 @@ const Rooms = (() => {
     'use strict';
 
     const R = ElyrnRoomCrypto;
-    const HOUR_MS = 3600000;
+    // A code's expiry is a whole hour; the server reports it in seconds
+    const HOUR_SECONDS = 3600;
     const TTL_CHOICES = [1, 24, 168];
     const MAX_CREATE_ATTEMPTS = 3;  // a fresh secret per attempt; a collision is astronomically rare
     const MAX_NOTE_CHARS = 64;      // a note carries one invite code
@@ -30,7 +31,7 @@ const Rooms = (() => {
             throw new Error('malformed room');
         }
         const code = await R.openVault(root, item.id, view.vault);
-        if (code.maxMembers !== view.max_members || code.expiresHour * 3600 !== view.expires_at) {
+        if (code.maxMembers !== view.max_members || code.expiresHour * HOUR_SECONDS !== view.expires_at) {
             throw new Error('the server reports other limits than the code');
         }
         const keys = await R.deriveRoom(code.secret);
@@ -40,7 +41,7 @@ const Rooms = (() => {
             keys: keys,
             member: await R.member(keys, root),
             maxMembers: code.maxMembers,
-            expiresAt: code.expiresHour * HOUR_MS,
+            expiresAt: code.expiresHour * R.HOUR_MS,
             owner: view.owner,
             members: view.members,
             notes: view.notes,
@@ -188,7 +189,7 @@ const Rooms = (() => {
                 id: keys.id,
                 lookup: keys.lookup,
                 max_members: code.maxMembers,
-                expires_at: code.expiresHour * 3600,
+                expires_at: code.expiresHour * HOUR_SECONDS,
                 card: member.card,
                 vault: await R.sealVault(root, keys.id, code),
                 pow: pow

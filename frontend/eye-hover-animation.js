@@ -3,6 +3,24 @@
    5cm radius zone-based animation controller
    ======================================== */
 
+// Zone radii around the eye's centre, in pixels: compact zones for precise control
+const EYE_ZONE_RADII_PX = Object.freeze({
+    inner: 18,    // smooth reveal
+    middle: 51,   // fast scramble (2x)
+    outer: 87     // responsive scramble
+});
+// Per animation frame, by zone: the share of hidden characters redrawn at rest
+// (scramble), how much each unit of mouse speed adds to it (perSpeed), and how far the
+// reveal moves (reveal). In the inner zone the scramble fades as the reveal grows (perReveal).
+const EYE_ZONE_MOTION = Object.freeze({
+    outer: Object.freeze({ scramble: 0.15, perSpeed: 0.1, reveal: -0.02 }),
+    middle: Object.freeze({ scramble: 0.4, perSpeed: 0.15, reveal: 0.01 }),
+    inner: Object.freeze({ scramble: 0.2, perReveal: 0.3, reveal: 0.03 })
+});
+// Mouse speed is pixels per millisecond times this, capped at EYE_MAX_MOUSE_SPEED
+const EYE_MOUSE_SPEED_SCALE = 10;
+const EYE_MAX_MOUSE_SPEED = 5;
+
 class EyeHoverAnimation {
     constructor() {
         this.eyeIcon = null;
@@ -18,14 +36,10 @@ class EyeHoverAnimation {
         this.revealProgress = 0; // 0 to 1
 
         // Zone configurations (in pixels)
-        // Compact zones for precise control
-        this.zones = {
-            inner: 18,    // smooth reveal
-            middle: 51,   // fast scramble (2x)
-            outer: 87     // responsive scramble
-        };
+        this.zones = { ...EYE_ZONE_RADII_PX };
 
-        this.characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+        // The account number's alphabet, as the scramble in ui.js draws it
+        this.characters = SCRAMBLE_CHARS;
 
         // Deterministic reveal order (seeded random)
         this.revealOrder = [];
@@ -87,7 +101,7 @@ class EyeHoverAnimation {
         for (let i = 0; i < len; i++) {
             this.revealOrder.push(i);
         }
-        // Fisher-Yates shuffle with seed based on length
+        // Fisher-Yates shuffle with seed based on length (the 7 and 3 are that fixed seed)
         for (let i = len - 1; i > 0; i--) {
             const j = (i * 7 + 3) % (i + 1);
             [this.revealOrder[i], this.revealOrder[j]] = [this.revealOrder[j], this.revealOrder[i]];
@@ -108,7 +122,7 @@ class EyeHoverAnimation {
             const dx = e.clientX - this.lastMousePos.x;
             const dy = e.clientY - this.lastMousePos.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
-            this.mouseSpeed = Math.min(distance / timeDelta * 10, 5); // Cap at 5
+            this.mouseSpeed = Math.min(distance / timeDelta * EYE_MOUSE_SPEED_SCALE, EYE_MAX_MOUSE_SPEED);
         }
         this.lastMousePos = { x: e.clientX, y: e.clientY };
         this.lastMouseTime = now;
@@ -179,23 +193,24 @@ class EyeHoverAnimation {
         let scrambleIntensity = 0;
         let revealDelta = 0;
         
+        const motion = EYE_ZONE_MOTION[this.currentZone];
         switch (this.currentZone) {
             case 'outer':
                 // Slow scramble, mouse speed responsive
-                scrambleIntensity = 0.15 + this.mouseSpeed * 0.1;
-                revealDelta = -0.02; // Move away from reveal
+                scrambleIntensity = motion.scramble + this.mouseSpeed * motion.perSpeed;
+                revealDelta = motion.reveal; // Move away from reveal
                 break;
                 
             case 'middle':
                 // Fast scramble (2x), more intense
-                scrambleIntensity = 0.4 + this.mouseSpeed * 0.15;
-                revealDelta = 0.01; // Slight progress
+                scrambleIntensity = motion.scramble + this.mouseSpeed * motion.perSpeed;
+                revealDelta = motion.reveal; // Slight progress
                 break;
                 
             case 'inner':
                 // Slow down and reveal smoothly
-                scrambleIntensity = Math.max(0, 0.2 - this.revealProgress * 0.3);
-                revealDelta = 0.03; // Move toward full reveal
+                scrambleIntensity = Math.max(0, motion.scramble - this.revealProgress * motion.perReveal);
+                revealDelta = motion.reveal; // Move toward full reveal
                 break;
         }
         

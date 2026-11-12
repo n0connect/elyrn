@@ -19,8 +19,11 @@ const ElyrnCrypto = (() => {
     const INFO_AURA = 'noaddx/aura';
     const INFO_INVITE_FP = 'noaddx/invite-fp';
     const KEY_BYTES = 32;
+    const KEY_BITS = KEY_BYTES * 8;
     const NONCE_BYTES = 12;
     const TAG_BYTES = 16;
+    const TAG_BITS = TAG_BYTES * 8;
+    const UUID_BYTES = 16;
     const INVITE_TOKEN_BYTES = 16;
     const INVITE_FP_BYTES = 16;
     // Invites are emitted with INVITE_PREFIX; codes made before the rename carry the legacy one
@@ -34,7 +37,9 @@ const ElyrnCrypto = (() => {
     // gaps in a peer's "n" reveal messages the server withheld or deleted.
     const PAD_BLOCK = 256;
     const MAX_FRAME_BYTES = 4096;
-    const MAX_PAYLOAD_BYTES = MAX_FRAME_BYTES - 2;
+    const FRAME_LENGTH_BYTES = 2;
+    const MAX_PAYLOAD_BYTES = MAX_FRAME_BYTES - FRAME_LENGTH_BYTES;
+    const PAYLOAD_FIELDS = 3;
     // RFC 8410 PrivateKeyInfo header for an X25519 key (OID 1.3.101.110)
     const PKCS8_X25519_PREFIX = new Uint8Array([
         0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
@@ -42,6 +47,16 @@ const ElyrnCrypto = (() => {
     ]);
     const AAD_MAGIC = [0x4e, 0x41, 0x44, 0x4d]; // "NADM"
     const AAD_VERSION = 0x01;
+    // Safety numbers: groups of decimal digits, each read from a run of digest bytes
+    const SAFETY_GROUPS = 6;
+    const SAFETY_GROUP_BYTES = 5;
+    const SAFETY_GROUP_DIGITS = 5;
+    // Aura over SHA-256("noaddx/aura" || key): byte 0 picks the adjective, byte 1 the noun, bytes
+    // 2..3 are the code, and the bits from byte 4 on fill the drawn columns of the square grid
+    const AURA_GRID_SIZE = 5;
+    const AURA_DRAWN_COLUMNS = 3;  // the rest of each row mirrors these
+    const AURA_CODE_OFFSET = 2;
+    const AURA_GRID_OFFSET = 4;
     const B64URL_RE = /^[A-Za-z0-9_-]+$/;
     const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -64,6 +79,7 @@ const ElyrnCrypto = (() => {
         if (typeof text !== 'string' || text.length === 0 || !B64URL_RE.test(text)) {
             throw new Error('invalid encoding');
         }
+        // base64 comes in groups of four characters: restore the padding the URL form drops
         const padded = text.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((text.length + 3) % 4);
         const binary = atob(padded);
         const bytes = new Uint8Array(binary.length);
@@ -81,8 +97,9 @@ const ElyrnCrypto = (() => {
             throw new Error('invalid id');
         }
         const hex = uuid.replace(/-/g, '');
-        const out = new Uint8Array(16);
-        for (let i = 0; i < 16; i++) {
+        const out = new Uint8Array(UUID_BYTES);
+        for (let i = 0; i < UUID_BYTES; i++) {
+            // two hex digits per byte
             out[i] = parseInt(hex.substr(i * 2, 2), 16);
         }
         return out;
@@ -114,7 +131,7 @@ const ElyrnCrypto = (() => {
         const bits = await subtle.deriveBits(
             { name: 'HKDF', hash: 'SHA-256', salt: salt, info: encoder.encode(info) },
             base,
-            length * 8
+            length * 8  // bytes to bits
         );
         return new Uint8Array(bits);
     }
@@ -170,13 +187,13 @@ const ElyrnCrypto = (() => {
 
     async function conversationKey(privateKey, peerPublicKey, conversationId) {
         const peer = await subtle.importKey('raw', b64urlDecode(peerPublicKey, KEY_BYTES), { name: 'X25519' }, false, []);
-        const shared = new Uint8Array(await subtle.deriveBits({ name: 'X25519', public: peer }, privateKey, 256));
+        const shared = new Uint8Array(await subtle.deriveBits({ name: 'X25519', public: peer }, privateKey, KEY_BITS));
         try {
             const base = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
             return await subtle.deriveKey(
                 { name: 'HKDF', hash: 'SHA-256', salt: uuidBytes(conversationId), info: encoder.encode(INFO_CONVERSATION) },
                 base,
-                { name: 'AES-GCM', length: 256 },
+                { name: 'AES-GCM', length: KEY_BITS },
                 false,
                 ['encrypt', 'decrypt']
             );
@@ -199,32 +216,33 @@ const ElyrnCrypto = (() => {
             throw new Error('message too long');
         }
         let size = PAD_BLOCK;
-        while (size < payloadBytes.length + 2) {
+        while (size < payloadBytes.length + FRAME_LENGTH_BYTES) {
             size *= 2;
         }
         const out = new Uint8Array(size);
+        // The length is a big-endian uint16
         out[0] = payloadBytes.length >> 8;
         out[1] = payloadBytes.length & 0xff;
-        out.set(payloadBytes, 2);
+        out.set(payloadBytes, FRAME_LENGTH_BYTES);
         return out;
     }
 
     // Opens any multiple of PAD_BLOCK, so frames written before the power-of-two sizes
     // (payloads up to 6000 bytes) stay readable
     function unframe(framed) {
-        if (framed.length < 2 || framed.length % PAD_BLOCK !== 0) {
+        if (framed.length < FRAME_LENGTH_BYTES || framed.length % PAD_BLOCK !== 0) {
             throw new Error('bad frame');
         }
         const length = (framed[0] << 8) | framed[1];
-        if (length === 0 || length + 2 > framed.length) {
+        if (length === 0 || length + FRAME_LENGTH_BYTES > framed.length) {
             throw new Error('bad frame');
         }
-        for (let i = length + 2; i < framed.length; i++) {
+        for (let i = length + FRAME_LENGTH_BYTES; i < framed.length; i++) {
             if (framed[i] !== 0) {
                 throw new Error('bad frame');
             }
         }
-        return framed.subarray(2, 2 + length);
+        return framed.subarray(FRAME_LENGTH_BYTES, FRAME_LENGTH_BYTES + length);
     }
 
     const MAX_COUNTER = Number.MAX_SAFE_INTEGER;
@@ -245,7 +263,7 @@ const ElyrnCrypto = (() => {
     function decodePayload(plain) {
         const parsed = JSON.parse(decoder.decode(unframe(plain)));
         const keys = Object.keys(parsed);
-        if (keys.length !== 3 || typeof parsed.t !== 'string' || !Number.isSafeInteger(parsed.ts) || parsed.ts <= 0 ||
+        if (keys.length !== PAYLOAD_FIELDS || typeof parsed.t !== 'string' || !Number.isSafeInteger(parsed.ts) || parsed.ts <= 0 ||
             !Number.isSafeInteger(parsed.n) || parsed.n < 1 || parsed.n > MAX_COUNTER) {
             throw new Error('bad payload');
         }
@@ -257,7 +275,7 @@ const ElyrnCrypto = (() => {
         const nonce = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
         try {
             const aad = await messageAAD(conversationId, messageId, senderPublicKey);
-            const sealed = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, key, plain));
+            const sealed = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: TAG_BITS }, key, plain));
             return b64urlEncode(concat(nonce, sealed));
         } finally {
             wipe(plain);
@@ -272,7 +290,7 @@ const ElyrnCrypto = (() => {
         }
         const aad = await messageAAD(conversationId, messageId, senderPublicKey);
         const plain = new Uint8Array(await subtle.decrypt(
-            { name: 'AES-GCM', iv: data.subarray(0, NONCE_BYTES), additionalData: aad, tagLength: 128 },
+            { name: 'AES-GCM', iv: data.subarray(0, NONCE_BYTES), additionalData: aad, tagLength: TAG_BITS },
             key,
             data.subarray(NONCE_BYTES)
         ));
@@ -340,12 +358,13 @@ const ElyrnCrypto = (() => {
     // Six groups of five digits from the first 30 bytes of a digest
     function digitGroups(digest) {
         const groups = [];
-        for (let g = 0; g < 6; g++) {
+        for (let g = 0; g < SAFETY_GROUPS; g++) {
             let value = 0;
-            for (let i = 0; i < 5; i++) {
-                value = value * 256 + digest[g * 5 + i];
+            for (let i = 0; i < SAFETY_GROUP_BYTES; i++) {
+                // the group's bytes as one big-endian number
+                value = value * 256 + digest[g * SAFETY_GROUP_BYTES + i];
             }
-            groups.push(String(value % 100000).padStart(5, '0'));
+            groups.push(String(value % 10 ** SAFETY_GROUP_DIGITS).padStart(SAFETY_GROUP_DIGITS, '0'));
         }
         return groups;
     }
@@ -378,19 +397,20 @@ const ElyrnCrypto = (() => {
         const digest = await sha256(concat(encoder.encode(INFO_AURA), b64urlDecode(publicKey, KEY_BYTES)));
         const grid = [];
         let bit = 0;
-        for (let row = 0; row < 5; row++) {
-            const cells = new Array(5);
-            for (let col = 0; col < 3; col++) {
-                const byte = digest[4 + (bit >> 3)];
+        for (let row = 0; row < AURA_GRID_SIZE; row++) {
+            const cells = new Array(AURA_GRID_SIZE);
+            for (let col = 0; col < AURA_DRAWN_COLUMNS; col++) {
+                // bit `bit` of the grid bits, least significant first within each byte
+                const byte = digest[AURA_GRID_OFFSET + (bit >> 3)];
                 cells[col] = ((byte >> (bit & 7)) & 1) === 1;
-                cells[4 - col] = cells[col];
+                cells[AURA_GRID_SIZE - 1 - col] = cells[col];
                 bit++;
             }
             grid.push(cells);
         }
-        const code = Array.from(digest.subarray(2, 4), b => b.toString(16).padStart(2, '0')).join('');
+        const code = Array.from(digest.subarray(AURA_CODE_OFFSET, AURA_GRID_OFFSET), b => b.toString(16).padStart(2, '0')).join('');
         return {
-            name: AURA_ADJECTIVES[digest[0] % 64] + '-' + AURA_NOUNS[digest[1] % 64],
+            name: AURA_ADJECTIVES[digest[0] % AURA_ADJECTIVES.length] + '-' + AURA_NOUNS[digest[1] % AURA_NOUNS.length],
             code: code,
             grid: grid
         };
@@ -415,9 +435,17 @@ const ElyrnCrypto = (() => {
     }
 
     return Object.freeze({
+        KEY_BYTES,
+        NONCE_BYTES,
+        TAG_BYTES,
+        UUID_BYTES,
+        PAD_BLOCK,
+        MAX_FRAME_BYTES,
         INVITE_PREFIX,
         INVITE_PREFIXES,
+        // base64 spends four characters per three bytes
         INVITE_BODY_CHARS: Math.ceil((INVITE_TOKEN_BYTES + INVITE_FP_BYTES) * 4 / 3),
+        AURA_GRID_SIZE,
         codeBody,
         b64urlDecode,
         b64urlEncode,

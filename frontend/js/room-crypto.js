@@ -21,28 +21,35 @@ const ElyrnRoomCrypto = (() => {
     const LEGACY_CODE_PREFIX = 'noaddx#';
     const CODE_PREFIXES = Object.freeze([CODE_PREFIX, LEGACY_CODE_PREFIX]);
     const SECRET_BYTES = 32;
+    // Code: secret(32) max members(1) expiry hour(4, big-endian uint32)
     const CODE_BYTES = SECRET_BYTES + 1 + 4;
     const MIN_MEMBERS = 2;
     const MAX_MEMBERS = 32;
-    const KEY_BYTES = 32;
-    const ID_BYTES = 16;
-    const NONCE_BYTES = 12;
-    const TAG_BYTES = 16;
+    const KEY_BYTES = C.KEY_BYTES;
+    const KEY_BITS = KEY_BYTES * 8;
+    const ID_BYTES = C.UUID_BYTES;
+    const NONCE_BYTES = C.NONCE_BYTES;
+    const TAG_BYTES = C.TAG_BYTES;
+    const TAG_BITS = TAG_BYTES * 8;
+    const MAGIC_BYTES = 4;
     const CARD_BYTES = NONCE_BYTES + KEY_BYTES + TAG_BYTES;
     const VAULT_BYTES = NONCE_BYTES + CODE_BYTES + TAG_BYTES;
     const WRAP_BYTES = KEY_BYTES + TAG_BYTES;
-    const HEADER_BYTES = 4 + 1 + CARD_BYTES + 3 * KEY_BYTES + 1;
     // Header: magic(4) version(1) card(60) ephemeral key(32) commitment(32) digest(32) n(1)
-    const OFFSET_CARD = 5;
+    const HEADER_BYTES = MAGIC_BYTES + 1 + CARD_BYTES + 3 * KEY_BYTES + 1;
+    const OFFSET_CARD = MAGIC_BYTES + 1;
     const OFFSET_EPH = OFFSET_CARD + CARD_BYTES;
     const OFFSET_COMMIT = OFFSET_EPH + KEY_BYTES;
     const OFFSET_DIGEST = OFFSET_COMMIT + KEY_BYTES;
     const VERSION = 0x01;
-    const PAD_BLOCK = 256;
-    const MAX_FRAME_BYTES = 4096;
+    // The frame is crypto.js's encodePayload, shared with one-to-one messages
+    const PAD_BLOCK = C.PAD_BLOCK;
+    const MAX_FRAME_BYTES = C.MAX_FRAME_BYTES;
     const HOUR_MS = 3600000;
     // Bounds the rejection sampling of one shuffle index (RULES.md §8.1)
     const MAX_SHUFFLE_DRAWS = 64;
+    // A note stands alone, outside any sender's counted sequence: its counter is always the first
+    const NOTE_COUNTER = 1;
 
     // "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
     const SALT = encoder.encode('noaddx.v1');
@@ -85,6 +92,7 @@ const ElyrnRoomCrypto = (() => {
         return a.length - b.length;
     }
 
+    // The canonical 8-4-4-4-12 text form
     function uuidString(bytes) {
         const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
         return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
@@ -100,23 +108,25 @@ const ElyrnRoomCrypto = (() => {
     }
 
     async function aesSeal(key, iv, data, aad) {
-        return new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: aad, tagLength: 128 }, key, data));
+        return new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: aad, tagLength: TAG_BITS }, key, data));
     }
 
     async function aesOpen(key, iv, data, aad) {
-        return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: aad, tagLength: 128 }, key, data));
+        return new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: iv, additionalData: aad, tagLength: TAG_BITS }, key, data));
     }
 
     // X25519 with an all-zero result refused, as both server engines refuse it
     async function dh(privateKey, publicBytes) {
         const peer = await subtle.importKey('raw', publicBytes, { name: 'X25519' }, false, []);
-        const shared = new Uint8Array(await subtle.deriveBits({ name: 'X25519', public: peer }, privateKey, 256));
+        const shared = new Uint8Array(await subtle.deriveBits({ name: 'X25519', public: peer }, privateKey, KEY_BITS));
         if (shared.every(b => b === 0)) {
             throw new Error('low-order key');
         }
         return shared;
     }
 
+    // A uniform index below n from random bytes: a byte has 256 values, and those at or above the
+    // largest multiple of n are drawn again so no index is favoured
     function randomIndex(n) {
         const limit = 256 - 256 % n;
         for (let draw = 0; draw < MAX_SHUFFLE_DRAWS; draw++) {
@@ -131,6 +141,7 @@ const ElyrnRoomCrypto = (() => {
     function validCode(code) {
         return Boolean(code) && isBytes(code.secret, SECRET_BYTES) &&
             Number.isInteger(code.maxMembers) && code.maxMembers >= MIN_MEMBERS && code.maxMembers <= MAX_MEMBERS &&
+            // the expiry hour is a uint32 in the code
             Number.isInteger(code.expiresHour) && code.expiresHour > 0 && code.expiresHour <= 0xffffffff;
     }
 
@@ -227,7 +238,7 @@ const ElyrnRoomCrypto = (() => {
     // This account's key in this room, and the card announcing it
     async function member(room, root) {
         const seed = new Uint8Array(await subtle.deriveBits(
-            { name: 'HKDF', hash: 'SHA-256', salt: room.idBytes, info: INFO_MEMBER }, root, KEY_BYTES * 8));
+            { name: 'HKDF', hash: 'SHA-256', salt: room.idBytes, info: INFO_MEMBER }, root, KEY_BITS));
         try {
             const key = await C.x25519FromSeed(seed);
             return Object.freeze({
@@ -269,7 +280,7 @@ const ElyrnRoomCrypto = (() => {
 
     function vaultKey(root) {
         return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: SALT, info: INFO_VAULT }, root,
-            { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+            { name: 'AES-GCM', length: KEY_BITS }, false, ['encrypt', 'decrypt']);
     }
 
     function vaultAAD(roomId) {
@@ -355,7 +366,7 @@ const ElyrnRoomCrypto = (() => {
             const base = await subtle.importKey('raw', ikm, 'HKDF', false, ['deriveKey']);
             const info = C.concat(INFO_WRAP, room.idBytes, ephPublic, senderPublic, recipientPublic);
             return await subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: idBytes, info: info }, base,
-                { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+                { name: 'AES-GCM', length: KEY_BITS }, false, ['encrypt', 'decrypt']);
         } finally {
             C.wipe(ikm);
         }
@@ -415,7 +426,7 @@ const ElyrnRoomCrypto = (() => {
     async function sealNote({ room, me, id, toCard, text, sentAt }) {
         const recipient = await openCard(room, toCard);
         const digest = await rosterDigest([toCard]);
-        return seal({ room, me, magic: MAGIC_NOTE, id, recipients: [recipient], digest, framed: C.encodePayload(text, sentAt, 1) });
+        return seal({ room, me, magic: MAGIC_NOTE, id, recipients: [recipient], digest, framed: C.encodePayload(text, sentAt, NOTE_COUNTER) });
     }
 
     // Structure: magic, version, 1..32 wraps (exactly one in a note), one padded frame size
@@ -521,7 +532,9 @@ const ElyrnRoomCrypto = (() => {
     return Object.freeze({
         CODE_PREFIX,
         CODE_PREFIXES,
+        // base64 spends four characters per three bytes
         CODE_CHARS: CODE_PREFIX.length + Math.ceil(CODE_BYTES * 4 / 3),
+        HOUR_MS,
         MIN_MEMBERS,
         MAX_MEMBERS,
         CARD_BYTES,
