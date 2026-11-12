@@ -163,6 +163,11 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 - The browser reports every failure and warning by a registered code from one module
   (`js/errors.js`) and logs only through `js/log.js`, which keeps a code, an error's name and a
   status number and nothing else; five messages now say what to do next.
+- The browser's wide crypto calls (`sealMessage`, `sealNote`, `encryptMessage` and the helpers
+  under them) take one named-argument object; event wiring, the conversation refresh, message
+  sync, roster loading and the account-number copy are split into one function per job; and its
+  timeouts, limits, sizes and repeated strings are named constants, each with one home. No
+  behaviour, wire format or stored data changes.
 - The server answers every failure through one registry (`backend/internal/apperr`): each cause
   has a code, status, sentence and log level, and is logged once by code and operation. Status
   and body text are unchanged on the wire. A failed client-key secret or HMAC now answers 500
