@@ -134,6 +134,9 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Fixed
 
+- **"Copied" shown when the copy failed.** Without the async clipboard API (older browsers,
+  insecure contexts) a failed copy was logged and then reported as a success. It now fails, and
+  the user is told to copy by hand ("copy it manually", or the account-number warning at signup).
 - **Login during a database outage said "invalid credentials".** It now answers 503, so a user is
   never told that a valid account number is worthless.
 - **A failed signup burned the account number.** Phase 2 used the pending registration up even

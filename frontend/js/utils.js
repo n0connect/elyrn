@@ -6,25 +6,34 @@ const API_BASE_URL = '/api/v2';
 const ACCOUNT_NUMBER_LEN = 43;
 const ACCOUNT_NUMBER_REGEX = /^[A-Za-z0-9_-]{43}$/;
 
-// Copy text to clipboard
+// Copies text to the clipboard. Resolves only when the copy happened and rejects otherwise, so
+// every caller's catch tells the user to copy by hand instead of announcing a copy that failed.
 function copyToClipboard(text) {
     if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text);
-    } else {
-        // Fallback for older browsers
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'absolute';
-        textArea.style.left = '-999999px';
-        document.body.prepend(textArea);
-        textArea.select();
-        try {
-            document.execCommand('copy');
-        } catch (error) {
-            Log.error(Errors.INTERNAL.E_CLIPBOARD_FALLBACK_FAILED, error);
-        } finally {
-            textArea.remove();
+    }
+    return copyBySelection(text);
+}
+
+// Fallback for older browsers and insecure contexts: execCommand reports failure by returning
+// false or by throwing, depending on the browser; both reject
+function copyBySelection(text) {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'absolute';
+    textArea.style.left = '-999999px';
+    document.body.prepend(textArea);
+    textArea.select();
+    try {
+        if (!document.execCommand('copy')) {
+            throw new Error('copy refused');
         }
+        return Promise.resolve();
+    } catch (error) {
+        Log.error(Errors.INTERNAL.E_CLIPBOARD_FALLBACK_FAILED, error);
+        return Promise.reject(error);
+    } finally {
+        textArea.remove();
     }
 }
 
