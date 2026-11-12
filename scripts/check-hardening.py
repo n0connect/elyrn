@@ -80,6 +80,10 @@ SPA_PAGE = "index.html"
 # The one status page: nginx's error_page 404 target, served by an exact location, and the page
 # frontend/js/utils.js sends an unknown route to
 ERROR_PAGE_404 = re.compile(r"^error_page 404 (/[\w-]+\.html);$", re.MULTILINE)
+# error_page to a named location: "error_page 500 502 =503 @name;" (the =NNN group may be missing)
+ERROR_PAGE_NAMED = re.compile(r"^error_page ((?:\d{3} )+)(?:=(\d{3}) )?@(\w+);$", re.MULTILINE)
+# A named location and the JSON body it returns
+NAMED_ANSWER = re.compile(r"^location @(\w+) \{(?:(?!^location ).)*?return \d{3} '(\{[^']*)';", re.MULTILINE | re.DOTALL)
 # The opening line of every location that names an HTML file
 HTML_LOCATION = re.compile(r"^location [^{\n]*html[^{\n]*\{", re.MULTILINE)
 NOT_FOUND_PAGE = re.compile(r"NOT_FOUND: '(/[\w-]+\.html)'")
@@ -262,7 +266,21 @@ def check_nginx():
     missing = set(answers) - {json.loads(b).get("code") for _, b in returned if b.startswith("{")}
     if missing:
         fail("nginx", "registered edge answers nginx never returns: " + ", ".join(sorted(missing)))
+    check_error_page_statuses(site + "\n" + errors, answers)
     check_status_pages(site)
+
+
+def check_error_page_statuses(config, answers):
+    """Every error_page to an edge-answer location states =NNN, the status edge.go registers for
+    that location's code: without it nginx keeps the triggering status (a 504 answered 504 with
+    E_BACKEND_UNAVAILABLE, which the agent reads as E_AGENT_SERVER_ANSWER)."""
+    codes = {name: json.loads(body).get("code", "") for name, body in NAMED_ANSWER.findall(config)}
+    for _, status, name in ERROR_PAGE_NAMED.findall(config):
+        if name not in codes:
+            continue
+        expected = answers.get(codes[name], (None, ""))[0]
+        if status == "" or int(status) != expected:
+            fail("nginx", f"error_page to @{name} must state ={expected} (the status of {codes[name]} in apperr/edge.go)")
 
 
 def check_status_pages(site):
