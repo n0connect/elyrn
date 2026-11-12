@@ -14,15 +14,9 @@ import (
 	"elyrn/internal/utils"
 )
 
-type ChallengeEntry struct {
-	Used       bool
-	Difficulty int // Server-issued difficulty; the client's claimed value is never trusted
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
-}
-
 const (
 	// ChallengeBytes and SaltBytes are the issued sizes; challenges travel as lowercase hex.
+	// The salt carries the challenge's MAC (mac.go), so it keeps its issued width.
 	ChallengeBytes = 16
 	SaltBytes      = 16
 	// Worker emits a decimal nonce below 10^7; 20 digits bounds any uint64.
@@ -36,17 +30,20 @@ const (
 	cleanupInterval    = time.Minute
 	// maxCleanupCycles bounds the cleanup loop (RULES.md §8.1); one per minute outlives any deployment
 	maxCleanupCycles = 1 << 26
-	// maxOutstandingChallenges bounds issued-but-unexpired challenges (~200 bytes each);
-	// maxTrackedClients bounds per-client limiters. Past either cap the issuer fails closed.
-	maxOutstandingChallenges = 50000
-	maxTrackedClients        = 50000
+	// maxSpentChallenges bounds solved, unexpired challenges kept for single use (~150 bytes
+	// each). Every entry cost its sender a full proof of work. maxTrackedClients bounds
+	// per-client limiters. Past either cap the server fails closed (ErrCapacity, 503).
+	maxSpentChallenges = 50000
+	maxTrackedClients  = 50000
 )
 
 var (
 	// ErrRateLimited: this client asked for too many challenges in the current window
 	ErrRateLimited = errors.New("pow: rate limit exceeded")
-	// ErrCapacity: the issuer is at its memory bound (flood in progress); retry later
+	// ErrCapacity: the issuer or the spent set is at its memory bound (flood in progress); retry later
 	ErrCapacity = errors.New("pow: challenge capacity reached")
+	// ErrInvalidSolution: malformed, forged, expired, replayed, or below the issued difficulty
+	ErrInvalidSolution = errors.New("pow: invalid solution")
 )
 
 type RateLimiter struct {
@@ -92,19 +89,36 @@ func (rl *RateLimiter) Allow() bool {
 
 var (
 	powLogger = utils.NewLogger("POW")
-	// Track issued challenges with expiration
-	issuedChallenges = make(map[string]*ChallengeEntry)
-	challengeMutex   = sync.RWMutex{}
-	// Rate limiter for challenge requests per IP
+	// spentChallenges maps a solved challenge to the Unix second it expires; only solved
+	// challenges are kept (issuing stores nothing). spentMutex guards it and is a leaf lock:
+	// nothing else is acquired while it is held.
+	spentChallenges = make(map[string]int64)
+	spentMutex      sync.Mutex
+	// Rate limiter for challenge requests per client key
 	challengeRateLimiters = make(map[string]*RateLimiter)
 	rateLimiterMutex      = sync.RWMutex{}
 )
 
-// GenerateChallenge creates a new proof of work challenge
-// clientKey is an opaque per-client pseudonym used only for rate limiting
+// GenerateChallenge issues a proof of work challenge without storing it: the salt
+// authenticates every field the client echoes back (mac.go). clientKey is an opaque
+// per-client pseudonym used only for rate limiting.
 func GenerateChallenge(clientKey string) (*models.PoWChallenge, error) {
+	if err := admitClient(clientKey); err != nil {
+		return nil, err
+	}
+	difficulty := getAdaptiveDifficulty()
+	ttl := int64(config.GetPoWChallengeTTL() / time.Second)
+	challenge, err := newChallenge(time.Now(), ttl, difficulty)
+	if err != nil {
+		return nil, err
+	}
+	powLogger.Debug("Generated PoW challenge with difficulty: %d", difficulty)
+	return challenge, nil
+}
 
-	// Apply rate limiting per client network
+// admitClient charges one challenge to clientKey's limiter, creating it within the
+// tracked-client bound.
+func admitClient(clientKey string) error {
 	rateLimiterMutex.Lock()
 	limiter, exists := challengeRateLimiters[clientKey]
 	if !exists {
@@ -116,7 +130,7 @@ func GenerateChallenge(clientKey string) (*models.PoWChallenge, error) {
 		if len(challengeRateLimiters) >= maxTrackedClients {
 			rateLimiterMutex.Unlock()
 			powLogger.Warn("Challenge issuer at client capacity")
-			return nil, ErrCapacity
+			return ErrCapacity
 		}
 		limiter = NewRateLimiter(challengesPerWindow, challengeWindow)
 		challengeRateLimiters[clientKey] = limiter
@@ -125,62 +139,39 @@ func GenerateChallenge(clientKey string) (*models.PoWChallenge, error) {
 
 	if !limiter.Allow() {
 		powLogger.Warn("Challenge rate limit exceeded")
-		return nil, ErrRateLimited
+		return ErrRateLimited
 	}
+	return nil
+}
 
+// newChallenge draws a fresh challenge issued at now and seals its fields into the salt.
+func newChallenge(now time.Time, ttl int64, difficulty int) (*models.PoWChallenge, error) {
+	key, err := challengeSecret()
+	if err != nil {
+		powLogger.LogError("challengeSecret", err)
+		return nil, err
+	}
 	challengeBytes, err := cryptoengine.RandomBytes(ChallengeBytes)
 	if err != nil {
 		powLogger.LogError("RandomBytes", err)
 		return nil, fmt.Errorf("failed to generate challenge: %w", err)
 	}
-
-	saltBytes, err := cryptoengine.RandomBytes(SaltBytes)
-	if err != nil {
-		powLogger.LogError("RandomBytes", err)
-		return nil, fmt.Errorf("failed to generate salt: %w", err)
-	}
-
-	difficulty := getAdaptiveDifficulty()
-	powLogger.Debug("Generated PoW challenge with difficulty: %d", difficulty)
-
-	challengeStr := hex.EncodeToString(challengeBytes)
-	saltStr := hex.EncodeToString(saltBytes)
-
-	now := time.Now()
-	ttl := int64(config.GetPoWChallengeTTL() / time.Second)
-
-	// Create challenge object
-	challengeObj := &models.PoWChallenge{
-		Challenge:  challengeStr,
+	challenge := &models.PoWChallenge{
+		Challenge:  hex.EncodeToString(challengeBytes),
 		Timestamp:  now.Unix(),
 		Difficulty: difficulty,
 		TTL:        ttl,
-		Salt:       saltStr,
 	}
-
-	// Store the challenge with proper lifecycle management
-	challengeKey := challengeStr + saltStr
-	challengeMutex.Lock()
-	defer challengeMutex.Unlock()
-	if len(issuedChallenges) >= maxOutstandingChallenges {
-		removeExpiredLocked(now)
+	challenge.Salt, err = challengeTag(key, challenge.Challenge, challenge.Timestamp, ttl, difficulty)
+	if err != nil {
+		powLogger.LogError("challengeTag", err)
+		return nil, err
 	}
-	if len(issuedChallenges) >= maxOutstandingChallenges {
-		powLogger.Warn("Challenge issuer at capacity")
-		return nil, ErrCapacity
-	}
-	issuedChallenges[challengeKey] = &ChallengeEntry{
-		Used:       false,
-		Difficulty: difficulty,
-		CreatedAt:  now,
-		ExpiresAt:  now.Add(time.Duration(ttl) * time.Second),
-	}
-
-	return challengeObj, nil
+	return challenge, nil
 }
 
-// RunCleanup evicts expired challenges and idle per-client limiters every minute until ctx ends.
-// Run it under utils.SafeGoSupervised.
+// RunCleanup evicts expired spent challenges and idle per-client limiters every minute until
+// ctx ends. Run it under utils.SafeGoSupervised.
 func RunCleanup(ctx context.Context) {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
@@ -189,31 +180,39 @@ func RunCleanup(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			cleanupExpiredChallenges(now)
+			cleanupSpentChallenges(now)
 			cleanupInactiveRateLimiters(now)
 		}
 	}
 }
 
-// cleanupExpiredChallenges removes challenges that expired before now
-func cleanupExpiredChallenges(now time.Time) {
-	challengeMutex.Lock()
-	defer challengeMutex.Unlock()
-	removeExpiredLocked(now)
+// cleanupSpentChallenges forgets spent challenges that expired before now
+func cleanupSpentChallenges(now time.Time) {
+	spentMutex.Lock()
+	defer spentMutex.Unlock()
+	removeExpiredSpentLocked(now)
 }
 
-// removeExpiredLocked deletes expired challenges. Caller holds challengeMutex.
-func removeExpiredLocked(now time.Time) {
+// removeExpiredSpentLocked deletes spent challenges past their expiry. A forgotten challenge
+// stays refused: validation rejects it as expired before the spent set is consulted. Caller
+// holds spentMutex.
+func removeExpiredSpentLocked(now time.Time) {
 	cleaned := 0
-	for key, entry := range issuedChallenges {
-		if now.After(entry.ExpiresAt) {
-			delete(issuedChallenges, key)
+	for key, expiresAt := range spentChallenges {
+		if expired(expiresAt, now) {
+			delete(spentChallenges, key)
 			cleaned++
 		}
 	}
 	if cleaned > 0 {
-		powLogger.Debug("Cleaned %d expired challenges, remaining: %d", cleaned, len(issuedChallenges))
+		powLogger.Debug("Cleaned %d expired spent challenges, remaining: %d", cleaned, len(spentChallenges))
 	}
+}
+
+// expired reports whether a challenge expiring at the Unix second expiresAt is past it at now;
+// validation and eviction share it so nothing is evicted that validation would still accept.
+func expired(expiresAt int64, now time.Time) bool {
+	return now.After(time.Unix(expiresAt, 0))
 }
 
 // cleanupInactiveRateLimiters removes limiters idle for longer than limiterIdleTimeout at now
@@ -235,66 +234,77 @@ func cleanupInactiveRateLimiters(now time.Time) {
 	}
 }
 
-// ValidateSolution validates a proof of work solution
-func ValidateSolution(solution *models.PoWSolution) bool {
+// ValidateSolution admits a solution to a challenge this server issued (its salt verifies),
+// unexpired, never solved before, whose hash meets the issued difficulty, and marks it spent.
+// It returns nil, ErrInvalidSolution, ErrCapacity (spent set full), or a wrapped internal
+// failure (no secret, hash failure) that the caller answers 500.
+func ValidateSolution(solution *models.PoWSolution) error {
+	expiresAt, err := checkSolution(solution, time.Now())
+	if err != nil {
+		return err
+	}
+	return spend(solution.Challenge, expiresAt)
+}
+
+// checkSolution verifies everything that needs no shared state and returns the expiry.
+func checkSolution(solution *models.PoWSolution, now time.Time) (int64, error) {
 	if solution == nil {
 		powLogger.Warn("Nil PoW solution provided")
-		return false
+		return 0, ErrInvalidSolution
 	}
-
-	powLogger.Debug("Validating PoW solution")
-
-	// Whitelist the shape of every client-supplied field before touching shared state
-	if !IsHexOfLen(solution.Challenge, ChallengeBytes) || !IsHexOfLen(solution.Salt, SaltBytes) || !isDecimal(solution.Solution, maxSolutionDigits) {
+	// Whitelist the shape of every client-supplied field before any computation
+	if !IsHexOfLen(solution.Challenge, ChallengeBytes) || !IsHexOfLen(solution.Salt, SaltBytes) ||
+		!isDecimal(solution.Solution, maxSolutionDigits) || solution.TTL <= 0 {
 		powLogger.Warn("Malformed PoW solution rejected")
-		return false
+		return 0, ErrInvalidSolution
 	}
-
-	// Atomic validation - lock once, check everything
-	challengeKey := solution.Challenge + solution.Salt
-
-	challengeMutex.Lock()
-	defer challengeMutex.Unlock()
-
-	// Check if challenge exists
-	entry, exists := issuedChallenges[challengeKey]
-	if !exists {
-		powLogger.Warn("Unknown PoW challenge provided")
-		return false
-	}
-
-	// Check if already used (replay attack)
-	if entry.Used {
-		powLogger.Warn("PoW challenge already used (replay attack)")
-		return false
-	}
-
-	// Check expiration
-	if time.Now().After(entry.ExpiresAt) {
-		powLogger.Warn("PoW solution expired")
-		delete(issuedChallenges, challengeKey) // Cleanup expired
-		return false
-	}
-
-	// Verify the proof of work: SHA-256(challenge || nonce || salt) under the issued difficulty
-	input := []byte(solution.Challenge + solution.Solution + solution.Salt)
-	hash, err := cryptoengine.SHA256(input)
+	ok, err := tagMatches(solution.Challenge, solution.Salt, solution.Timestamp, solution.TTL, solution.Difficulty)
 	if err != nil {
-		powLogger.Error("SHA256 hash computation failed: %v", err)
-		return false
+		powLogger.LogError("tagMatches", err)
+		return 0, err
 	}
-
-	result := HasLeadingZeroBits(hash, entry.Difficulty)
-
-	if result {
-		// Mark as used BEFORE releasing lock
-		entry.Used = true
-		powLogger.Debug("Valid PoW solution accepted")
-	} else {
+	if !ok {
+		powLogger.Warn("PoW challenge not issued by this server (or issued before a restart)")
+		return 0, ErrInvalidSolution
+	}
+	// Timestamp, ttl and difficulty are authenticated from here on: they are the issued values
+	expiresAt := solution.Timestamp + solution.TTL
+	if expired(expiresAt, now) {
+		powLogger.Warn("PoW solution expired")
+		return 0, ErrInvalidSolution
+	}
+	// Verify the proof of work: SHA-256(challenge || nonce || salt) under the issued difficulty
+	hash, err := cryptoengine.SHA256([]byte(solution.Challenge + solution.Solution + solution.Salt))
+	if err != nil {
+		powLogger.LogError("SHA256", err)
+		return 0, fmt.Errorf("pow hash: %w", err)
+	}
+	if !HasLeadingZeroBits(hash, solution.Difficulty) {
 		powLogger.Warn("PoW solution below the issued difficulty")
+		return 0, ErrInvalidSolution
 	}
+	return expiresAt, nil
+}
 
-	return result
+// spend records a verified challenge as used, atomically refusing a second use. A failed
+// attempt never reaches here, so it does not burn the challenge.
+func spend(challenge string, expiresAt int64) error {
+	spentMutex.Lock()
+	defer spentMutex.Unlock()
+	if _, used := spentChallenges[challenge]; used {
+		powLogger.Warn("PoW challenge already used (replay attack)")
+		return ErrInvalidSolution
+	}
+	if len(spentChallenges) >= maxSpentChallenges {
+		removeExpiredSpentLocked(time.Now())
+	}
+	if len(spentChallenges) >= maxSpentChallenges {
+		powLogger.Warn("Spent challenge set at capacity")
+		return ErrCapacity
+	}
+	spentChallenges[challenge] = expiresAt
+	powLogger.Debug("Valid PoW solution accepted")
+	return nil
 }
 
 // IsHexOfLen reports whether s is exactly byteLen bytes of lowercase hex, as issued.

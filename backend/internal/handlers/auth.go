@@ -260,14 +260,15 @@ func newAccountRecord(lookup, authKey, publicKey string) (*models.User, error) {
 }
 
 // requireProofOfWork admits a request only with an issued, unused, unexpired solution at the
-// issued difficulty (consuming it), and otherwise writes 412 (missing) or 403 (invalid).
+// issued difficulty (consuming it), and otherwise writes 412 (missing), 403 (invalid), 503 (the
+// spent set is full) or 500 (no challenge secret).
 func requireProofOfWork(w http.ResponseWriter, solution *models.PoWSolution, action string) bool {
 	if solution == nil {
 		apperr.Write(w, "requireProofOfWork:"+action, apperr.PoWRequired)
 		return false
 	}
-	if !pow.ValidateSolution(solution) {
-		apperr.Write(w, "requireProofOfWork:"+action, apperr.PoWInvalid)
+	if err := pow.ValidateSolution(solution); err != nil {
+		apperr.WriteError(w, "requireProofOfWork:"+action, err)
 		return false
 	}
 	return true
@@ -293,7 +294,8 @@ func PoWChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 
 	// Rate-limit key: HMAC(client IP) with a per-boot secret (forwarded headers trusted only from TRUSTED_PROXIES)
-	// ErrRateLimited answers 429, ErrCapacity 503 (apperr sentinel table), anything else 500
+	// ErrRateLimited answers 429, ErrCapacity 503 (apperr sentinel table), anything else (no
+	// challenge secret) 500
 	client, err := middleware.ClientKey(r)
 	if err != nil {
 		apperr.WriteError(w, "ClientKey", err)

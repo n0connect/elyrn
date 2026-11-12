@@ -208,6 +208,7 @@ func TestSentinelsMapped(t *testing.T) {
 		auth.ErrPendingStoreFull: PendingStoreFull,
 		pow.ErrRateLimited:       PoWRateLimited,
 		pow.ErrCapacity:          PoWCapacity,
+		pow.ErrInvalidSolution:   PoWInvalid,
 	}
 	if len(want) != len(sentinels) {
 		t.Errorf("pinned %d sentinels, table has %d", len(want), len(sentinels))

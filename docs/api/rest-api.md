@@ -48,7 +48,12 @@ Requests are subject to strict JSON validation:
 ## 1. Identity & Authentication
 
 ### `GET /api/v2/pow/challenge`
-Issues a single-use hashcash proof-of-work challenge.
+Issues a single-use hashcash proof-of-work challenge. The server stores nothing per issued
+challenge: `salt` is an HMAC tag over `challenge`, `timestamp`, `ttl` and `difficulty` under a
+per-boot secret, so a solution must echo all five fields exactly as issued (see
+[cryptography.md](../security/cryptography.md#stateless-issuing)). A solution answers 403 when
+forged, expired, already used, or issued before a server restart, and 503 while the set of used,
+unexpired challenges is full.
 
 - **Rate Limit:** 5 requests per minute per client key (an IPv4 address, an IPv6 /64, or one Tor circuit on the onion service), shared by registration and invites.
 - **Response (200 OK):**

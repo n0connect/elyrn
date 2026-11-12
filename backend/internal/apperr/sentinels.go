@@ -31,6 +31,7 @@ var sentinels = []struct {
 	{auth.ErrPendingStoreFull, PendingStoreFull},
 	{pow.ErrRateLimited, PoWRateLimited},
 	{pow.ErrCapacity, PoWCapacity},
+	{pow.ErrInvalidSolution, PoWInvalid},
 }
 
 // CodeOf returns the code a sentinel error (or one wrapping it) is answered with.

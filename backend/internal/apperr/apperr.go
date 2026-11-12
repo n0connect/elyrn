@@ -139,9 +139,9 @@ var registry = map[Code]entry{
 	RateLimited:     {"E_RATE_LIMITED", http.StatusTooManyRequests, sayTooManyRequests, utils.LogLevelWARN, shapeText},
 	SubscriberLimit: {"E_SUBSCRIBER_LIMIT", http.StatusTooManyRequests, sayTooManyRequests, utils.LogLevelWARN, shapeText},
 	LimitReached:    {"E_LIMIT_REACHED", http.StatusTooManyRequests, sayTooManyRequests, utils.LogLevelWARN, shapeText},
-	// MERGE (all 503 "Service unavailable"): a full PoW issuer, saturated Argon2id slots
-	// (registration phase 2 only; login runs no Argon2id), a full pending-registration store
-	// and an unreachable database
+	// MERGE (all 503 "Service unavailable"): a full PoW issuer or spent-challenge set,
+	// saturated Argon2id slots (registration phase 2 only; login runs no Argon2id), a full
+	// pending-registration store and an unreachable database
 	PoWCapacity:      {"E_POW_CAPACITY", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
 	Argon2Busy:       {"E_ARGON2_BUSY", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
 	PendingStoreFull: {"E_PENDING_STORE_FULL", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},

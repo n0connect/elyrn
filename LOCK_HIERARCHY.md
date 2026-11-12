@@ -7,9 +7,9 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
 ### Priority Level 1 (Lowest) - Application State
 - `globalRateLimiter.mu` (RWMutex) - Rate limiting buckets map; held for every lookup/insert, and
   while evicting it reads each bucket's `lastAccess` (Priority 1 -> 2, the permitted direction)
-- `rateLimiterMutex` - PoW per-client limiters map (released before `challengeMutex` is taken;
-  the two are never held together)
-- `challengeMutex` - PoW issued challenges map
+- `rateLimiterMutex` - PoW per-client limiters map (never held together with `spentMutex`)
+- `spentMutex` - PoW spent (solved, unexpired) challenges map; leaf lock. Issued challenges are
+  no longer stored (S-03)
 - `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map; leaf lock, channel sends under it never block
 - `pendingStore.mu` - Pending registration map (leaf lock)
 

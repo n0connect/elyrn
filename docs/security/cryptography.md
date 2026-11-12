@@ -210,9 +210,32 @@ To prevent registration floods and Denial-of-Service attacks against server-side
 
 ### Challenge Structure
 - **Challenge:** 16 random bytes (hex-encoded string, 32 chars).
-- **Salt:** 16 random bytes (hex-encoded string, 32 chars).
+- **Salt:** the challenge's authentication tag (hex-encoded string, 32 chars), see below.
 - **Difficulty:** Target number of leading zero bits (default: `20`, clamped between `18` and `24`).
+- **Timestamp:** issue time, Unix seconds.
 - **TTL:** 300 seconds (5 minutes). Single-use only.
+
+### Stateless Issuing
+Issuing a challenge stores nothing on the server, so the free, unauthenticated challenge endpoint
+cannot fill server memory. The salt authenticates every field the client echoes back:
+
+`salt = hex(HMAC-SHA256(secret, "elyrn/pow-challenge/v1" || challenge || be64(timestamp) || be64(ttl) || be64(difficulty))[:16])`
+
+`secret` is 32 bytes drawn from the crypto engine's CSPRNG at first use and never leaves memory;
+a failed draw answers 500 and is never retried with a weaker source. The challenge is fixed-length
+hex and the integers are fixed-width, so the MAC input is unambiguous. To verify, the server
+recomputes the tag from the echoed `challenge`, `timestamp`, `ttl` and `difficulty` and compares
+it with the echoed salt in constant time; any changed field, or a challenge issued under another
+secret, fails. The difficulty checked is therefore the issued one, never a client choice. A
+challenge expires at `timestamp + ttl` (its real lifetime is between `ttl - 1` and `ttl` seconds,
+since the timestamp is whole seconds).
+
+Single use is kept by remembering **solved** challenges only, each until it expires, in a set of
+at most 50,000 entries; a full set answers 503. Every entry costs its sender a full proof of work
+(about 2^20 SHA-256 evaluations at the default difficulty), so filling the set takes about
+5 × 10^10 hashes within one TTL, plus 50,000 issued challenges, which the per-client issue limit
+(5 per minute) spreads over at least 2,000 client keys. A restart draws a new secret: challenges
+issued before it no longer verify (403), and the client asks for a fresh one on its next try.
 
 ### Solution Verification
 The client increments an integer `nonce` starting at `0`:

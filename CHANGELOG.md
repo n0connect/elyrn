@@ -7,6 +7,13 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **Proof-of-work challenge pool.** Every issued challenge was kept in one global pool of
+  50,000 until it expired, and `GET /api/v2/pow/challenge` is free, so anyone could fill the pool
+  and registration, invites and rooms answered 503 for everyone. Issuing now stores nothing: the
+  salt is an HMAC over the challenge, timestamp, ttl and difficulty under a per-boot secret, and
+  the server verifies a solution from the echoed fields alone. Only solved challenges are kept
+  (single use, until they expire, at most 50,000), so filling that set costs a full proof of work
+  per entry. The wire format is unchanged; challenges issued before a restart are refused (403).
 - **Login lockout through Argon2id.** Every login with a well-formed auth key ran a full Argon2id
   verification (a decoy one for unknown keys) in `ARGON2_MAX_CONCURRENT` global slots, with no
   proof of work, so anyone could keep the slots busy and every login answered 503. Login now
