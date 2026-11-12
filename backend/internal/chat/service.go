@@ -33,6 +33,9 @@ const (
 	// The conversation index is padded to this block so its size only reveals a coarse bucket
 	indexPadBlock = 1024
 	day           = 24 * time.Hour
+	// FirstSeq is the seq of a conversation's first message (the counter starts at 0 and the
+	// store increments it before each insert)
+	FirstSeq int64 = 1
 )
 
 var (
@@ -718,8 +721,8 @@ func messageWindow(cursor PageCursor, joinedSeq int64, limit int) store.MessageW
 	case CursorAfter:
 		return store.MessageWindow{Floor: max(cursor.Seq, joinedSeq), Limit: limit}
 	case CursorBefore:
-		// Seqs start at 1, so a ceiling of 1 is an empty page; 0 would mean "no ceiling"
-		return store.MessageWindow{Floor: joinedSeq, Ceiling: max(cursor.Seq, 1), Newest: true, Limit: limit}
+		// A ceiling of FirstSeq is an empty page; 0 would mean "no ceiling"
+		return store.MessageWindow{Floor: joinedSeq, Ceiling: max(cursor.Seq, FirstSeq), Newest: true, Limit: limit}
 	default:
 		return store.MessageWindow{Floor: joinedSeq, Newest: true, Limit: limit}
 	}

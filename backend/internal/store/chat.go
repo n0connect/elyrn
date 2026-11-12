@@ -79,6 +79,22 @@ type MessageWindow struct {
 // roomPurgeBatch bounds how many expired rooms one retention pass deletes; the rest go next pass
 const roomPurgeBatch = 1000
 
+// SQL fragments more than one query shares, spelled exactly as the schema names its columns
+const (
+	colID                      = "id"
+	colConversationID          = "conversation_id"
+	colMasterKeyID             = "master_key_id"
+	whereID                    = "id = ?"
+	whereIDIn                  = "id IN ?"
+	whereUUID                  = "uuid = ?"
+	whereAccountLookup         = "account_lookup = ?"
+	whereConversation          = "conversation_id = ?"
+	whereMember                = "conversation_id = ? AND member_tag = ?"
+	whereExpired               = "expires_at <= ?"
+	whereKeyAfterID            = "master_key_id = ? AND id > ?"
+	selectCountPerConversation = "conversation_id, count(*) AS count"
+)
+
 type chatRepository struct {
 	tx *gorm.DB // nil outside a transaction
 }
@@ -162,7 +178,7 @@ func (r *chatRepository) TakeInvite(lookup, redeemerTag string, now time.Time) (
 // Must run inside Transaction.
 func (r *chatRepository) LockUsers(userUUIDs []string) (map[string]*models.User, error) {
 	var users []models.User
-	err := r.db().Clauses(clause.Locking{Strength: "UPDATE"}).
+	err := r.db().Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
 		Where("uuid IN ?", userUUIDs).Order("uuid").Find(&users).Error
 	if err != nil {
 		chatRepoLogger.LogError("ChatRepository.LockUsers", err)
@@ -176,7 +192,7 @@ func (r *chatRepository) LockUsers(userUUIDs []string) (map[string]*models.User,
 }
 
 func (r *chatRepository) SaveConvIndex(userUUID, enc string) error {
-	result := r.db().Model(&models.User{}).Where("uuid = ?", userUUID).UpdateColumn("conv_index_enc", enc)
+	result := r.db().Model(&models.User{}).Where(whereUUID, userUUID).UpdateColumn("conv_index_enc", enc)
 	if result.Error != nil {
 		chatRepoLogger.LogError("ChatRepository.SaveConvIndex", result.Error)
 		return result.Error
@@ -189,7 +205,7 @@ func (r *chatRepository) SaveConvIndex(userUUID, enc string) error {
 
 // DeleteUser removes the account row (its credentials, keys and conversation index).
 func (r *chatRepository) DeleteUser(userUUID string) error {
-	result := r.db().Where("uuid = ?", userUUID).Delete(&models.User{})
+	result := r.db().Where(whereUUID, userUUID).Delete(&models.User{})
 	if result.Error != nil {
 		chatRepoLogger.LogError("ChatRepository.DeleteUser", result.Error)
 		return result.Error
@@ -217,7 +233,7 @@ func (r *chatRepository) CreateConversation(conversationID uuid.UUID, members []
 
 func (r *chatRepository) FindMembership(conversationID uuid.UUID, memberTag string) (*models.ConversationMember, error) {
 	var member models.ConversationMember
-	err := r.db().Where("conversation_id = ? AND member_tag = ?", conversationID, memberTag).First(&member).Error
+	err := r.db().Where(whereMember, conversationID, memberTag).First(&member).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
@@ -247,7 +263,7 @@ func (r *chatRepository) FindMembershipsByTags(memberTags []string) (map[uuid.UU
 
 func (r *chatRepository) ListMembers(conversationID uuid.UUID) ([]models.ConversationMember, error) {
 	var members []models.ConversationMember
-	err := r.db().Where("conversation_id = ?", conversationID).Find(&members).Error
+	err := r.db().Where(whereConversation, conversationID).Find(&members).Error
 	if err != nil {
 		chatRepoLogger.LogError("ChatRepository.ListMembers", err)
 	}
@@ -260,7 +276,7 @@ func (r *chatRepository) LastSeqs(conversationIDs []uuid.UUID) (map[uuid.UUID]in
 		return result, nil
 	}
 	var conversations []models.Conversation
-	if err := r.db().Where("id IN ?", conversationIDs).Find(&conversations).Error; err != nil {
+	if err := r.db().Where(whereIDIn, conversationIDs).Find(&conversations).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.LastSeqs", err)
 		return nil, err
 	}
@@ -274,19 +290,19 @@ func (r *chatRepository) LastSeqs(conversationIDs []uuid.UUID) (map[uuid.UUID]in
 // goes first: lock order is rooms before conversations (LOCK_HIERARCHY.md).
 func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) error {
 	err := r.db().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("id = ?", conversationID).Delete(&models.Room{}).Error; err != nil {
+		if err := tx.Where(whereID, conversationID).Delete(&models.Room{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("conversation_id = ?", conversationID).Delete(&models.Message{}).Error; err != nil {
+		if err := tx.Where(whereConversation, conversationID).Delete(&models.Message{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("conversation_id = ?", conversationID).Delete(&models.ConversationMember{}).Error; err != nil {
+		if err := tx.Where(whereConversation, conversationID).Delete(&models.ConversationMember{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("conversation_id = ?", conversationID).Delete(&models.RoomNote{}).Error; err != nil {
+		if err := tx.Where(whereConversation, conversationID).Delete(&models.RoomNote{}).Error; err != nil {
 			return err
 		}
-		result := tx.Where("id = ?", conversationID).Delete(&models.Conversation{})
+		result := tx.Where(whereID, conversationID).Delete(&models.Conversation{})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -382,20 +398,20 @@ func (r *chatRepository) PurgeExpired(today, latest, now time.Time) (PurgeCounts
 		return counts, messages.Error
 	}
 	counts.Messages = messages.RowsAffected
-	invites := r.db().Where("expires_at <= ?", now).Delete(&models.Invite{})
+	invites := r.db().Where(whereExpired, now).Delete(&models.Invite{})
 	if invites.Error != nil {
 		chatRepoLogger.LogError("ChatRepository.PurgeExpired (invites)", invites.Error)
 		return counts, invites.Error
 	}
 	counts.Invites = invites.RowsAffected
-	notes := r.db().Where("expires_at <= ?", now).Delete(&models.RoomNote{})
+	notes := r.db().Where(whereExpired, now).Delete(&models.RoomNote{})
 	if notes.Error != nil {
 		chatRepoLogger.LogError("ChatRepository.PurgeExpired (notes)", notes.Error)
 		return counts, notes.Error
 	}
 	counts.Notes = notes.RowsAffected
 	var expired []uuid.UUID
-	if err := r.db().Model(&models.Room{}).Where("expires_at <= ?", now).Limit(roomPurgeBatch).Pluck("id", &expired).Error; err != nil {
+	if err := r.db().Model(&models.Room{}).Where(whereExpired, now).Limit(roomPurgeBatch).Pluck(colID, &expired).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.PurgeExpired (rooms)", err)
 		return counts, err
 	}
@@ -432,7 +448,7 @@ func (r *chatRepository) CreateRoom(room *models.Room, creator *models.Conversat
 
 func (r *chatRepository) FindRoom(roomID uuid.UUID) (*models.Room, error) {
 	var room models.Room
-	if err := r.db().Where("id = ?", roomID).First(&room).Error; err != nil {
+	if err := r.db().Where(whereID, roomID).First(&room).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -449,7 +465,7 @@ func (r *chatRepository) FindRooms(roomIDs []uuid.UUID) (map[uuid.UUID]models.Ro
 		return result, nil
 	}
 	var rooms []models.Room
-	if err := r.db().Where("id IN ?", roomIDs).Find(&rooms).Error; err != nil {
+	if err := r.db().Where(whereIDIn, roomIDs).Find(&rooms).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.FindRooms", err)
 		return nil, err
 	}
@@ -463,7 +479,7 @@ func (r *chatRepository) FindRooms(roomIDs []uuid.UUID) (map[uuid.UUID]models.Ro
 // inside Transaction, after any users row lock and before the conversation row lock.
 func (r *chatRepository) LockRoom(roomID uuid.UUID) (*models.Room, error) {
 	var rooms []models.Room
-	if err := r.db().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", roomID).Find(&rooms).Error; err != nil {
+	if err := r.db().Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).Where(whereID, roomID).Find(&rooms).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.LockRoom", err)
 		return nil, err
 	}
@@ -478,7 +494,7 @@ func (r *chatRepository) LockRoom(roomID uuid.UUID) (*models.Room, error) {
 // stored under.
 func (r *chatRepository) LockConversation(conversationID uuid.UUID) (int64, error) {
 	var conversations []models.Conversation
-	if err := r.db().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", conversationID).Find(&conversations).Error; err != nil {
+	if err := r.db().Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).Where(whereID, conversationID).Find(&conversations).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.LockConversation", err)
 		return 0, err
 	}
@@ -501,7 +517,7 @@ func (r *chatRepository) AddMember(member *models.ConversationMember) error {
 
 func (r *chatRepository) UpdateVault(conversationID uuid.UUID, memberTag, vault string) error {
 	err := r.db().Model(&models.ConversationMember{}).
-		Where("conversation_id = ? AND member_tag = ?", conversationID, memberTag).UpdateColumn("vault", vault).Error
+		Where(whereMember, conversationID, memberTag).UpdateColumn("vault", vault).Error
 	if err != nil {
 		chatRepoLogger.LogError("ChatRepository.UpdateVault", err)
 	}
@@ -515,7 +531,7 @@ func (r *chatRepository) DeleteMember(conversationID uuid.UUID, memberTag string
 			Delete(&models.RoomNote{}).Error; err != nil {
 			return err
 		}
-		result := tx.Where("conversation_id = ? AND member_tag = ?", conversationID, memberTag).Delete(&models.ConversationMember{})
+		result := tx.Where(whereMember, conversationID, memberTag).Delete(&models.ConversationMember{})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -539,8 +555,8 @@ func (r *chatRepository) CountMembers(conversationIDs []uuid.UUID) (map[uuid.UUI
 		ConversationID uuid.UUID
 		Count          int
 	}
-	err := r.db().Model(&models.ConversationMember{}).Select("conversation_id, count(*) AS count").
-		Where("conversation_id IN ?", conversationIDs).Group("conversation_id").Scan(&rows).Error
+	err := r.db().Model(&models.ConversationMember{}).Select(selectCountPerConversation).
+		Where("conversation_id IN ?", conversationIDs).Group(colConversationID).Scan(&rows).Error
 	if err != nil {
 		chatRepoLogger.LogError("ChatRepository.CountMembers", err)
 		return nil, err
@@ -581,8 +597,8 @@ func (r *chatRepository) CountNotesFor(recipientTags []string, now time.Time) (m
 		ConversationID uuid.UUID
 		Count          int
 	}
-	err := r.db().Model(&models.RoomNote{}).Select("conversation_id, count(*) AS count").
-		Where("recipient_tag IN ? AND expires_at > ?", recipientTags, now).Group("conversation_id").Scan(&rows).Error
+	err := r.db().Model(&models.RoomNote{}).Select(selectCountPerConversation).
+		Where("recipient_tag IN ? AND expires_at > ?", recipientTags, now).Group(colConversationID).Scan(&rows).Error
 	if err != nil {
 		chatRepoLogger.LogError("ChatRepository.CountNotesFor", err)
 		return nil, err
@@ -596,7 +612,7 @@ func (r *chatRepository) CountNotesFor(recipientTags []string, now time.Time) (m
 func (r *chatRepository) ListNotes(conversationID uuid.UUID, recipientTag string, now time.Time) ([]models.RoomNote, error) {
 	var notes []models.RoomNote
 	err := r.db().Where("conversation_id = ? AND recipient_tag = ? AND expires_at > ?", conversationID, recipientTag, now).
-		Order("id").Find(&notes).Error
+		Order(colID).Find(&notes).Error
 	if err != nil {
 		chatRepoLogger.LogError("ChatRepository.ListNotes", err)
 	}

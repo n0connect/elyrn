@@ -208,7 +208,10 @@ func GetMaxConversationsPerUser() int {
 const (
 	MinRoomMembers       = 2
 	MaxRoomMembersBound  = 32
+	MinRoomTTLHours      = 1
 	MaxRoomTTLHoursBound = 720
+	// RoomExpiryRoundHours: a creator rounds a room's expiry up past the current hour by this many
+	RoomExpiryRoundHours = 1
 )
 
 // GetRoomMaxMembers returns the largest room a member may create

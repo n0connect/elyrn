@@ -47,7 +47,7 @@ func (r *keyRepository) MasterKeyIDsInUse() (map[string]struct{}, error) {
 	inUse := make(map[string]struct{})
 	for _, model := range []interface{}{&models.User{}, &models.ConversationMember{}, &models.Invite{}} {
 		var ids []string
-		if err := database.DB.Model(model).Distinct().Pluck("master_key_id", &ids).Error; err != nil {
+		if err := database.DB.Model(model).Distinct().Pluck(colMasterKeyID, &ids).Error; err != nil {
 			keyRepoLogger.LogError("KeyRepository.MasterKeyIDsInUse", err)
 			return nil, err
 		}
@@ -60,7 +60,7 @@ func (r *keyRepository) MasterKeyIDsInUse() (map[string]struct{}, error) {
 
 func (r *keyRepository) HasUsers() (bool, error) {
 	var ids []uint
-	if err := database.DB.Model(&models.User{}).Limit(1).Pluck("id", &ids).Error; err != nil {
+	if err := database.DB.Model(&models.User{}).Limit(1).Pluck(colID, &ids).Error; err != nil {
 		keyRepoLogger.LogError("KeyRepository.HasUsers", err)
 		return false, err
 	}
@@ -69,7 +69,7 @@ func (r *keyRepository) HasUsers() (bool, error) {
 
 func (r *keyRepository) UsersUnderKey(keyID string, afterID uint, limit int) ([]models.User, error) {
 	var users []models.User
-	err := database.DB.Where("master_key_id = ? AND id > ?", keyID, afterID).Order("id").Limit(limit).Find(&users).Error
+	err := database.DB.Where(whereKeyAfterID, keyID, afterID).Order(colID).Limit(limit).Find(&users).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.UsersUnderKey", err)
 	}
@@ -88,7 +88,7 @@ func (r *keyRepository) MembersUnderKey(keyID string, after models.ConversationM
 
 func (r *keyRepository) InvitesUnderKey(keyID string, after uuid.UUID, limit int) ([]models.Invite, error) {
 	var invites []models.Invite
-	err := database.DB.Where("master_key_id = ? AND id > ?", keyID, after).Order("id").Limit(limit).Find(&invites).Error
+	err := database.DB.Where(whereKeyAfterID, keyID, after).Order(colID).Limit(limit).Find(&invites).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.InvitesUnderKey", err)
 	}
@@ -97,7 +97,7 @@ func (r *keyRepository) InvitesUnderKey(keyID string, after uuid.UUID, limit int
 
 func rewrap(model interface{}, column, fromKeyID, toKeyID, enc, where string, args ...interface{}) error {
 	err := database.DB.Model(model).Where(where+" AND master_key_id = ?", append(args, fromKeyID)...).
-		UpdateColumns(map[string]interface{}{column: enc, "master_key_id": toKeyID}).Error
+		UpdateColumns(map[string]interface{}{column: enc, colMasterKeyID: toKeyID}).Error
 	if err != nil {
 		keyRepoLogger.LogError("KeyRepository.rewrap", err)
 	}
@@ -105,16 +105,16 @@ func rewrap(model interface{}, column, fromKeyID, toKeyID, enc, where string, ar
 }
 
 func (r *keyRepository) RewrapUser(id uint, fromKeyID, toKeyID, enc string) error {
-	return rewrap(&models.User{}, "encrypted_key", fromKeyID, toKeyID, enc, "id = ?", id)
+	return rewrap(&models.User{}, "encrypted_key", fromKeyID, toKeyID, enc, whereID, id)
 }
 
 func (r *keyRepository) RewrapMember(member *models.ConversationMember, fromKeyID, toKeyID, enc string) error {
 	return rewrap(&models.ConversationMember{}, "member_ref_enc", fromKeyID, toKeyID, enc,
-		"conversation_id = ? AND member_tag = ?", member.ConversationID, member.MemberTag)
+		whereMember, member.ConversationID, member.MemberTag)
 }
 
 func (r *keyRepository) RewrapInvite(id uuid.UUID, fromKeyID, toKeyID, enc string) error {
-	return rewrap(&models.Invite{}, "creator_ref_enc", fromKeyID, toKeyID, enc, "id = ?", id)
+	return rewrap(&models.Invite{}, "creator_ref_enc", fromKeyID, toKeyID, enc, whereID, id)
 }
 
 func (r *keyRepository) KeyCheck(name string) (string, bool, error) {

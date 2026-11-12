@@ -32,7 +32,7 @@ func NewUserRepository() UserRepository {
 // FindByUUID finds a user by UUID
 func (r *userRepository) FindByUUID(uuid string) (*models.User, error) {
 	var user models.User
-	result := database.DB.Where("uuid = ?", uuid).First(&user)
+	result := database.DB.Where(whereUUID, uuid).First(&user)
 	if result.Error != nil {
 		// Not found is an expected outcome (unknown account, deleted user): not an error to log
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -60,7 +60,7 @@ func (r *userRepository) Create(user *models.User) error {
 // FindByAccountLookup finds a user by account lookup (HMAC)
 func (r *userRepository) FindByAccountLookup(lookup string) (*models.User, error) {
 	var user models.User
-	result := database.DB.Where("account_lookup = ?", lookup).First(&user)
+	result := database.DB.Where(whereAccountLookup, lookup).First(&user)
 	if result.Error != nil {
 		// Not found is an expected outcome (unknown account, deleted user): not an error to log
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -75,7 +75,7 @@ func (r *userRepository) FindByAccountLookup(lookup string) (*models.User, error
 // ExistsByAccountLookup checks if a user exists with the given account lookup
 func (r *userRepository) ExistsByAccountLookup(lookup string) (bool, error) {
 	var count int64
-	result := database.DB.Model(&models.User{}).Where("account_lookup = ?", lookup).Count(&count)
+	result := database.DB.Model(&models.User{}).Where(whereAccountLookup, lookup).Count(&count)
 	if result.Error != nil {
 		userRepoLogger.LogError("UserRepository.ExistsByAccountLookup", result.Error)
 		return false, result.Error
@@ -86,7 +86,7 @@ func (r *userRepository) ExistsByAccountLookup(lookup string) (bool, error) {
 
 // BumpSessionEpoch invalidates every JWT issued to the user (logout = revoke all sessions)
 func (r *userRepository) BumpSessionEpoch(uuid string) error {
-	result := database.DB.Model(&models.User{}).Where("uuid = ?", uuid).
+	result := database.DB.Model(&models.User{}).Where(whereUUID, uuid).
 		UpdateColumn("session_epoch", gorm.Expr("session_epoch + 1"))
 	if result.Error != nil {
 		userRepoLogger.LogError("UserRepository.BumpSessionEpoch", result.Error)

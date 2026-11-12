@@ -31,6 +31,12 @@ const (
 	roomRosterPrefix = "noaddx/room/roster/v1"
 	// expirySkew tolerates a client clock this far off when it proposes a room's expiry
 	expirySkew = 10 * time.Minute
+	// Expiries are whole hours since the Unix epoch
+	hourSeconds = int64(time.Hour / time.Second)
+	// newRoomMembers is the creator alone: a fresh room has no notes and no messages yet
+	newRoomMembers = 1
+	// noteWraps: a note is sealed for exactly one addressee
+	noteWraps = 1
 )
 
 // RoomInput is a create or join request whose fields passed ParseRoomInput.
@@ -58,11 +64,11 @@ func ParseRoomInput(id, lookup, card, vault string) (*RoomInput, error) {
 // checkLimits validates what only a creator sends: the member limit and an hour-aligned expiry
 // one hour to ROOM_MAX_TTL_HOURS (+1, the rounding) ahead.
 func checkLimits(in *RoomInput, now time.Time) error {
-	if in.MaxMembers < config.MinRoomMembers || in.MaxMembers > config.GetRoomMaxMembers() || in.ExpiresAt.Unix()%3600 != 0 {
+	if in.MaxMembers < config.MinRoomMembers || in.MaxMembers > config.GetRoomMaxMembers() || in.ExpiresAt.Unix()%hourSeconds != 0 {
 		return ErrInvalidInput
 	}
-	earliest := now.Add(time.Hour - expirySkew)
-	latest := now.Add(time.Duration(config.GetRoomMaxTTLHours()+1)*time.Hour + expirySkew)
+	earliest := now.Add(config.MinRoomTTLHours*time.Hour - expirySkew)
+	latest := now.Add(time.Duration(config.GetRoomMaxTTLHours()+config.RoomExpiryRoundHours)*time.Hour + expirySkew)
 	if in.ExpiresAt.Before(earliest) || in.ExpiresAt.After(latest) {
 		return ErrInvalidInput
 	}
@@ -210,7 +216,7 @@ func (s *Service) CreateRoom(me *Member, in *RoomInput) (*models.ConversationDTO
 		if err := s.saveIndex(tx, self, append([]uuid.UUID{in.ID}, index...)); err != nil {
 			return err
 		}
-		dto = roomDTO(&room, &member, 1, 0, 0)
+		dto = roomDTO(&room, &member, newRoomMembers, 0, 0)
 		return nil
 	})
 	if err != nil {
@@ -435,7 +441,7 @@ func checkRoomMessage(tx store.ChatRepository, id uuid.UUID, blob *utils.RoomBlo
 func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string) (string, error) {
 	noteID, okID := utils.ParseCanonicalUUIDv4(rawNoteID)
 	_, okTo := utils.DecodeExact(to, utils.RoomCardBytes)
-	parsed, okBlob := utils.ParseRoomBlob(blob, utils.RoomNoteMagic, 1)
+	parsed, okBlob := utils.ParseRoomBlob(blob, utils.RoomNoteMagic, noteWraps)
 	if !okID || !okTo || !okBlob {
 		return "", ErrInvalidInput
 	}
