@@ -150,6 +150,9 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Changed
 
+- The browser reports every failure and warning by a registered code from one module
+  (`js/errors.js`) and logs only through `js/log.js`, which keeps a code, an error's name and a
+  status number and nothing else; five messages now say what to do next.
 - The project is now **elyrn.** (formerly noaddx.): the brand, the Go module, binaries, images,
   containers, release tags (`elyrn-openssl-*`, `elyrn-native-*`) and the prefixes of new codes
   (`elyrn:` invites, `elyrn#` rooms). Stored and wire names do not change (the `noaddx` HKDF
