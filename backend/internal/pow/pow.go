@@ -22,8 +22,9 @@ type ChallengeEntry struct {
 }
 
 const (
-	challengeBytesLen = 16
-	saltBytesLen      = 16
+	// ChallengeBytes and SaltBytes are the issued sizes; challenges travel as lowercase hex.
+	ChallengeBytes = 16
+	SaltBytes      = 16
 	// Worker emits a decimal nonce below 10^7; 20 digits bounds any uint64.
 	maxSolutionDigits = 20
 	// Challenge rate limit per client: phase 1 + phase 2 of one registration plus retries
@@ -127,13 +128,13 @@ func GenerateChallenge(clientKey string) (*models.PoWChallenge, error) {
 		return nil, ErrRateLimited
 	}
 
-	challengeBytes, err := cryptoengine.RandomBytes(challengeBytesLen)
+	challengeBytes, err := cryptoengine.RandomBytes(ChallengeBytes)
 	if err != nil {
 		powLogger.LogError("RandomBytes", err)
 		return nil, fmt.Errorf("failed to generate challenge: %w", err)
 	}
 
-	saltBytes, err := cryptoengine.RandomBytes(saltBytesLen)
+	saltBytes, err := cryptoengine.RandomBytes(SaltBytes)
 	if err != nil {
 		powLogger.LogError("RandomBytes", err)
 		return nil, fmt.Errorf("failed to generate salt: %w", err)
@@ -244,7 +245,7 @@ func ValidateSolution(solution *models.PoWSolution) bool {
 	powLogger.Debug("Validating PoW solution")
 
 	// Whitelist the shape of every client-supplied field before touching shared state
-	if !isHexOfLen(solution.Challenge, challengeBytesLen) || !isHexOfLen(solution.Salt, saltBytesLen) || !isDecimal(solution.Solution, maxSolutionDigits) {
+	if !IsHexOfLen(solution.Challenge, ChallengeBytes) || !IsHexOfLen(solution.Salt, SaltBytes) || !isDecimal(solution.Solution, maxSolutionDigits) {
 		powLogger.Warn("Malformed PoW solution rejected")
 		return false
 	}
@@ -283,7 +284,7 @@ func ValidateSolution(solution *models.PoWSolution) bool {
 		return false
 	}
 
-	result := hasNLeadingZeros(hash, entry.Difficulty)
+	result := HasLeadingZeroBits(hash, entry.Difficulty)
 
 	if result {
 		// Mark as used BEFORE releasing lock
@@ -296,7 +297,8 @@ func ValidateSolution(solution *models.PoWSolution) bool {
 	return result
 }
 
-func isHexOfLen(s string, byteLen int) bool {
+// IsHexOfLen reports whether s is exactly byteLen bytes of lowercase hex, as issued.
+func IsHexOfLen(s string, byteLen int) bool {
 	if len(s) != byteLen*2 {
 		return false
 	}
@@ -321,8 +323,9 @@ func isDecimal(s string, maxDigits int) bool {
 	return true
 }
 
-// hasNLeadingZeros checks if the hash has at least n leading zero bits
-func hasNLeadingZeros(hash []byte, n int) bool {
+// HasLeadingZeroBits checks if the hash has at least n leading zero bits (the verifier's
+// rule; clients that solve challenges in Go use the same function)
+func HasLeadingZeroBits(hash []byte, n int) bool {
 	if n <= 0 {
 		return true
 	}

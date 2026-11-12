@@ -27,7 +27,7 @@ func FuzzValidateSolution(f *testing.F) {
 			t.Fatalf("unissued challenge %q/%q accepted", challenge, salt)
 		}
 		sum := sha256.Sum256([]byte(challenge + solution + salt))
-		if !hasNLeadingZeros(sum[:], ch.Difficulty) {
+		if !HasLeadingZeroBits(sum[:], ch.Difficulty) {
 			t.Fatalf("solution %q accepted below difficulty %d", solution, ch.Difficulty)
 		}
 	})

@@ -8,19 +8,19 @@ import (
 )
 
 const (
-	// __Host- prefix requires: Secure flag, no Domain, Path=/ (blocks subdomain/MITM cookie injection)
-	productionCookieName = "__Host-Session"
-	// Browsers reject __Host- cookies without Secure, so plain-HTTP development uses an unprefixed name
+	// ProductionCookieName: the __Host- prefix requires: Secure flag, no Domain, Path=/ (blocks subdomain/MITM cookie injection)
+	ProductionCookieName = "__Host-Session"
+	// DevelopmentCookieName: browsers reject __Host- cookies without Secure, so plain-HTTP development uses an unprefixed name
 	// Kept as "noaddx_session" across the rename to elyrn so existing development sessions survive.
-	developmentCookieName = "noaddx_session"
+	DevelopmentCookieName = "noaddx_session"
 )
 
 // AuthCookieName returns the session cookie name for the current mode
 func AuthCookieName() string {
 	if config.IsProductionMode() {
-		return productionCookieName
+		return ProductionCookieName
 	}
-	return developmentCookieName
+	return DevelopmentCookieName
 }
 
 // SetAuthCookie sets a secure, HttpOnly authentication cookie

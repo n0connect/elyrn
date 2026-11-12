@@ -45,7 +45,7 @@ func search(t testing.TB, ch *models.PoWChallenge, want bool) string {
 	for nonce := 0; nonce < 1<<26; nonce++ {
 		n := strconv.Itoa(nonce)
 		sum := sha256.Sum256([]byte(ch.Challenge + n + ch.Salt))
-		if hasNLeadingZeros(sum[:], ch.Difficulty) == want {
+		if HasLeadingZeroBits(sum[:], ch.Difficulty) == want {
 			return n
 		}
 	}
@@ -67,8 +67,8 @@ func registryEntry(ch *models.PoWChallenge) (*ChallengeEntry, bool) {
 
 func TestGenerateChallenge_IssuesStoredUnusedChallenge(t *testing.T) {
 	ch := issue(t)
-	if !isHexOfLen(ch.Challenge, challengeBytesLen) || !isHexOfLen(ch.Salt, saltBytesLen) {
-		t.Fatalf("challenge/salt not %d-byte hex: %q %q", challengeBytesLen, ch.Challenge, ch.Salt)
+	if !IsHexOfLen(ch.Challenge, ChallengeBytes) || !IsHexOfLen(ch.Salt, SaltBytes) {
+		t.Fatalf("challenge/salt not %d-byte hex: %q %q", ChallengeBytes, ch.Challenge, ch.Salt)
 	}
 	if ch.Difficulty != 18 || ch.TTL != int64(config.GetPoWChallengeTTL()/time.Second) {
 		t.Fatalf("unexpected difficulty/ttl: %d/%d", ch.Difficulty, ch.TTL)
