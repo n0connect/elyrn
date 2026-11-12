@@ -153,7 +153,7 @@ const Rooms = (() => {
         if (recipients.length > room.maxMembers) {
             throw new Error('roster exceeds the room limit');
         }
-        return R.sealMessage(room.keys, room.member, id, recipients, digest, text, Date.now(), counter);
+        return R.sealMessage({ room: room.keys, me: room.member, id, recipients, digest, text, sentAt: Date.now(), counter });
     }
 
     function open(conv, raw) {
@@ -218,7 +218,7 @@ const Rooms = (() => {
 
     async function befriend(api, conv, entry, inviteCode) {
         const id = ElyrnCrypto.newMessageId();
-        const blob = await R.sealNote(conv.room.keys, conv.room.member, id, entry.card, inviteCode, Date.now());
+        const blob = await R.sealNote({ room: conv.room.keys, me: conv.room.member, id, toCard: entry.card, text: inviteCode, sentAt: Date.now() });
         return api('POST', `/conversations/${conv.id}/notes`, { id: id, to: entry.card, blob: blob });
     }
 

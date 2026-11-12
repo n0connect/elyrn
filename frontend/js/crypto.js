@@ -252,7 +252,7 @@ const ElyrnCrypto = (() => {
         return { text: parsed.t, sentAt: parsed.ts, counter: parsed.n };
     }
 
-    async function encryptMessage(key, conversationId, messageId, senderPublicKey, text, sentAt, counter) {
+    async function encryptMessage({ key, conversationId, messageId, senderPublicKey, text, sentAt, counter }) {
         const plain = encodePayload(text, sentAt, counter);
         const nonce = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
         try {

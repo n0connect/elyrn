@@ -57,7 +57,7 @@ function flip(blob, index) {
 
 async function sealFor(room, from, roster, id, counter = 1) {
     const { recipients, digest } = await R.recipients(room, from.member, roster);
-    return R.sealMessage(room, from.member, id, recipients, digest, TEXT, SENT_AT, counter);
+    return R.sealMessage({ room, me: from.member, id, recipients, digest, text: TEXT, sentAt: SENT_AT, counter });
 }
 
 test('room code round-trips and parses strictly', async () => {
@@ -168,7 +168,7 @@ test('a member outside the roster cannot open; a member cannot impersonate anoth
     const forger = { privateKey: c.member.privateKey, publicKey: a.member.publicKey, card: a.member.card };
     const { recipients, digest } = await R.recipients(room, c.member, [a.member.card, b.member.card, c.member.card]);
     const forgedId = C.newMessageId();
-    const forged = await R.sealMessage(room, forger, forgedId, recipients, digest, 'i am a', SENT_AT, 1);
+    const forged = await R.sealMessage({ room, me: forger, id: forgedId, recipients, digest, text: 'i am a', sentAt: SENT_AT, counter: 1 });
     await assert.rejects(R.openMessage(room, b.member, forgedId, forged));
 });
 
@@ -220,7 +220,7 @@ test('message size is header, wraps and one padded class', async () => {
     const b = await joinAs(room, ACCOUNT_B);
     const { recipients, digest } = await R.recipients(room, a.member, [a.member.card, b.member.card]);
     for (const [length, frame] of [[1, 256], [300, 512], [3000, 4096]]) {
-        const blob = await R.sealMessage(room, a.member, C.newMessageId(), recipients, digest, 'x'.repeat(length), SENT_AT, 1);
+        const blob = await R.sealMessage({ room, me: a.member, id: C.newMessageId(), recipients, digest, text: 'x'.repeat(length), sentAt: SENT_AT, counter: 1 });
         assert.equal(C.b64urlDecode(blob).length, R.HEADER_BYTES + 2 * R.WRAP_BYTES + frame + 16);
     }
 });
@@ -231,7 +231,7 @@ test('a note opens only for its addressee', async () => {
     const b = await joinAs(room, ACCOUNT_B);
     const c = await joinAs(room, ACCOUNT_C);
     const id = C.newMessageId();
-    const note = await R.sealNote(room, a.member, id, b.member.card, 'noaddx:invite', SENT_AT);
+    const note = await R.sealNote({ room, me: a.member, id, toCard: b.member.card, text: 'noaddx:invite', sentAt: SENT_AT });
     const opened = await R.openNote(room, b.member, id, note);
     assert.equal(opened.text, 'noaddx:invite');
     assert.equal(opened.sender, a.member.publicKey);

@@ -538,7 +538,10 @@ const Chat = (() => {
             return Rooms.seal(conv, attempt.id, attempt.text, attempt.counter);
         }
         return conversationKey(conv).then(key =>
-            ElyrnCrypto.encryptMessage(key, conv.id, attempt.id, me.publicKey, attempt.text, Date.now(), attempt.counter));
+            ElyrnCrypto.encryptMessage({
+                key, conversationId: conv.id, messageId: attempt.id, senderPublicKey: me.publicKey,
+                text: attempt.text, sentAt: Date.now(), counter: attempt.counter
+            }));
     }
 
     // ---------- pairing ----------

@@ -349,7 +349,7 @@ const ElyrnRoomCrypto = (() => {
     }
 
     // One recipient's key-encryption key from dh1 || dh2, bound to everyone involved
-    async function wrapKey(room, idBytes, dh1, dh2, ephPublic, senderPublic, recipientPublic) {
+    async function wrapKey({ room, idBytes, dh1, dh2, ephPublic, senderPublic, recipientPublic }) {
         const ikm = C.concat(dh1, dh2);
         try {
             const base = await subtle.importKey('raw', ikm, 'HKDF', false, ['deriveKey']);
@@ -363,8 +363,8 @@ const ElyrnRoomCrypto = (() => {
 
     // header || shuffled wraps || body. Every AES-GCM key seals exactly one plaintext (mk is
     // fresh, each KEK mixes a fresh ephemeral key and the message id), hence the zero nonces.
-    async function assemble(room, me, magic, id, keys, digest, mk, commit, framed) {
-        if (!C.isUuidV4(id) || !Array.isArray(keys) || keys.length === 0 || keys.length > MAX_MEMBERS ||
+    async function assemble({ room, me, magic, id, recipients, digest, mk, commit, framed }) {
+        if (!C.isUuidV4(id) || !Array.isArray(recipients) || recipients.length === 0 || recipients.length > MAX_MEMBERS ||
             digest.length !== KEY_BYTES || mk.length !== KEY_BYTES || commit.length !== KEY_BYTES) {
             throw new Error('invalid message');
         }
@@ -373,16 +373,16 @@ const ElyrnRoomCrypto = (() => {
         const eph = await subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']);
         const ephPublic = new Uint8Array(await subtle.exportKey('raw', eph.publicKey));
         const header = C.concat(magic, new Uint8Array([VERSION]), C.b64urlDecode(me.card, CARD_BYTES), ephPublic,
-            commit, digest, new Uint8Array([keys.length]));
+            commit, digest, new Uint8Array([recipients.length]));
         const mkKey = await aesKey(mk, ['encrypt']);
         const body = await aesSeal(mkKey, ZERO_NONCE, framed, C.concat(room.idBytes, idBytes, header));
         const wrapAAD = await C.sha256(C.concat(room.idBytes, idBytes, header, body));
         const wraps = [];
-        for (const recipient of keys) {
+        for (const recipient of recipients) {
             const dh1 = await dh(eph.privateKey, recipient);
             const dh2 = await dh(me.privateKey, recipient);
             try {
-                const kek = await wrapKey(room, idBytes, dh1, dh2, ephPublic, senderPublic, recipient);
+                const kek = await wrapKey({ room, idBytes, dh1, dh2, ephPublic, senderPublic, recipientPublic: recipient });
                 wraps.push(await aesSeal(kek, ZERO_NONCE, mk, wrapAAD));
             } finally {
                 C.wipe(dh1);
@@ -397,24 +397,25 @@ const ElyrnRoomCrypto = (() => {
         return C.concat(header, ...wraps, body);
     }
 
-    async function seal(room, me, magic, id, keys, digest, framed) {
+    // message: { room, me, magic, id, recipients, digest, framed }; framed is wiped once sealed
+    async function seal(message) {
         const mk = globalThis.crypto.getRandomValues(new Uint8Array(KEY_BYTES));
         try {
-            return C.b64urlEncode(await assemble(room, me, magic, id, keys, digest, mk, await commitment(mk), framed));
+            return C.b64urlEncode(await assemble({ ...message, mk, commit: await commitment(mk) }));
         } finally {
             C.wipe(mk);
-            C.wipe(framed);
+            C.wipe(message.framed);
         }
     }
 
-    function sealMessage(room, me, id, keys, digest, text, sentAt, counter) {
-        return seal(room, me, MAGIC_MESSAGE, id, keys, digest, C.encodePayload(text, sentAt, counter));
+    function sealMessage({ room, me, id, recipients, digest, text, sentAt, counter }) {
+        return seal({ room, me, magic: MAGIC_MESSAGE, id, recipients, digest, framed: C.encodePayload(text, sentAt, counter) });
     }
 
-    async function sealNote(room, me, id, toCard, text, sentAt) {
+    async function sealNote({ room, me, id, toCard, text, sentAt }) {
         const recipient = await openCard(room, toCard);
         const digest = await rosterDigest([toCard]);
-        return seal(room, me, MAGIC_NOTE, id, [recipient], digest, C.encodePayload(text, sentAt, 1));
+        return seal({ room, me, magic: MAGIC_NOTE, id, recipients: [recipient], digest, framed: C.encodePayload(text, sentAt, 1) });
     }
 
     // Structure: magic, version, 1..32 wraps (exactly one in a note), one padded frame size
@@ -451,7 +452,9 @@ const ElyrnRoomCrypto = (() => {
         const dh2 = await dh(me.privateKey, sender);
         let kek;
         try {
-            kek = await wrapKey(room, idBytes, dh1, dh2, ephPublic, sender, C.b64urlDecode(me.publicKey, KEY_BYTES));
+            kek = await wrapKey({
+                room, idBytes, dh1, dh2, ephPublic, senderPublic: sender, recipientPublic: C.b64urlDecode(me.publicKey, KEY_BYTES)
+            });
         } finally {
             C.wipe(dh1);
             C.wipe(dh2);

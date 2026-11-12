@@ -51,7 +51,7 @@ async function peers() {
 test('both peers derive the same conversation key and round-trip a message', async () => {
     const { a, ab, ba } = await peers();
     const msg = C.newMessageId();
-    const ct = await C.encryptMessage(ab, CONV, msg, a.publicKey, 'merhaba 👋 <b>', 1729700000000, 7);
+    const ct = await C.encryptMessage({ key: ab, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, text: 'merhaba 👋 <b>', sentAt: 1729700000000, counter: 7 });
     const out = await C.decryptMessage(ba, CONV, msg, a.publicKey, ct);
     assert.deepEqual({ ...out }, { text: 'merhaba 👋 <b>', sentAt: 1729700000000, counter: 7 });
     // Length hiding: ciphertext size is a padded bucket, not the text length
@@ -62,11 +62,11 @@ test('both peers derive the same conversation key and round-trip a message', asy
 test('ciphertext length is one of five power-of-two buckets', async () => {
     const { a, ab } = await peers();
     const frameFor = async (chars) => C.b64urlDecode(
-        await C.encryptMessage(ab, CONV, C.newMessageId(), a.publicKey, 'x'.repeat(chars), 1, 1)).length - 12 - 16;
+        await C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'x'.repeat(chars), sentAt: 1, counter: 1 })).length - 12 - 16;
     assert.equal(await frameFor(1), 256);
     assert.equal(await frameFor(700), 1024);  // 723 framed bytes
     assert.equal(await frameFor(3000), 4096); // 3023 framed bytes
-    await assert.rejects(C.encryptMessage(ab, CONV, C.newMessageId(), a.publicKey, 'x'.repeat(4074), 1, 1));
+    await assert.rejects(C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'x'.repeat(4074), sentAt: 1, counter: 1 }));
 });
 
 test('opens a message encrypted by the Go implementation (interop)', async () => {
@@ -78,7 +78,7 @@ test('opens a message encrypted by the Go implementation (interop)', async () =>
 test('AAD binding: wrong message id, sender, conversation, or tampered bytes fail', async () => {
     const { a, b, ab, ba } = await peers();
     const msg = C.newMessageId();
-    const ct = await C.encryptMessage(ab, CONV, msg, a.publicKey, 'secret', 1, 1);
+    const ct = await C.encryptMessage({ key: ab, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, text: 'secret', sentAt: 1, counter: 1 });
     await assert.rejects(C.decryptMessage(ba, CONV, C.newMessageId(), a.publicKey, ct));
     await assert.rejects(C.decryptMessage(ba, CONV, msg, b.publicKey, ct)); // reflected as if sent by b
     const otherConv = await C.conversationKey(b.privateKey, a.publicKey, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
@@ -120,6 +120,6 @@ test('payload limit is enforced before encryption', async () => {
     // 4094-byte payloads; payloadFits budgets 48 bytes of JSON for the longest ts and counter
     assert.equal(C.payloadFits('x'.repeat(4046)), true);
     assert.equal(C.payloadFits('x'.repeat(4047)), false);
-    await assert.rejects(C.encryptMessage(ab, CONV, C.newMessageId(), a.publicKey, 'x'.repeat(7000), 1, 1));
-    await assert.rejects(C.encryptMessage(ab, CONV, C.newMessageId(), a.publicKey, 'hi', 1, 0)); // counter must be >= 1
+    await assert.rejects(C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'x'.repeat(7000), sentAt: 1, counter: 1 }));
+    await assert.rejects(C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'hi', sentAt: 1, counter: 0 })); // counter must be >= 1
 });
