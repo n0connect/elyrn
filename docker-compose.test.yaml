@@ -81,3 +81,6 @@ services:
       ALLOWED_ORIGINS: "http://localhost:3000"
     volumes:
       - ./test-results:/test-results
+      # contract.DocPath resolves to /docs/api from /app/internal/contract; .dockerignore keeps
+      # *.md out of the image, so the generated document is mounted for TestDocMatchesTable
+      - ./docs/api:/docs/api:ro
