@@ -136,9 +136,15 @@ func (l *Logger) LogErrorFrom(skip int, operation string, err error) {
 	}
 }
 
-// peerAddress matches an IPv4 or bracketed IPv6 address, with or without a port: net/http
-// names the peer in its own error lines ("TLS handshake error from 192.0.2.1:4000")
-var peerAddress = regexp.MustCompile(`\[[0-9A-Fa-f:.%]+\](:\d+)?|\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b`)
+// peerAddress matches an IP address in any spelling a library may print, with or without a
+// port: net/http names the peer in its own error lines ("TLS handshake error from
+// 192.0.2.1:4000"). In order: a bracketed IPv6 address (a zone id included), a dotted quad,
+// and a bare IPv6 address (at least two colons; a zone id runs to the next blank). None is
+// anchored to a word boundary, so an address glued to other text ("x192.0.2.1", "fe80::1%eth0")
+// is removed too: over-redacting a library line is harmless, leaking a peer is not.
+var peerAddress = regexp.MustCompile(`\[[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(%[^\]\s]*)?\](:\d+)?` +
+	`|\d{1,3}(\.\d{1,3}){3}(:\d+)?` +
+	`|[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7}(%\S+)?`)
 
 // peerRedacted replaces a peer address in a library's log line
 const peerRedacted = "[peer]"
@@ -148,8 +154,13 @@ const peerRedacted = "[peer]"
 type stdWriter struct{ l *Logger }
 
 func (w stdWriter) Write(p []byte) (int, error) {
-	w.l.Error("%s", peerAddress.ReplaceAllString(strings.TrimRight(string(p), "\n"), peerRedacted))
+	w.l.Error("%s", scrubPeerAddresses(strings.TrimRight(string(p), "\n")))
 	return len(p), nil
+}
+
+// scrubPeerAddresses replaces every IP address in a library's log line with peerRedacted.
+func scrubPeerAddresses(line string) string {
+	return peerAddress.ReplaceAllString(line, peerRedacted)
 }
 
 // StdLogger returns a *log.Logger (for a library such as net/http's Server.ErrorLog) whose
