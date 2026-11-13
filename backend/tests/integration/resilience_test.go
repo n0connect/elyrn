@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -135,6 +136,10 @@ func overTheNetwork(t *testing.T, method, url string, raw []byte, cookie *http.C
 // longer than the write timeout (15 s).
 const slowChunkDelay = 1500 * time.Millisecond
 
+// sseCommentPrefix starts an SSE comment line (the stream's ": ready" and keep-alive pings),
+// which a client ignores
+const sseCommentPrefix = ":"
+
 // L-03: a request that runs several statements on a slow database, each one well inside its own
 // deadline, still answers its registered 503 before the write deadline, because the whole
 // request runs under one database deadline. With per-statement deadlines alone, the list below
@@ -204,14 +209,22 @@ func TestEvents_StreamOutlivesTheRequestDeadline(t *testing.T) {
 	}()
 	waitFor(t, lines, "retry: 3000")
 
-	outlive := max(database.RequestBudget(), config.GetServerWriteTimeout()) + time.Second
-	select {
-	case line, open := <-lines:
-		if !open {
-			t.Fatal("the stream closed before the request deadline passed")
+	// Until the request budget and the write timeout have both passed, the stream may carry only
+	// what an idle stream writes: SSE comment lines (the preamble's ": ready", keep-alive pings)
+	// and the blank lines that end them. Anything else, or the stream closing, fails.
+	outlive := time.After(max(database.RequestBudget(), config.GetServerWriteTimeout()) + time.Second)
+	for idle := true; idle; {
+		select {
+		case line, open := <-lines:
+			if !open {
+				t.Fatal("the stream closed before the request deadline passed")
+			}
+			if line != "" && !strings.HasPrefix(line, sseCommentPrefix) {
+				t.Fatalf("unexpected line %q before any event", line)
+			}
+		case <-outlive:
+			idle = false
 		}
-		t.Fatalf("unexpected line %q before any event", line)
-	case <-time.After(outlive):
 	}
 	send(t, bob, alice, conv, 1)
 	waitFor(t, lines, "event: msg")
