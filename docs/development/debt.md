@@ -159,6 +159,14 @@ maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 
 - D-2026-11-12-a: design of the robot entrance, D1 to D8 in `docs/architecture/agents.md`.
 - D-2026-11-12-b: stored and wire names keep the `noaddx` protocol namespace after the rename.
+- D-2026-11-13-a (owner): no forward secrecy, by design. The identity is one number from which
+  everything is derived again on any device, with no secret kept on a device; a ratchet needs
+  exactly such a kept, underivable, deleted secret, and brings per-device state, key upload and
+  new linkable surfaces with it. This is a condition of the system, not a debt. It stays stated
+  in the security documents.
+- D-2026-11-13-b (owner): threat model boundary. A compromised server and the network address a
+  client connects from are outside what the project can change (onion and VPN are the answer for
+  the address). The measure is that the server cannot read messages or tell who an account is.
 - D-2026-11-12-c: the agent accepts `http://*.onion` through the environment's SOCKS proxy; plain http elsewhere only on loopback.
 
 ## Scanner baseline (12 Nov 2026, before stage 1)
