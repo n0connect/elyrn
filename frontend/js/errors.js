@@ -198,8 +198,13 @@ const Errors = (() => {
         401: CODES.E_API_UNAUTHORIZED,
         403: CODES.E_API_FORBIDDEN,
         404: CODES.E_API_INVALID_REQUEST,
+        405: CODES.E_API_METHOD_NOT_ALLOWED,
+        413: CODES.E_API_BODY_TOO_LARGE,
+        415: CODES.E_API_INVALID_REQUEST,
         429: CODES.E_API_TOO_MANY_REQUESTS,
-        500: CODES.E_API_INTERNAL
+        500: CODES.E_API_INTERNAL,
+        // Every backend 503 (apperr.go, "Service unavailable" as text/plain; errors.test.mjs reads them)
+        503: CODES.E_API_UNAVAILABLE
     });
 
     // The codes nginx's own /api/ failures carry in their JSON body ("code"), one per entry of

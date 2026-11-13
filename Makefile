@@ -53,7 +53,7 @@ FUZZ_TARGETS := scripts/check-fuzz-targets.py
 # Frontend manifest: what the release workflow signs and verify-frontend checks against
 MANIFEST ?= frontend.sha256
 
-.PHONY: all help setup certs check-production check-hardening check-deps check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent \
+.PHONY: help setup certs check-production check-hardening check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db fuzz fuzz-js \
         build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts test-restore

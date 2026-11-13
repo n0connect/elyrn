@@ -181,8 +181,30 @@ test('an unknown code falls back to the message and status mapping; text/plain m
     // apiCall gives data null for a text/plain body: the status alone maps it, as before
     for (const [status, expected] of [[400, C.E_API_INVALID_REQUEST], [401, C.E_API_UNAUTHORIZED],
         [403, C.E_API_FORBIDDEN], [404, C.E_API_INVALID_REQUEST], [429, C.E_API_TOO_MANY_REQUESTS],
-        [500, C.E_API_INTERNAL], [405, C.E_REQUEST_FAILED], [413, C.E_REQUEST_FAILED], [503, C.E_REQUEST_FAILED]]) {
+        [500, C.E_API_INTERNAL], [405, C.E_API_METHOD_NOT_ALLOWED], [413, C.E_API_BODY_TOO_LARGE],
+        [415, C.E_API_INVALID_REQUEST], [503, C.E_API_UNAVAILABLE], [409, C.E_REQUEST_FAILED], [412, C.E_REQUEST_FAILED]]) {
         assert.equal(Errors.fromResult({ ok: false, status, data: null }), expected, String(status));
+    }
+});
+
+// The ids the backend answers with 503, read from their one registration (apperr.go)
+const APPERR_GO = new URL('../../backend/internal/apperr/apperr.go', import.meta.url);
+const UNAVAILABLE_ENTRY = /\{\s*"(E_[A-Z0-9_]+)"\s*,\s*http\.StatusServiceUnavailable\s*,/g;
+function unavailableIds() {
+    const source = readFileSync(APPERR_GO, 'utf8');
+    return Array.from(source.matchAll(UNAVAILABLE_ENTRY), match => match[1]);
+}
+
+test('every backend 503 code (apperr.go) reaches the user as E_API_UNAVAILABLE', () => {
+    const ids = unavailableIds();
+    for (const id of ['E_STORE_UNAVAILABLE', 'E_SHUTTING_DOWN', 'E_REQUEST_CANCELLED']) {
+        assert.ok(ids.includes(id), `${id} not found as a 503 in apperr.go`);
+    }
+    for (const id of ids) {
+        // A text/plain body is data null (status alone); a JSON body carries "Service unavailable"
+        assert.equal(Errors.fromResult({ ok: false, status: 503, data: null }), Errors.CODES.E_API_UNAVAILABLE, id);
+        assert.equal(Errors.fromResult({ ok: false, status: 503, data: { message: 'Service unavailable' } }),
+            Errors.CODES.E_API_UNAVAILABLE, id);
     }
 });
 
@@ -232,7 +254,6 @@ test('notices: every one is a non-empty sentence; notice() fills parameters and 
 });
 
 // The send's two 409s, read from the server's one registration (apperr.go sayIDTaken)
-const APPERR_GO = new URL('../../backend/internal/apperr/apperr.go', import.meta.url);
 function serverIDTaken() {
     const match = readFileSync(APPERR_GO, 'utf8').match(/\bsayIDTaken\s*=\s*"([^"]+)"/);
     assert.ok(match, 'sayIDTaken not found in apperr.go');
