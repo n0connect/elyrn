@@ -24,6 +24,7 @@ import (
 	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Fuzz targets over every surface of the agent that parses or judges bytes it does not control:
@@ -415,6 +416,49 @@ var messageTrimSamples = []struct{ text, sent string }{
 	{" \t\r\n\u00a0\u2028\u2029\ufeff", ""}, // nothing but trimmed characters: empty, refused
 }
 
+// accountNumberSamples pins ValidateMessageText's account-number rule to validation.js
+// containsAccountNumber, row for row: frontend/tests/negative-input.test.mjs reads this table
+// from here (fuzz-helpers.mjs goAccountNumberSamples) and runs every row through the browser's
+// validateMessageText. The number is the public test vector ACCOUNT_A of the browser tests.
+var accountNumberSamples = []struct {
+	text    string
+	refused bool
+}{
+	{"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", true},                           // the number alone
+	{"  AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\n", true},                       // trimmed around it
+	{"my number is AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8 keep it safe", true}, // a word among words
+	{"line one\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\nline three", true},     // a line among lines
+	{"\uff21\uff21\uff25\uff23\uff21\uff57\uff31\uff26\uff22\uff47\uff43\uff29\uff23\uff31\uff4f\uff2c\uff24\uff21\uff10\uff2f\uff24\uff58\uff21\uff32\uff25\uff48\uff2d\uff35\uff26\uff32\uff39\uff38\uff27\uff22\uff4b\uff41\uff27\uff58\uff57\uff44\uff28\uff48\uff18", true},        // fullwidth look-alike: NFKC folds it to ASCII
+	{"here:\t\uff21\uff21\uff25\uff23\uff21\uff57\uff31\uff26\uff22\uff47\uff43\uff29\uff23\uff31\uff4f\uff2c\uff24\uff21\uff10\uff2f\uff24\uff58\uff21\uff32\uff25\uff48\uff2d\uff35\uff26\uff32\uff39\uff38\uff27\uff22\uff4b\uff41\uff27\uff58\uff57\uff44\uff28\uff48\uff18", true}, // fullwidth after a tab
+	{"x\u3000AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", true},        // after an ideographic space
+	{"x\u00a0AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\u00a0y", true}, // between no-break spaces
+	{"x\u2028AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", true},        // after a line separator
+	{"\U0001d400AECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", true},      // a mathematical bold capital: NFKC folds it to ASCII
+	{"elyrn:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", false},        // an invite carries its prefix
+	{"noaddx:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", false},       // a legacy invite carries its prefix
+	{"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8A", false},             // one character too many
+	{"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh", false},               // one character too few
+	{"\u0410AECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", false},         // a Cyrillic look-alike: NFKC keeps it apart
+	{"x\u200bAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", false},       // a zero-width space is not a word break
+	{"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8.", false},             // punctuation makes it another word
+	{"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\u0301", false},        // a combining mark makes it another word
+}
+
+// sampleAccountNumber is accountNumberSamples' first row: the number alone.
+var sampleAccountNumber = accountNumberSamples[0].text
+
+func TestValidateMessageText_AccountNumberSamples(t *testing.T) {
+	for _, sample := range accountNumberSamples {
+		sent, err := ValidateMessageText(sample.text)
+		switch {
+		case sample.refused && (err == nil || CodeOf(err) != CodeAccountNumber || sent != ""):
+			t.Errorf("ValidateMessageText(%q) = %q, %v; want %s", sample.text, sent, err, CodeAccountNumber)
+		case !sample.refused && err != nil:
+			t.Errorf("ValidateMessageText(%q) refused: %v", sample.text, err)
+		}
+	}
+}
+
 func FuzzReceivedText(f *testing.F) {
 	for _, sample := range messageTrimSamples {
 		sent, err := ValidateMessageText(sample.text)
@@ -425,6 +469,9 @@ func FuzzReceivedText(f *testing.F) {
 		} else if err != nil || sent != sample.sent {
 			f.Fatalf("ValidateMessageText(%q) = %q, %v, want %q", sample.text, sent, err, sample.sent)
 		}
+		f.Add(sample.text)
+	}
+	for _, sample := range accountNumberSamples {
 		f.Add(sample.text)
 	}
 	for _, seed := range []string{
@@ -445,10 +492,32 @@ func FuzzReceivedText(f *testing.F) {
 		if utf8.ValidString(text) && strings.IndexFunc(text, forbiddenRune) < 0 && shown != text {
 			t.Fatalf("neutralize changed the clean text %q", text)
 		}
+		// The account-number rule reads text through NFKC: what folds to a number is one already
+		if utf8.ValidString(text) && containsAccountNumber(text) != containsAccountNumber(norm.NFKC.String(text)) {
+			t.Fatalf("containsAccountNumber(%q) changes under NFKC", text)
+		}
 		sent, err := ValidateMessageText(text)
+		if err != nil && CodeOf(err) == CodeAccountNumber {
+			// Refused for the number only: the text is otherwise one that would be sent
+			trimmed := strings.Trim(crlfNormalizer.Replace(text), messageTrimChars)
+			if n := utf8.RuneCountInString(trimmed); !containsAccountNumber(trimmed) || n < 1 || n > MaxMessageChars ||
+				strings.IndexFunc(trimmed, forbiddenRune) >= 0 {
+				t.Fatalf("ValidateMessageText(%q) refused it as an account number", text)
+			}
+			return
+		}
 		if err != nil {
 			wantFailure(t, err, CodeMessageText)
 			return
+		}
+		if containsAccountNumber(sent) {
+			t.Fatalf("ValidateMessageText(%q) accepted %q, which holds an account number", text, sent)
+		}
+		// A number added as a word of its own is caught, whatever comes before it
+		if withNumber := sent + " " + sampleAccountNumber; utf8.RuneCountInString(withNumber) <= MaxMessageChars {
+			if _, err := ValidateMessageText(withNumber); CodeOf(err) != CodeAccountNumber {
+				t.Fatalf("ValidateMessageText(%q) = %v, want %s", withNumber, err, CodeAccountNumber)
+			}
 		}
 		n := utf8.RuneCountInString(sent)
 		if n < 1 || n > MaxMessageChars || strings.ContainsRune(sent, '\r') || neutralize(sent) != sent ||

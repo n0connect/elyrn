@@ -96,7 +96,9 @@ func (a *Agent) Wait(ctx context.Context, id uuid.UUID, after int64, timeout tim
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		result, err = a.waitUntil(ctx, waitCtx, st, after)
+		// A cursor past the room's end waits from the end (clampCursor), so a message sent up to
+		// it is news and a timed-out answer never echoes it as last_seq
+		result, err = a.waitUntil(ctx, waitCtx, st, a.clampCursor(ctx, st, after))
 		return err
 	})
 	return result, err

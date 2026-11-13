@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +52,8 @@ func SafeGoSupervised(ctx context.Context, name string, fn func(ctx context.Cont
 func runRecovered(ctx context.Context, name string, fn func(ctx context.Context)) (panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			panicLogger.Error("Goroutine panic recovered: name=%s panic=%v stack=%s", name, r, string(debug.Stack()))
+			// The value's type only, never its text (it can wrap a statement's values)
+			panicLogger.Error("Goroutine panic recovered: name=%s type=%T stack=%s", name, r, StackFrames(debug.Stack()))
 			panicked = true
 		}
 	}()
@@ -76,4 +78,34 @@ func WaitJobs(deadline time.Duration) bool {
 	case <-time.After(deadline):
 		return false
 	}
+}
+
+const (
+	// stackFrameIndent opens a stack line that names a frame's source file and line
+	stackFrameIndent = "\t"
+	// stackPCOffset opens the program-counter offset after a frame's source line
+	stackPCOffset = " +0x"
+)
+
+// StackFrames is a stack trace (debug.Stack) reduced to function names and source lines, the one
+// form a recovered panic's stack is logged in (middleware.Recover, supervised jobs). A frame's
+// function line ends with its argument list: raw words (pointers, lengths, integers the code
+// held, ellipses), so it is cut at its last opening parenthesis (arguments never hold one; a
+// receiver's "(*T)" comes before it). A source line ends with its pc offset, cut too. The
+// goroutine header and "created by" lines carry neither and stay as they are.
+func StackFrames(stack []byte) string {
+	lines := strings.Split(strings.TrimRight(string(stack), "\n"), "\n")
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, stackFrameIndent):
+			if at := strings.LastIndex(line, stackPCOffset); at >= 0 {
+				lines[i] = line[:at]
+			}
+		case strings.HasSuffix(line, ")"):
+			if at := strings.LastIndexByte(line, '('); at > 0 {
+				lines[i] = line[:at]
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }

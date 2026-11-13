@@ -249,7 +249,17 @@ const Rooms = (() => {
 
     // ---------- friend requests ----------
 
+    // A 409 "Id taken" (the note's id is held by something else, nothing stored) seals and sends the
+    // same invite again under a fresh id, MAX_ID_REDRAWS times at most; any other answer is returned
     async function befriend(api, conv, entry, inviteCode) {
+        let result = await sendNote(api, conv, entry, inviteCode);
+        for (let redraw = 0; Errors.idTaken(result) && redraw < MAX_ID_REDRAWS; redraw++) {
+            result = await sendNote(api, conv, entry, inviteCode);
+        }
+        return result;
+    }
+
+    async function sendNote(api, conv, entry, inviteCode) {
         const id = ElyrnCrypto.newMessageId();
         const blob = await R.sealNote({ room: conv.room.keys, me: conv.room.member, id, toCard: entry.card, text: inviteCode, sentAt: Date.now() });
         return api('POST', `/conversations/${conv.id}/notes`, { id: id, to: entry.card, blob: blob });

@@ -41,6 +41,9 @@ type ChatRepository interface {
 
 	NextSeq(conversationID uuid.UUID) (int64, error)
 	CreateMessage(message *models.Message) error
+	// FindMessage is the message stored under a client-generated id, live or not (ErrNotFound
+	// when none): the id is unique server-wide, so it also names a message of another conversation
+	FindMessage(messageID uuid.UUID) (*models.Message, error)
 	ListMessages(conversationID uuid.UUID, window MessageWindow, today time.Time) ([]models.Message, error)
 	AdvanceReadSeq(conversationID uuid.UUID, memberTag string, seq int64) error
 
@@ -55,6 +58,8 @@ type ChatRepository interface {
 	CountMembers(conversationIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
 	CreateNote(note *models.RoomNote) error
+	// FindNote is the note stored under a client-generated id, live or not (ErrNotFound when none)
+	FindNote(noteID uuid.UUID) (*models.RoomNote, error)
 	CountNotesFor(recipientTags []string, now time.Time) (map[uuid.UUID]int, error)
 	ListNotes(conversationID uuid.UUID, recipientTag string, now time.Time) ([]models.RoomNote, error)
 	DeleteNote(conversationID, noteID uuid.UUID, recipientTag string) error
@@ -253,17 +258,22 @@ func (r *chatRepository) CreateConversation(conversationID uuid.UUID, members []
 	return err
 }
 
-func (r *chatRepository) FindMembership(conversationID uuid.UUID, memberTag string) (*models.ConversationMember, error) {
-	var member models.ConversationMember
-	err := r.db().Where(whereMember, conversationID, memberTag).First(&member).Error
-	if err != nil {
+// first is the one row matching query, ErrNotFound when there is none; any other failure is
+// logged under op.
+func first[T any](db *gorm.DB, op, query string, args ...any) (*T, error) {
+	var row T
+	if err := db.Where(query, args...).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
-		chatRepoLogger.LogError("ChatRepository.FindMembership", err)
+		chatRepoLogger.LogError(op, err)
 		return nil, err
 	}
-	return &member, nil
+	return &row, nil
+}
+
+func (r *chatRepository) FindMembership(conversationID uuid.UUID, memberTag string) (*models.ConversationMember, error) {
+	return first[models.ConversationMember](r.db(), "ChatRepository.FindMembership", whereMember, conversationID, memberTag)
 }
 
 // FindMembershipsByTags resolves many per-conversation tags in one query.
@@ -366,6 +376,10 @@ func (r *chatRepository) CreateMessage(message *models.Message) error {
 		chatRepoLogger.LogError("ChatRepository.CreateMessage", err)
 	}
 	return err
+}
+
+func (r *chatRepository) FindMessage(messageID uuid.UUID) (*models.Message, error) {
+	return first[models.Message](r.db(), "ChatRepository.FindMessage", whereID, messageID)
 }
 
 // ListMessages is the one query behind every message page (MessageWindow). A message past its
@@ -488,15 +502,7 @@ func (r *chatRepository) CreateRoom(room *models.Room, creator *models.Conversat
 }
 
 func (r *chatRepository) FindRoom(roomID uuid.UUID) (*models.Room, error) {
-	var room models.Room
-	if err := r.db().Where(whereID, roomID).First(&room).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		chatRepoLogger.LogError("ChatRepository.FindRoom", err)
-		return nil, err
-	}
-	return &room, nil
+	return first[models.Room](r.db(), "ChatRepository.FindRoom", whereID, roomID)
 }
 
 // FindRooms returns the rooms among roomIDs (one-to-one conversations are simply absent).
@@ -626,6 +632,10 @@ func (r *chatRepository) CreateNote(note *models.RoomNote) error {
 		return err
 	}
 	return nil
+}
+
+func (r *chatRepository) FindNote(noteID uuid.UUID) (*models.RoomNote, error) {
+	return first[models.RoomNote](r.db(), "ChatRepository.FindNote", whereID, noteID)
 }
 
 // CountNotesFor counts live notes per room for the caller's per-room tags.

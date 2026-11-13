@@ -173,3 +173,33 @@ func TestLogger_FloodBoundPerTemplate(t *testing.T) {
 		t.Fatal("a different template was suppressed by another's flood")
 	}
 }
+
+// A recovered panic's stack is logged as function names and source lines only: every argument
+// list and pc offset is cut, a receiver's parentheses and the goroutine lines stay.
+func TestStackFrames_KeepsNamesAndLinesOnly(t *testing.T) {
+	stack := "goroutine 7 [running]:\n" +
+		"runtime/debug.Stack()\n" +
+		"\t/usr/local/go/src/runtime/debug/stack.go:26 +0x5e\n" +
+		"panic({0x4a1e20?, 0xc000010250?})\n" +
+		"\t/usr/local/go/src/runtime/panic.go:785 +0x132\n" +
+		"net/http.(*conn).serve(0xc0001a2000, {0x7f3e18, 0xc000090ff0})\n" +
+		"\t/usr/local/go/src/net/http/server.go:2092 +0x5d0\n" +
+		"main.handler(...)\n" +
+		"\t/src/main.go:12\n" +
+		"created by net/http.(*Server).Serve in goroutine 1\n" +
+		"\t/usr/local/go/src/net/http/server.go:3454 +0x485\n"
+	want := "goroutine 7 [running]:\n" +
+		"runtime/debug.Stack\n" +
+		"\t/usr/local/go/src/runtime/debug/stack.go:26\n" +
+		"panic\n" +
+		"\t/usr/local/go/src/runtime/panic.go:785\n" +
+		"net/http.(*conn).serve\n" +
+		"\t/usr/local/go/src/net/http/server.go:2092\n" +
+		"main.handler\n" +
+		"\t/src/main.go:12\n" +
+		"created by net/http.(*Server).Serve in goroutine 1\n" +
+		"\t/usr/local/go/src/net/http/server.go:3454"
+	if got := utils.StackFrames([]byte(stack)); got != want {
+		t.Fatalf("StackFrames =\n%s\nwant\n%s", got, want)
+	}
+}

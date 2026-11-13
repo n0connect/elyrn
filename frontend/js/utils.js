@@ -17,6 +17,10 @@ const REQUEST_TIMEOUT_MS = 30000;
 // messages of at most 11000 characters, auth.js and chat.js) stays well below it; a larger
 // answer is a hostile or broken server, refused unread past this point.
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+// A send (a message or a friend request) answered 409 "Id taken" (Errors.idTaken: the id is held
+// by something else, nothing stored) goes again under a fresh id this many times at most; the
+// agent's maxIDRedraws (backend/internal/agent/limits.go) is the same bound
+const MAX_ID_REDRAWS = 1;
 // The error name a refused oversized answer carries (readCapped), like TimeoutError for a timeout
 const TOO_LARGE = 'ResponseTooLarge';
 // Far enough left that the copy fallback's textarea is never on screen

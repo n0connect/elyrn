@@ -333,3 +333,43 @@ test('a room message names its real sender, whatever `mine` the server sets (cha
     assert.equal(plain.sender, others[0].publicKey);
     assert.notEqual(plain.sender, conv.room.member.publicKey);
 });
+
+// ---------- a friend request's id taken ----------
+
+const ID_TAKEN = { success: false, message: 'Id taken' };
+
+test('befriend: a 409 "Id taken" seals and sends again once under a fresh id; a plain 409 is returned as is', async () => {
+    const fixture = await roomFixture();
+    const { conv, me, others } = fixture;
+    serve(OK, { success: true, members: [card(me, true), card(others[0])] });
+    await Rooms.loadRoster(apiCall, conv);
+    const entry = conv.room.roster.find(e => !e.mine);
+    const invite = C.INVITE_PREFIX + ACCOUNT_B;
+    const posted = (from) => server.requests.slice(from).map(r => JSON.parse(r.body));
+
+    // Taken once: a second note under another id, then the server's answer to it
+    let calls = 0;
+    server.answer(() => (++calls === 1 ? { status: 409, body: ID_TAKEN } : { status: 201, body: { success: true } }));
+    let from = server.requests.length;
+    assert.equal((await Rooms.befriend(apiCall, conv, entry, invite)).status, 201);
+    let bodies = posted(from);
+    assert.equal(bodies.length, 2);
+    assert.notEqual(bodies[0].id, bodies[1].id);
+    assert.notEqual(bodies[0].blob, bodies[1].blob);
+
+    // Taken twice: no third attempt, and the answer is the refusal
+    serve(409, ID_TAKEN);
+    from = server.requests.length;
+    const twice = await Rooms.befriend(apiCall, conv, entry, invite);
+    assert.equal(twice.status, 409);
+    assert.equal(Errors.idTaken(twice), true);
+    assert.equal(posted(from).length, 2);
+
+    // The plain-text 409 (a note already waits for them) is not an id taken: one attempt only
+    server.answer(() => ({ status: 409, text: 'Conflict\n', type: 'text/plain; charset=utf-8' }));
+    from = server.requests.length;
+    const waiting = await Rooms.befriend(apiCall, conv, entry, invite);
+    assert.equal(waiting.status, 409);
+    assert.equal(Errors.idTaken(waiting), false);
+    assert.equal(posted(from).length, 1);
+});

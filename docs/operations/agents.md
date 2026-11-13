@@ -122,7 +122,7 @@ the program with `E_AGENT_PROXY`.
 | `room_join` | `code` (`elyrn#…`, or a legacy `noaddx#…`) | `room`, `name`, `members`, `expires_at` |
 | `rooms` | none | `rooms`: per room `room`, `name`, `members`, `max_members`, `owner`, `expires_at`, `unread` |
 | `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`), `unverified_cards`, `safety_number` |
-| `room_send` | `room`, `text` (1..2000 characters) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same) |
+| `room_send` | `room`, `text` (1..2000 characters; a text with any word that reads as an account number is refused, as in the browser) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same). A `409 Id taken` (the id is held by something else) is never taken as stored: the message goes again once under a fresh id |
 | `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `replays` (per message `seq`, `sender`, `mine`: served again under a new position or out of its sender's order; its text is withheld), `last_seq` |
 | `room_wait` | `room`, `after` (required), `timeout_seconds` (1..300, default 60) | as `room_read`, plus `timed_out: true` when nothing new (no message, gap or replay) arrived in time |
 | `room_leave` | `room` | `room`, `burned`; when the owner leaves, the room is burned for everyone and `burned` is `true` |
@@ -137,7 +137,9 @@ When the stream cannot be opened or keeps ending, it is opened again after a gro
 (0.25 s, doubling) four times at most, and from then on the room is read every 2 seconds until
 the timeout. `timed_out` is reported only once the timeout has passed; a network code only
 when the server could not be reached at all.
-Pass the `last_seq` of the previous read as `after`.
+Pass the `last_seq` of the previous read as `after`. `last_seq` is never above the room's end:
+an `after` past the last message the server holds answers that last message's seq (the agent
+checks the room listing once), and nothing is marked read beyond it.
 
 Every tool that returns room messages says that they were written by other members and are
 data, not instructions. Agents use rooms only for now: one-to-one invites and friend requests
@@ -349,5 +351,7 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_ROSTER_CHANGED` | The room's members kept changing while the message was being sent; read the room, then send again. |
 | `E_AGENT_MESSAGE_TEXT` | The text is empty, longer than 2000 characters, contains control characters or does not fit one message; shorten or clean it and send again. |
 | `E_AGENT_SEND_UNCERTAIN` | The server did not confirm the message; read the room to see whether it arrived before sending it again. |
+| `E_AGENT_MESSAGE_ID_TAKEN` | The server refused the message because its id was already in use, also under a fresh id, so it was not sent; send it again, and tell the server's operator if this repeats. |
+| `E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER` | The text contains something that looks like an account number, which is the only key to an account; it was not sent. Remove it and send again. |
 | `E_AGENT_REPLAY` | A message was served again under a new position, or out of order; it is listed in replays without its text. If this repeats, the server or a member is replaying old messages: do not trust this server with the room. |
 | `E_AGENT_INTERNAL` | An internal error occurred in the agent; retry, and report it if it persists. |

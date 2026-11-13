@@ -5,7 +5,8 @@
 // The wire format is frozen: Write answers through http.Error, so status, body ("<sentence>\n")
 // and headers are exactly what the call sites wrote before this package existed. Login's
 // failures keep their JSON shape ({"success":false,"message":"<sentence>"}), written by the
-// same encoder its success answer uses. Clients map
+// same encoder its success answer uses; IDTaken uses that shape too, so clients can tell it
+// from the other 409 of a send. Clients map
 // these bodies (frontend/js/errors.js fromApi) and statuses (the agent), so a sentence or a
 // status here changes only together with them.
 package apperr
@@ -57,6 +58,7 @@ const (
 	NotFound
 	LimitReached
 	Conflict
+	IDTaken
 	RoomFull
 	RosterChanged
 	IdentityUnset
@@ -91,6 +93,7 @@ const (
 	sayTooManyRequests    = "Too many requests"
 	sayUnavailable        = "Service unavailable"
 	sayConflict           = "Conflict"
+	sayIDTaken            = "Id taken"
 	sayRoomFull           = "Room full"
 	sayRosterChanged      = "Roster changed"
 	sayInternalServerErr  = "Internal server error"
@@ -168,8 +171,14 @@ var registry = map[Code]entry{
 	InvalidInput: {"E_INVALID_INPUT", http.StatusBadRequest, sayInvalidRequest, utils.LogLevelWARN, shapeText},
 	// MERGE: the chat service answers ErrNotFound for an unknown, expired or burned
 	// conversation or room, a wrong room code, and one the caller is not a member of
-	NotFound:      {"E_NOT_FOUND", http.StatusNotFound, sayNotFound, utils.LogLevelDEBUG, shapeText},
+	NotFound: {"E_NOT_FOUND", http.StatusNotFound, sayNotFound, utils.LogLevelDEBUG, shapeText},
+	// Conflict on a send (a message or a note) means "your earlier attempt with this id is
+	// stored" (or, for a note, "a note from you already waits for them"); IDTaken means the id
+	// is held by anything else and nothing was stored: send again under a fresh id. IDTaken
+	// answers in JSON so the browser, which reads only JSON bodies, can tell the two 409s apart
+	// by message (frontend/js/errors.js API_MESSAGES), and the agent by the same field
 	Conflict:      {"E_CONFLICT", http.StatusConflict, sayConflict, utils.LogLevelWARN, shapeText},
+	IDTaken:       {"E_ID_TAKEN", http.StatusConflict, sayIDTaken, utils.LogLevelWARN, shapeJSON},
 	RoomFull:      {"E_ROOM_FULL", http.StatusConflict, sayRoomFull, utils.LogLevelINFO, shapeText},
 	RosterChanged: {"E_ROSTER_CHANGED", http.StatusPreconditionFailed, sayRosterChanged, utils.LogLevelINFO, shapeText},
 	// MERGE: an account without an identity key and an action the caller may not take

@@ -230,3 +230,33 @@ test('notices: every one is a non-empty sentence; notice() fills parameters and 
         assert.equal(Errors.notice(text), Errors.REGISTRY.E_UNKNOWN_CODE.text);
     }
 });
+
+// The send's two 409s, read from the server's one registration (apperr.go sayIDTaken)
+const APPERR_GO = new URL('../../backend/internal/apperr/apperr.go', import.meta.url);
+function serverIDTaken() {
+    const match = readFileSync(APPERR_GO, 'utf8').match(/\bsayIDTaken\s*=\s*"([^"]+)"/);
+    assert.ok(match, 'sayIDTaken not found in apperr.go');
+    return match[1];
+}
+
+test('a send\'s 409 "Id taken" (JSON) is told from the 409 "Conflict" (text/plain: no data) by its message', () => {
+    const C = Errors.CODES;
+    const taken = { ok: false, status: 409, data: { success: false, message: serverIDTaken() } };
+    assert.equal(Errors.fromResult(taken), C.E_MESSAGE_ID_TAKEN);
+    assert.equal(Errors.idTaken(taken), true);
+    assert.equal(Errors.REGISTRY.E_MESSAGE_ID_TAKEN.severity, 'error');
+    assert.match(Errors.REGISTRY.E_MESSAGE_ID_TAKEN.text, /nothing was sent/);
+    // The stored earlier attempt: a plain-text body is no data
+    assert.equal(Errors.idTaken({ ok: false, status: 409, data: null }), false);
+    // The message under another status, another message under 409, and no answer are not it
+    for (const result of [
+        { ok: false, status: 400, data: { message: serverIDTaken() } },
+        { ok: false, status: 409, data: { message: 'Conflict' } },
+        { ok: false, status: 409, data: { message: 'room full' } },
+        { ok: false, status: 409, data: { message: serverIDTaken(), code: 'E_BACKEND_UNAVAILABLE' } },
+        { ok: false, status: 0, data: null, timedOut: false },
+        { ok: true, status: 201, data: { seq: 1 } }
+    ]) {
+        assert.equal(Errors.idTaken(result), false, JSON.stringify(result));
+    }
+});

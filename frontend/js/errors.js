@@ -103,6 +103,8 @@ const Errors = (() => {
         E_MESSAGE_NOT_SENT: e('message not sent — press send again'),
         // A 409 on a first attempt: a fresh id cannot exist yet, so nothing is taken as stored
         E_MESSAGE_ID_CONFLICT: e('the server refused the message as a duplicate — press send again'),
+        // A 409 "Id taken" (the id is held by something else, nothing stored) also under a fresh id
+        E_MESSAGE_ID_TAKEN: e('the server said the message id is already in use, twice — nothing was sent, press send again'),
         W_VERIFICATION_NOT_SAVED: w('could not save verification on this device'),
         // Browser storage (keystore.js): refused or failed, another tab blocking an upgrade, or
         // another tab upgrading or deleting it under this one
@@ -184,7 +186,10 @@ const Errors = (() => {
         'too many requests': CODES.E_API_TOO_MANY_REQUESTS,
         'service unavailable': CODES.E_API_UNAVAILABLE,
         'forbidden': CODES.E_API_FORBIDDEN,
-        'unsupported media type': CODES.E_API_INVALID_REQUEST
+        'unsupported media type': CODES.E_API_INVALID_REQUEST,
+        // A send's 409 whose id is held by something else (apperr IDTaken, in JSON): nothing was
+        // stored, unlike the plain-text 409 "Conflict" (the earlier attempt is stored)
+        'id taken': CODES.E_MESSAGE_ID_TAKEN
     });
 
     // Used when the answer carries no message
@@ -353,8 +358,14 @@ const Errors = (() => {
         return fromApi(field(result.data, 'message'), result.status, field(result.data, 'code'));
     }
 
+    // Whether a failed apiCall result is a send's 409 "Id taken": told from the 409 "Conflict" of
+    // a stored earlier attempt by its registered message, as every other answer is (fromResult)
+    function idTaken(result) {
+        return result.status === 409 && fromResult(result) === CODES.E_MESSAGE_ID_TAKEN;
+    }
+
     return Object.freeze({
-        CODES, INTERNAL, NOTICE, REGISTRY, EDGE_CODES, report, inline, fromApi, fromResult, format, notice,
+        CODES, INTERNAL, NOTICE, REGISTRY, EDGE_CODES, report, inline, fromApi, fromResult, idTaken, format, notice,
         message: (code, params) => resolve(code, params).text
     });
 })();

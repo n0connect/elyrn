@@ -188,7 +188,8 @@ const (
 
 // FuzzRecover: a handler that panics with any value answers exactly the registered E_PANIC
 // (500, the generic sentence; the panic's text never reaches the client), except
-// http.ErrAbortHandler, which is re-raised for net/http.
+// http.ErrAbortHandler, which is re-raised for net/http. The log never holds the value's text
+// (each text carries panicCanary), and its stack carries no argument word or pc offset.
 func FuzzRecover(f *testing.F) {
 	for kind := range panicKinds {
 		f.Add(uint8(kind), "handler failed: secret 10.0.0.7")
@@ -196,6 +197,8 @@ func FuzzRecover(f *testing.F) {
 	f.Add(uint8(panicString), "")
 	f.Add(uint8(panicError), "\x00\n\xff")
 	f.Fuzz(func(t *testing.T, kind uint8, text string) {
+		text = panicCanary + text
+		captured := captureLog(t)
 		var value any
 		switch kind % panicKinds {
 		case panicString:
@@ -226,5 +229,6 @@ func FuzzRecover(f *testing.F) {
 		if reraised != nil || !testutil.IsAnswer(rec, apperr.Panic) {
 			t.Fatalf("panic %s answered %d %q (re-raised %v)", fmt.Sprint(value), rec.Code, rec.Body.String(), reraised)
 		}
+		expectSafePanicLine(t, captured.String())
 	})
 }

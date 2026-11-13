@@ -14,6 +14,7 @@ import (
 	"elyrn/internal/utils"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 )
 
 // replacementRune stands in for a forbidden character in received text (validation.js
@@ -38,8 +39,8 @@ func forbiddenRune(r rune) bool {
 }
 
 // ValidateMessageText is validation.js validateMessageText: CRLF normalized, messageTrimChars
-// trimmed from both ends, 1..2000 characters, no forbidden character. It returns the text that
-// will be sent.
+// trimmed from both ends, 1..2000 characters, no forbidden character, and no word that reads as
+// an account number (containsAccountNumber). It returns the text that will be sent.
 func ValidateMessageText(text string) (string, error) {
 	if !utf8.ValidString(text) {
 		return "", fail(CodeMessageText, nil)
@@ -48,7 +49,28 @@ func ValidateMessageText(text string) (string, error) {
 	if n := utf8.RuneCountInString(normalized); n == 0 || n > MaxMessageChars || strings.IndexFunc(normalized, forbiddenRune) >= 0 {
 		return "", fail(CodeMessageText, nil)
 	}
+	if containsAccountNumber(normalized) {
+		return "", fail(CodeAccountNumber, nil)
+	}
 	return normalized, nil
+}
+
+// containsAccountNumber is validation.js containsAccountNumber: the text read through Unicode NFKC
+// (so a fullwidth or other compatibility look-alike folds to ASCII), split into words at runs of
+// ECMAScript white space (the /\s+/u the browser splits on, which is exactly messageTrimChars),
+// and any word of the account number's exact shape (utils.ValidateAccountNumber: 43 base64url
+// characters, the browser's ACCOUNT_NUMBER_REGEX). An invite or a room code carries its prefix,
+// so sharing one is not refused. accountNumberSamples (messages_test.go) pins both sides.
+func containsAccountNumber(text string) bool {
+	words := strings.FieldsFunc(norm.NFKC.String(text), func(r rune) bool {
+		return strings.ContainsRune(messageTrimChars, r)
+	})
+	for _, word := range words {
+		if utils.ValidateAccountNumber(word) {
+			return true
+		}
+	}
+	return false
 }
 
 func neutralize(text string) string {
@@ -250,12 +272,34 @@ func (a *Agent) read(ctx context.Context, st *roomState, after *int64) (*ReadRes
 	mineBefore := st.counters.Mine
 	l := newLedger(st.counters)
 	got := st.openPage(page, st.forwardWindow(from, l))
-	a.settleLedger(st, l, got.last, mineBefore)
+	last := got.last
+	if last > from {
+		st.lastSeq = max(st.lastSeq, last)
+	} else {
+		last = a.clampCursor(ctx, st, from) // nothing served past the cursor: it is the caller's word
+	}
+	a.settleLedger(st, l, last, mineBefore)
 	gaps := append(st.pendingGaps, got.gaps...)
 	replays := append(st.pendingReplays, got.replays...)
 	st.pendingGaps, st.pendingReplays = nil, nil
-	a.markRead(ctx, st, got.last)
-	return newReadResult(st, got.messages, gaps, replays, got.last), nil
+	a.markRead(ctx, st, last)
+	return newReadResult(st, got.messages, gaps, replays, last), nil
+}
+
+// clampCursor is a forward cursor the server vouches for: never above the room's last seq. A
+// cursor past the last seq this agent knows is checked against a fresh listing first; one past
+// the end is not echoed as last_seq (the next read from it would skip every message sent up to
+// it), not recorded in the counter record (later messages up to it would not be judged new) and
+// not marked read (the server refuses a marker past the end). A listing that fails leaves the
+// last seq already known, which is never above the end either.
+func (a *Agent) clampCursor(ctx context.Context, st *roomState, cursor int64) int64 {
+	if cursor <= st.lastSeq {
+		return cursor
+	}
+	if _, err := a.listRooms(ctx); err != nil {
+		logger.Warn("the room's last seq could not be refreshed; the cursor is held at the one known")
+	}
+	return min(cursor, st.lastSeq)
 }
 
 // newReadResult never answers null for a list.

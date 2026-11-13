@@ -77,14 +77,25 @@ func (d dialector) Translate(err error) error {
 
 // LogSafe returns err in the form a log line may carry it. A driver error's text can hold what
 // the statement was given (a lookup, an id, a key) or the database's address and user (a
-// connect error), so it is reduced to its class (failureDetail: a SQLSTATE, "timed out",
-// "connection refused", ...); every other error is returned unchanged.
+// connect error), so it is reduced to its class (ErrorClass); every other error is returned
+// unchanged.
 func LogSafe(err error) error {
+	if class, ok := ErrorClass(err); ok {
+		return errors.New(class)
+	}
+	return err
+}
+
+// ErrorClass is the one reduction of a driver, connection or outage error to what a log line may
+// carry: "database: " and its class (failureDetail: a SQLSTATE, "timed out", "connection
+// refused", ...), never its text. ok is false for any other error, whose text the caller judges
+// (LogSafe keeps it; middleware.Recover never logs a panic's text at all).
+func ErrorClass(err error) (string, bool) {
 	var pgErr *pgconn.PgError
 	var connectErr *pgconn.ConnectError
 	var netErr net.Error
 	if errors.As(err, &pgErr) || errors.As(err, &connectErr) || errors.As(err, &netErr) || errors.Is(err, ErrUnavailable) {
-		return errors.New("database: " + failureDetail(err))
+		return "database: " + failureDetail(err), true
 	}
-	return err
+	return "", false
 }

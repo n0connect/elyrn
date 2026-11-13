@@ -257,23 +257,52 @@ func settleAnswer(ans *answer, out any) (int, error) {
 // api is one authenticated exchange: a 401 means the session expired, so it logs in again and
 // retries once.
 func (a *Agent) api(ctx context.Context, method, path string, body, out any) (int, error) {
-	if err := a.ensureSession(ctx); err != nil {
+	ans, err := a.authenticated(ctx, method, path, body)
+	if err != nil {
 		return 0, err
+	}
+	return settleAnswer(ans, out)
+}
+
+// authenticated is api's exchange before it is settled, for the one caller that must read a
+// failure's registered message (Send: idTaken).
+func (a *Agent) authenticated(ctx context.Context, method, path string, body any) (*answer, error) {
+	if err := a.ensureSession(ctx); err != nil {
+		return nil, err
 	}
 	ans, err := a.roundTrip(ctx, method, path, body)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if ans.status == http.StatusUnauthorized {
 		a.endSession()
 		if err := a.login(ctx); err != nil {
-			return 0, err
+			return nil, err
 		}
-		if ans, err = a.roundTrip(ctx, method, path, body); err != nil {
-			return 0, err
-		}
+		return a.roundTrip(ctx, method, path, body)
 	}
-	return settleAnswer(ans, out)
+	return ans, nil
+}
+
+// serverIDTaken is the message of the server's 409 "Id taken" (apperr IDTaken, in JSON): the id of
+// a send is held by something other than this agent's own earlier attempt, so nothing was stored.
+// The agent carries no server package, so the sentence is repeated here; idTaken's test compares it
+// with the server's registry.
+const serverIDTaken = "Id taken"
+
+// failureBody is the one field read from a backend failure answered in JSON.
+type failureBody struct {
+	Message string `json:"message"`
+}
+
+// idTaken reports whether ans is the server's 409 "Id taken", told from the 409 "Conflict" (the
+// earlier attempt is stored, plain text) by its registered message, never shown.
+func idTaken(ans *answer) bool {
+	if ans == nil || ans.status != http.StatusConflict {
+		return false
+	}
+	var body failureBody
+	return json.Unmarshal(ans.body, &body) == nil && body.Message == serverIDTaken
 }
 
 func decodeAnswer(ans *answer, out any) error {

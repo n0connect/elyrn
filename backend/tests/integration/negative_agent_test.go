@@ -8,11 +8,17 @@ package integration
 // that almost match. Every failure is the exact registered agent code.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,7 +140,7 @@ func TestNegativeAgent_NothingIsSpentOnAMalformedFirstCall(t *testing.T) {
 
 // Another agent's room, a room left, a room burned and a room expired are all no room of this
 // agent's: every room call answers E_AGENT_ROOM_UNKNOWN and changes nothing. A cursor from
-// another room reads nothing of that room.
+// another room reads nothing of that room, and its last_seq is this room's own end.
 func TestNegativeAgent_RoomsThatAreNotItsOwn(t *testing.T) {
 	mux := setup(t)
 	ctx := context.Background()
@@ -171,7 +177,7 @@ func TestNegativeAgent_RoomsThatAreNotItsOwn(t *testing.T) {
 	agentSend(t, alpha, room, "two")
 	alphaLast := agentSend(t, alpha, room, "three")
 	agentSend(t, beta, ownRoom, "beta's own")
-	if got, err := beta.Read(ctx, ownRoom, &alphaLast); err != nil || len(got.Messages) != 0 {
+	if got, err := beta.Read(ctx, ownRoom, &alphaLast); err != nil || len(got.Messages) != 0 || got.LastSeq != 1 {
 		t.Fatalf("a read after another room's last seq = %+v, %v", got, err)
 	}
 	history, err := beta.ReadBefore(ctx, ownRoom, alphaLast+1)
@@ -426,4 +432,77 @@ func TestNegativeAgent_NearlyRightToolsAndArguments(t *testing.T) {
 	}
 	s.closeAndExpectEnd()
 	expectNoIdentity(t, path, "nearly right calls")
+}
+
+// pastEndSeqs puts a cursor this far past a room's last seq
+const pastEndSeqs = 1000
+
+// readMarkers is a server that records the seq of every read marker the agent posts.
+func readMarkers(t *testing.T, mux http.Handler) (*httptest.Server, func() []int64) {
+	t.Helper()
+	var mu sync.Mutex
+	var marked []int64
+	srv := hostileServer(t, mux, func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/"+models.SubRead) {
+			return false
+		}
+		raw, err := io.ReadAll(r.Body)
+		var req models.MarkReadRequest
+		if err != nil || json.Unmarshal(raw, &req) != nil {
+			t.Errorf("a read marker that does not decode: %v", err)
+		}
+		mu.Lock()
+		marked = append(marked, req.Seq)
+		mu.Unlock()
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		return false
+	})
+	return srv, func() []int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(marked)
+	}
+}
+
+// A cursor past the room's end is the caller's word, not the server's: room_read answers the
+// room's real last seq (never the cursor), marks nothing read beyond it, and a read from that
+// last_seq sees the next message as new; room_wait from past the end times out at the real end.
+func TestNegativeAgent_ACursorPastTheEnd(t *testing.T) {
+	mux := setup(t)
+	ctx := context.Background()
+	srv, marked := readMarkers(t, mux)
+	alpha := newAgent(t, srv.URL, newIdentityPath(t.TempDir(), "alpha"))
+	created, err := alpha.CreateRoom(ctx, negativeRoomMembers, negativeRoomTTLHours)
+	if err != nil {
+		t.Fatalf("CreateRoom: %v", err)
+	}
+	room := uuid.MustParse(created.Room)
+	last := agentSend(t, alpha, room, "one")
+
+	beyond := last + pastEndSeqs
+	got, err := alpha.Read(ctx, room, &beyond)
+	if err != nil || len(got.Messages) != 0 || got.LastSeq != last {
+		t.Fatalf("a read past the end = %+v, %v (want no message and last_seq %d)", got, err, last)
+	}
+	next := agentSend(t, alpha, room, "two")
+	got = agentRead(t, alpha, room, &got.LastSeq)
+	if !slices.Equal(texts(got), []string{"two"}) || got.LastSeq != next {
+		t.Fatalf("the read from the answered last_seq = %+v (want \"two\" at %d)", got, next)
+	}
+
+	beyond = next + pastEndSeqs
+	waited, err := alpha.Wait(ctx, room, beyond, agent.MinWaitTimeout)
+	if err != nil || !waited.TimedOut || len(waited.Messages) != 0 || waited.LastSeq != next {
+		t.Fatalf("a wait past the end = %+v, %v (want a time-out at last_seq %d)", waited, err, next)
+	}
+	for _, seq := range marked() {
+		if seq > next {
+			t.Fatalf("the agent marked seq %d read, past the room's end %d (all: %v)", seq, next, marked())
+		}
+	}
+	var readSeq int64
+	database.DB.Model(&models.ConversationMember{}).Where("conversation_id = ?", room).Select("max(read_seq)").Scan(&readSeq)
+	if readSeq != next {
+		t.Fatalf("read marker at %d, want the room's end %d", readSeq, next)
+	}
 }

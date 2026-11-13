@@ -14,8 +14,10 @@ import (
 
 // Send encrypts text for the room's verified roster and stores it, as chat.js send does:
 // a 412 (someone joined or left) fetches the roster again and re-encrypts under the same
-// message id, twice at most; a lost answer resends the same id and ciphertext, and a 409 then
-// means the first attempt was stored.
+// message id, twice at most; a lost answer resends the same id and ciphertext, and a 409
+// "Conflict" then means the first attempt was stored. A 409 "Id taken" means the id is held by
+// something else and nothing was stored: the message is sent again under a fresh id and a fresh
+// counter, maxIDRedraws times at most, and never reported as stored.
 func (a *Agent) Send(ctx context.Context, id uuid.UUID, text string) (*Sent, error) {
 	var result *Sent
 	err := a.serialized(func() error {
@@ -65,8 +67,24 @@ func (a *Agent) spendCounter(st *roomState) (int64, error) {
 	return counter, nil
 }
 
-// deliver runs the bounded exchange loop of one message.
+// errIDTaken ends one id's exchanges: the server answered 409 "Id taken" (deliver draws again).
+var errIDTaken = errors.New("message id taken")
+
+// deliver sends one message, under a fresh id again when the server says its id is taken.
 func (a *Agent) deliver(ctx context.Context, st *roomState, text string) (*Sent, error) {
+	for redraw := 0; ; redraw++ {
+		sent, err := a.deliverID(ctx, st, text)
+		if !errors.Is(err, errIDTaken) {
+			return sent, err
+		}
+		if redraw == maxIDRedraws {
+			return nil, fail(CodeMessageIDTaken, nil)
+		}
+	}
+}
+
+// deliverID runs the bounded exchange loop of one message under one fresh id and counter.
+func (a *Agent) deliverID(ctx context.Context, st *roomState, text string) (*Sent, error) {
 	messageID := uuid.New()
 	counter, err := a.spendCounter(st)
 	if err != nil {
@@ -79,8 +97,7 @@ func (a *Agent) deliver(ctx context.Context, st *roomState, text string) (*Sent,
 	rosterRetries, lostRetries := 0, 0
 	for exchange := 0; exchange <= maxRosterRetries+maxLostAnswerRetries; exchange++ {
 		var resp models.SendMessageResponse
-		status, err := a.api(ctx, http.MethodPost, conversationPath(st.id)+pathMessages,
-			models.SendMessageRequest{ID: messageID.String(), Ciphertext: blob}, &resp)
+		status, ans, err := a.sendAttempt(ctx, st, messageID, blob, &resp)
 		lost := (err != nil && CodeOf(err) == CodeNetwork) || (err == nil && status >= http.StatusInternalServerError)
 		switch {
 		case lost:
@@ -99,6 +116,9 @@ func (a *Agent) deliver(ctx context.Context, st *roomState, text string) (*Sent,
 				return nil, fail(CodeServerAnswer, nil)
 			}
 			return &Sent{Room: st.id.String(), Seq: &resp.Seq, Stored: true}, nil
+		case idTaken(ans):
+			// Checked before the stored case: an id held by anything else is never "stored"
+			return nil, errIDTaken
 		case status == http.StatusConflict && lostRetries > 0:
 			return &Sent{Room: st.id.String(), Stored: true}, nil
 		case status == http.StatusPreconditionFailed:
@@ -116,6 +136,18 @@ func (a *Agent) deliver(ctx context.Context, st *roomState, text string) (*Sent,
 		}
 	}
 	return nil, fail(CodeSendUncertain, nil)
+}
+
+// sendAttempt posts one attempt: the settled status (as api gives it) and the answer it came from
+// (nil when the exchange failed), so a 409 can be told apart by its registered message (idTaken).
+func (a *Agent) sendAttempt(ctx context.Context, st *roomState, messageID uuid.UUID, blob string, out *models.SendMessageResponse) (int, *answer, error) {
+	ans, err := a.authenticated(ctx, http.MethodPost, conversationPath(st.id)+pathMessages,
+		models.SendMessageRequest{ID: messageID.String(), Ciphertext: blob})
+	if err != nil {
+		return 0, nil, err
+	}
+	status, err := settleAnswer(ans, out)
+	return status, ans, err
 }
 
 // reseal fetches the roster again and encrypts the same message for it.

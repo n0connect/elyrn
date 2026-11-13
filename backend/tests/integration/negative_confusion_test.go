@@ -124,26 +124,119 @@ func TestNegative_CrossProtocolConfusion(t *testing.T) {
 }
 
 // A message id is unique on the whole server (models.Message.ID: uniqueIndex), not per
-// conversation: reusing another conversation's id answers 409 and stores nothing. A 409 is the
-// documented "your first attempt was stored" of an idempotent resend, so a client that reuses
-// an id across conversations is told its message is stored when it is not, and a member can
-// learn whether an id it knows still exists anywhere (reported as a finding: making the id
-// unique per conversation needs a schema migration). Honest clients draw a fresh UUIDv4 per
-// message and never meet this.
+// conversation. A duplicate id answers 409 Conflict, the documented "your earlier attempt is
+// stored", only for the caller's own identical message in the same conversation (a resend after a
+// lost answer); every other holder answers 409 IdTaken (send again under a fresh id), and neither
+// stores anything. Both are 409, and only to a member of the conversation in the path, so the split
+// adds no existence oracle (chat/duplicates.go). Honest clients draw a fresh UUIDv4 per message.
 func TestNegative_AnotherConversationsMessageID(t *testing.T) {
-	mux := setup(t)
-	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-	first := pair(t, alice, bob)
-	second := pair(t, alice, carol)
-	id := newMessageID()
-	expectStatus(t, alice.do(http.MethodPost, models.PathConversations+"/"+first+"/"+models.SubMessages,
-		models.SendMessageRequest{ID: id, Ciphertext: seal(t, alice, bob, first, id, "first", 1)}), http.StatusCreated, "send")
-	before := countRows(t)
-	expectAnswer(t, alice.do(http.MethodPost, models.PathConversations+"/"+second+"/"+models.SubMessages,
-		models.SendMessageRequest{ID: id, Ciphertext: seal(t, alice, carol, second, id, "second", 1)}), apperr.Conflict, "the same id elsewhere")
-	expectRowsUnchanged(t, before, "a reused id")
-	if view := conversationView(t, carol, second); view.LastSeq != 0 {
-		t.Fatalf("a refused send moved last_seq to %d", view.LastSeq)
+	runScenarios(t, []scenario{
+		{"the same id and content after a lost answer is stored", func(t *testing.T, mux http.Handler) {
+			alice, bob := register(t, mux), register(t, mux)
+			conv := pair(t, alice, bob)
+			id := newMessageID()
+			first := seal(t, alice, bob, conv, id, "first", 1)
+			expectStatus(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: first}), http.StatusCreated, "send")
+			before := countRows(t)
+			expectAnswer(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: first}), apperr.Conflict, "the resend")
+			expectRowsUnchanged(t, before, "the resend")
+			expectOnlyMessage(t, bob, conv, id, first)
+		}},
+		{"the same id with other content is taken", func(t *testing.T, mux http.Handler) {
+			alice, bob := register(t, mux), register(t, mux)
+			conv := pair(t, alice, bob)
+			id := newMessageID()
+			first := seal(t, alice, bob, conv, id, "first", 1)
+			expectStatus(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: first}), http.StatusCreated, "send")
+			before := countRows(t)
+			expectAnswer(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: seal(t, alice, bob, conv, id, "other", 2)}),
+				apperr.IDTaken, "other content under the id")
+			expectRowsUnchanged(t, before, "other content under the id")
+			expectOnlyMessage(t, bob, conv, id, first)
+		}},
+		{"another conversation's id is taken", func(t *testing.T, mux http.Handler) {
+			alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
+			first := pair(t, alice, bob)
+			second := pair(t, alice, carol)
+			id := newMessageID()
+			stored := seal(t, alice, bob, first, id, "first", 1)
+			expectStatus(t, alice.do(http.MethodPost, messagesPath(first), models.SendMessageRequest{ID: id, Ciphertext: stored}), http.StatusCreated, "send")
+			before := countRows(t)
+			expectAnswer(t, alice.do(http.MethodPost, messagesPath(second), models.SendMessageRequest{ID: id, Ciphertext: seal(t, alice, carol, second, id, "second", 1)}),
+				apperr.IDTaken, "the same id elsewhere")
+			// Byte for byte the stored ciphertext, in the other conversation: still not the same send
+			expectAnswer(t, alice.do(http.MethodPost, messagesPath(second), models.SendMessageRequest{ID: id, Ciphertext: stored}),
+				apperr.IDTaken, "the same id and bytes elsewhere")
+			expectRowsUnchanged(t, before, "a reused id")
+			if view := conversationView(t, carol, second); view.LastSeq != 0 {
+				t.Fatalf("a refused send moved last_seq to %d", view.LastSeq)
+			}
+			expectOnlyMessage(t, bob, first, id, stored)
+		}},
+		{"another member's id in the same room is taken", func(t *testing.T, mux http.Handler) {
+			alice, bob := register(t, mux), register(t, mux)
+			a := createRoom(t, alice, 3, 24)
+			b := joinRoom(t, bob, a.code)
+			id := newMessageID()
+			stored := a.sealTo(t, a.roster(t), id, "alice's", 1)
+			expectStatus(t, a.post(id, stored), http.StatusCreated, "alice sends")
+			before := countRows(t)
+			// bob read alice's id and bytes (every member is served them) and posts them as his
+			expectAnswer(t, b.post(id, stored), apperr.IDTaken, "alice's message posted by bob")
+			expectAnswer(t, b.post(id, b.sealTo(t, b.roster(t), id, "bob's", 1)), apperr.IDTaken, "bob's message under alice's id")
+			expectRowsUnchanged(t, before, "a member's id reused by another")
+			expectOnlyMessage(t, bob, a.room.ID.String(), id, stored)
+		}},
+		{"a stored resend is stored although the roster changed meanwhile", func(t *testing.T, mux http.Handler) {
+			alice, bob := register(t, mux), register(t, mux)
+			a := createRoom(t, alice, 3, 24)
+			id := newMessageID()
+			stored := a.sealTo(t, a.roster(t), id, "before bob", 1)
+			expectStatus(t, a.post(id, stored), http.StatusCreated, "send")
+			joinRoom(t, bob, a.code)
+			before := countRows(t)
+			// 412 here would make the client re-encrypt and resend other bytes under the id
+			expectAnswer(t, a.post(id, stored), apperr.Conflict, "the resend after a join")
+			expectRowsUnchanged(t, before, "the resend after a join")
+		}},
+		{"a note id: the same note is waiting, any other holder is taken", func(t *testing.T, mux http.Handler) {
+			alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
+			a := createRoom(t, alice, 4, 24)
+			b := joinRoom(t, bob, a.code)
+			c := joinRoom(t, carol, a.code)
+			other := createRoom(t, alice, 2, 24)
+			otherB := joinRoom(t, bob, other.code)
+			noteID, note := a.note(t, b, "noaddx:first")
+			expectStatus(t, a.postNote(noteID, b.member.Card, note), http.StatusCreated, "a note")
+			before := countRows(t)
+			expectAnswer(t, a.postNote(noteID, b.member.Card, note), apperr.Conflict, "the same note again")
+			_, otherBlob := a.note(t, b, "noaddx:other")
+			expectAnswer(t, a.postNote(noteID, b.member.Card, otherBlob), apperr.IDTaken, "other content under the note's id")
+			_, toCarol := a.note(t, c, "noaddx:carol")
+			expectAnswer(t, a.postNote(noteID, c.member.Card, toCarol), apperr.IDTaken, "the id to another addressee")
+			_, fromCarol := c.note(t, b, "noaddx:from carol")
+			expectAnswer(t, c.postNote(noteID, b.member.Card, fromCarol), apperr.IDTaken, "the id from another member")
+			_, elsewhere := other.note(t, otherB, "noaddx:elsewhere")
+			expectAnswer(t, other.postNote(noteID, otherB.member.Card, elsewhere), apperr.IDTaken, "the id in another room")
+			expectRowsUnchanged(t, before, "reused note ids")
+			if notes := b.notes(t); len(notes) != 1 || notes[0].ID != noteID || notes[0].Blob != note {
+				t.Fatalf("bob's notes %+v, want only the first", notes)
+			}
+		}},
+	})
+}
+
+// messagesPath is the send and read path of conv.
+func messagesPath(conv string) string {
+	return models.PathConversations + "/" + conv + "/" + models.SubMessages
+}
+
+// expectOnlyMessage insists u's page of conv is exactly one message: id, holding ciphertext.
+func expectOnlyMessage(t *testing.T, u *user, conv, id, ciphertext string) {
+	t.Helper()
+	stored := messagesOf(t, u, conv)
+	if len(stored) != 1 || stored[0].ID != id || stored[0].Ciphertext != ciphertext {
+		t.Fatalf("stored %+v, want only the original message", stored)
 	}
 }
 

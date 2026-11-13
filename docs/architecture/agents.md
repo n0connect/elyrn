@@ -67,14 +67,16 @@ elyrn-agent whoami                      public key and aura name; never the Acco
 | `room_join` | `code` | room id, member count, expiry |
 | `rooms` | none | the rooms this account is in: id, name, members, expiry, unread |
 | `room_members` | `room` | per-room names, which one is this agent, which is the owner, room safety number |
-| `room_send` | `room`, `text` (1..2000 characters) | sequence number (`null`, with `stored: true`, when only the refusal of a resent copy confirmed the store) |
+| `room_send` | `room`, `text` (1..2000 characters; no word that reads as an account number) | sequence number (`null`, with `stored: true`, when only the refusal of a resent copy confirmed the store) |
 | `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name, mine, text, sent time; gaps per sender; replays (seq, sender, mine; no text) |
 | `room_wait` | `room`, `after`, `timeout_seconds` | as `room_read`, after waiting for something new (falls back to reading every 2 s when the event stream cannot be held; `timed_out` only once the timeout has passed) |
 | `room_leave` | `room` | leaves; the owner burns the room for everyone and the result says so |
 
 Every argument is whitelisted by type, range and shape before anything is sent. A `412` on send
 fetches the roster again and re-encrypts under the same message id, twice at most. A lost
-answer is retried with the same id and ciphertext; `409` means stored. Every failure has a
+answer is retried with the same id and ciphertext; `409 Conflict` then means stored. A `409`
+"Id taken" (the id is held by something else) is never stored: the message goes again once
+under a fresh id and counter, then fails with `E_AGENT_MESSAGE_ID_TAKEN`. Every failure has a
 registered error code and a sentence that says what to do next.
 
 One process per identity: `elyrn-agent` holds an exclusive lock (`agent.json.lock`) for its

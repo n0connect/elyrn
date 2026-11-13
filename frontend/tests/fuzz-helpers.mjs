@@ -186,14 +186,37 @@ export function goHexExact(patterns, size) {
 }
 
 // Go's single-character string escapes, as messages.go spells its trim set
-const GO_ESCAPES = { t: '\t', n: '\n', v: '\v', f: '\f', r: '\r' };
+const GO_ESCAPES = { t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', '\\': '\\', '"': '"' };
+
+// The text of one Go interpreted string literal's body: \uXXXX, \UXXXXXXXX and the one-letter
+// escapes the Go tables here use (the repository writes non-ASCII in Go literals as escapes)
+function decodeGoString(body) {
+    return body.replace(/\\(?:u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|([tnvfr\\"]))/g,
+        (_, hex4, hex8, letter) => (hex4 || hex8 ? String.fromCodePoint(parseInt(hex4 || hex8, 16)) : GO_ESCAPES[letter]));
+}
+
+function goSource(path) {
+    return readFileSync(new URL('../../backend/' + path, import.meta.url), 'utf8');
+}
 
 // backend/internal/agent/messages.go messageTrimChars, decoded from the Go source: the agent's
 // trim set, compared with the browser's MESSAGE_TRIM_CHARS rather than with a copy
 export function goMessageTrimChars() {
-    const source = readFileSync(new URL('../../backend/internal/agent/messages.go', import.meta.url), 'utf8');
+    const source = goSource('internal/agent/messages.go');
     const declaration = source.match(/const messageTrimChars = ((?:"[^"]*"(?:\s*\+\s*)?)+)/);
     if (declaration === null) throw new Error('messages.go declares no messageTrimChars');
-    return [...declaration[1].matchAll(/"([^"]*)"/g)].map((part) => part[1].replace(/\\(?:u([0-9a-fA-F]{4})|([tnvfr]))/g,
-        (_, hex, letter) => (hex ? String.fromCharCode(parseInt(hex, 16)) : GO_ESCAPES[letter]))).join('');
+    return [...declaration[1].matchAll(/"([^"]*)"/g)].map((part) => decodeGoString(part[1])).join('');
+}
+
+// backend/internal/agent/fuzz_test.go accountNumberSamples, decoded from the Go source: the rows
+// [text, refused] that pin the agent's account-number rule and the browser's to one table
+export function goAccountNumberSamples() {
+    const source = goSource('internal/agent/fuzz_test.go');
+    const start = source.indexOf('var accountNumberSamples');
+    if (start < 0) throw new Error('fuzz_test.go declares no accountNumberSamples');
+    const block = source.slice(start, source.indexOf('\n}\n', start));
+    const rows = [...block.matchAll(/\{"((?:[^"\\]|\\.)*)", (true|false)\}/g)]
+        .map((row) => [decodeGoString(row[1]), row[2] === 'true']);
+    if (rows.length === 0) throw new Error('accountNumberSamples holds no rows');
+    return rows;
 }

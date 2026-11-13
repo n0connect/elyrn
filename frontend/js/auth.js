@@ -220,7 +220,9 @@ function clearLoginField() {
 }
 
 // The way back from the login screen (its button, its brand title, Escape): the typed number
-// goes with it, and a login still in flight is abandoned
+// goes with it, and a login still in flight is abandoned. A session cookie that login already
+// got stays until it expires: /logout would end every session of the account, and the server
+// has no per-session revocation (docs/security/threat-model.md, Known Limitations)
 function leaveLogin() {
     loginRun++;
     clearLoginField();

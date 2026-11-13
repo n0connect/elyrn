@@ -792,15 +792,25 @@ func (s *Service) SendMessage(me *Member, conversationID uuid.UUID, rawID, ciphe
 		return 0, nil, err
 	}
 	var seq int64
+	var senderTag string
+	raced := false
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
 		// Membership first: the format a conversation expects (pair or room, and a room's size)
-		// is told only to its members, so "not yours" answers exactly like "does not exist"
+		// is told only to its members, so "not yours" answers exactly like "does not exist"; a
+		// duplicate id is judged only after it too (duplicates.go: no existence oracle)
 		member, err := s.requireMembership(tx, me, conversationID)
 		if err != nil {
 			return err
 		}
+		senderTag = member.MemberTag
 		blob, err := messageBlob(room, ciphertext)
 		if err != nil {
+			return err
+		}
+		// A held id is judged before the roster: a resend after a lost answer whose first attempt
+		// is stored answers "stored" (409) even when someone joined or left meanwhile, instead of
+		// 412, which would make the client re-encrypt and resend different bytes under that id
+		if err := messageDuplicate(tx, messageID, conversationID, senderTag, ciphertext); err != nil {
 			return err
 		}
 		if seq, err = tx.NextSeq(conversationID); err != nil {
@@ -822,11 +832,13 @@ func (s *Service) SendMessage(me *Member, conversationID uuid.UUID, rawID, ciphe
 			Ciphertext:     ciphertext,
 			ExpiresOn:      expiryDay(time.Now()),
 		})
-		if errors.Is(err, store.ErrConflict) {
-			return ErrConflict
-		}
+		raced = errors.Is(err, store.ErrConflict)
 		return err
 	})
+	if raced {
+		// The refused insert aborted the transaction: the holder is read outside it
+		return 0, nil, racedMessage(s.chats, messageID, conversationID, senderTag, ciphertext)
+	}
 	if err != nil {
 		return 0, nil, err
 	}

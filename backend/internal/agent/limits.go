@@ -74,6 +74,7 @@ const (
 	maxCreateAttempts      = 3 // a fresh secret per attempt, as rooms.js MAX_CREATE_ATTEMPTS
 	maxRosterRetries       = 2 // a 412 re-encrypts under the same id at most twice
 	maxLostAnswerRetries   = 2 // a lost answer resends the same id and ciphertext
+	maxIDRedraws           = 1 // a 409 "Id taken" sends again once under a fresh id (chat.js MAX_ID_REDRAWS)
 	maxConfirmAttempts     = 3 // registration phase 2 after a passing failure
 	maxPoWDifficulty       = 28
 	maxPoWNonces           = uint64(1) << 36

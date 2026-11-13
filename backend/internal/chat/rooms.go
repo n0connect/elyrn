@@ -466,6 +466,7 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 		return "", err
 	}
 	var stream string
+	var refused *models.RoomNote
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
 		if _, err := tx.LockConversation(id); err != nil {
 			return err
@@ -497,13 +498,18 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 		note := models.RoomNote{ID: noteID, ConversationID: id, SenderTag: sender.MemberTag, RecipientTag: recipient.MemberTag, Blob: blob, ExpiresAt: expiresAt}
 		if err := tx.CreateNote(&note); err != nil {
 			if errors.Is(err, store.ErrConflict) {
-				return ErrConflict
+				refused = &note
 			}
 			return err
 		}
 		stream, err = memberStream(recipient)
 		return err
 	})
+	if refused != nil {
+		// The refused insert aborted the transaction: the holder is read outside it, and only
+		// after membership and the addressee were checked (duplicates.go: no existence oracle)
+		return "", noteDuplicate(s.chats, refused)
+	}
 	if err != nil {
 		return "", err
 	}

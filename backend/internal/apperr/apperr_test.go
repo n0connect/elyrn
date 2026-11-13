@@ -66,7 +66,8 @@ var knownLevels = map[utils.LogLevel]struct{}{
 }
 
 // jsonWire pins login's failure answers to the exact (status, body) LoginHandler wrote before
-// they moved into the registry; frontend/js/errors.js fromApi maps these messages.
+// they moved into the registry, and a send's "id taken" 409 (in JSON so the browser can read
+// it); frontend/js/errors.js fromApi maps these messages.
 var jsonWire = map[Code]struct {
 	status int
 	body   string
@@ -76,6 +77,7 @@ var jsonWire = map[Code]struct {
 	LoginLookupFailed:  {401, `{"success":false,"message":"Invalid credentials"}`},
 	LoginNoAccount:     {401, `{"success":false,"message":"Invalid credentials"}`},
 	LoginLegacyAccount: {401, `{"success":false,"message":"Invalid credentials"}`},
+	IDTaken:            {409, `{"success":false,"message":"Id taken"}`},
 }
 
 // emptyWire pins the answers with a status line only: HEAD on register, login and the PoW
@@ -149,7 +151,7 @@ func TestWireAnswers(t *testing.T) {
 	}
 }
 
-// TestShapes: exactly the pinned login codes answer in JSON; everything else stays text.
+// TestShapes: exactly the pinned JSON codes answer in JSON; everything else stays text.
 func TestShapes(t *testing.T) {
 	for code, e := range registry {
 		_, isJSON := jsonWire[code]
@@ -221,6 +223,7 @@ func TestSentinelsMapped(t *testing.T) {
 		chat.ErrNotFound:         NotFound,
 		chat.ErrLimitReached:     LimitReached,
 		chat.ErrConflict:         Conflict,
+		chat.ErrIDTaken:          IDTaken,
 		chat.ErrRoomFull:         RoomFull,
 		chat.ErrStale:            RosterChanged,
 		chat.ErrIdentityUnset:    IdentityUnset,

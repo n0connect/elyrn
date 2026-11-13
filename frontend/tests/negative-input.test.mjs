@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { load } from './fuzz-helpers.mjs';
+import { load, goAccountNumberSamples } from './fuzz-helpers.mjs';
 import { ACCOUNT_A, ACCOUNT_B, MARKUP, fullwidth, homoglyph } from './negative-helpers.mjs';
 
 const { context, get } = load({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa },
@@ -216,6 +216,22 @@ test('composer: an account number anywhere in the message is E_MESSAGE_IS_ACCOUN
         const result = validateMessageText(input);
         assert.equal(result.error, CODES.E_MESSAGE_IS_ACCOUNT_NUMBER, JSON.stringify(input));
         assert.equal(result.sanitized, '', 'the number is not handed on toward encryption');
+    }
+});
+
+// One table pins both sides: the agent's ValidateMessageText (backend/internal/agent/fuzz_test.go
+// accountNumberSamples, read from the Go source) refuses exactly the rows the browser refuses
+test('composer: the agent\'s account-number samples are refused or sent here exactly as there', () => {
+    const samples = goAccountNumberSamples();
+    assert.ok(samples.some(([, refused]) => refused) && samples.some(([, refused]) => !refused));
+    for (const [text, refused] of samples) {
+        const result = validateMessageText(text);
+        if (refused) {
+            assert.equal(result.error, CODES.E_MESSAGE_IS_ACCOUNT_NUMBER, JSON.stringify(text));
+            assert.equal(result.sanitized, '');
+        } else {
+            assert.equal(result.valid, true, `${JSON.stringify(text)} refused: ${result.error}`);
+        }
     }
 });
 

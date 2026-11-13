@@ -277,7 +277,8 @@ func TestNegative_MessagesRepeated(t *testing.T) {
 			expectStatus(t, alice.do(http.MethodPost, path, models.SendMessageRequest{ID: id, Ciphertext: first}), http.StatusCreated, "send")
 			expectAnswer(t, alice.do(http.MethodPost, path, models.SendMessageRequest{ID: id, Ciphertext: first}), apperr.Conflict, "resend")
 			other := seal(t, alice, bob, conv, id, "other", 2)
-			expectAnswer(t, alice.do(http.MethodPost, path, models.SendMessageRequest{ID: id, Ciphertext: other}), apperr.Conflict, "same id, other content")
+			// Other content under a held id is not the earlier attempt: id taken, never "stored"
+			expectAnswer(t, alice.do(http.MethodPost, path, models.SendMessageRequest{ID: id, Ciphertext: other}), apperr.IDTaken, "same id, other content")
 			stored := messagesOf(t, bob, conv)
 			if len(stored) != 1 || stored[0].Ciphertext != first || stored[0].Seq != 1 {
 				t.Fatalf("stored %+v, want only the first ciphertext at seq 1", stored)

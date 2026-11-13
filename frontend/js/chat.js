@@ -752,14 +752,56 @@ const Chat = (() => {
 
     // Posts one text and settles the outcome. A new text takes a counter (allocateCounter); a
     // retry of a send whose answer was lost resends the same id, counter and ciphertext, so if
-    // the lost one was stored the server refuses the duplicate id (409) instead of delivering
-    // the message twice. A 409 counts as stored only then: a fresh id cannot exist yet.
+    // the lost one was stored the server refuses the duplicate id (409 "Conflict") instead of
+    // delivering the message twice. A 409 counts as stored only then: a fresh id cannot exist yet.
+    // A 409 "Id taken" (Errors.idTaken) is never stored: the id is held by something else, so the
+    // text goes again under a fresh id and counter, MAX_ID_REDRAWS times at most.
     async function deliver(conv, typed, text) {
-        let attempt = unsent && unsent.convId === conv.id && unsent.text === text ? unsent : null;
-        if (!attempt) {
-            attempt = { convId: conv.id, text: text, id: ElyrnCrypto.newMessageId(), counter: 0, ciphertext: null, lost: false };
-            attempt.counter = await allocateCounter(conv);
+        const resumed = unsent && unsent.convId === conv.id && unsent.text === text ? unsent : null;
+        let outcome = await exchange(conv, resumed || await freshAttempt(conv, text));
+        for (let redraw = 0; !outcome.rosterLost && Errors.idTaken(outcome.result) && redraw < MAX_ID_REDRAWS; redraw++) {
+            outcome = await exchange(conv, await freshAttempt(conv, text));
         }
+        // The roster could not be fetched again: that failure was shown
+        if (outcome.rosterLost) return;
+        const { attempt, result } = outcome;
+        const taken = Errors.idTaken(result);
+
+        const stored = (result.ok && result.data && isSeq(result.data.seq) && result.data.seq > 0) ||
+            (result.status === 409 && attempt.lost && !taken);
+        // Only a lost answer leaves the outcome open; any other answer settles it. The counter is
+        // spent either way (written ahead): a retry keeps it, and the peer sees a gap at worst.
+        const pending = !stored && (result.status === 0 || result.status >= 500);
+        attempt.lost = attempt.lost || pending;
+        unsent = pending ? attempt : null;
+
+        if (stored) {
+            clearSent(conv.id, typed);
+            bump(conv.id);
+            await sync(conv);
+        } else if (taken) {
+            Errors.report(Errors.CODES.E_MESSAGE_ID_TAKEN, null, result);
+        } else if (result.status === 409) {
+            Errors.report(Errors.CODES.E_MESSAGE_ID_CONFLICT, null, result);
+        } else if (result.status === 429) {
+            Errors.report(Errors.CODES.W_MESSAGE_RATE_LIMITED);
+        } else if (result.status === 404) {
+            scheduleRefresh();
+        } else if (result.status !== 401) {
+            Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, result);
+        }
+    }
+
+    // A new send of text: a fresh id and the next counter, sealed on its first post
+    async function freshAttempt(conv, text) {
+        const attempt = { convId: conv.id, text: text, id: ElyrnCrypto.newMessageId(), counter: 0, ciphertext: null, lost: false };
+        attempt.counter = await allocateCounter(conv);
+        return attempt;
+    }
+
+    // Posts one attempt, re-encrypting for a changed roster (412), and returns
+    // { attempt, result, rosterLost }
+    async function exchange(conv, attempt) {
         let result = null;
         let rosterLost = false;  // the roster could not be fetched again: that failure was shown
         try {
@@ -778,38 +820,17 @@ const Chat = (() => {
             // Nothing posted, or refused before any attempt could have been stored
             if (!result || settledUnstored(result)) releaseCounter(conv, attempt);
         }
-        if (rosterLost) return;
-
-        const stored = (result.ok && result.data && isSeq(result.data.seq) && result.data.seq > 0) ||
-            (result.status === 409 && attempt.lost);
-        // Only a lost answer leaves the outcome open; any other answer settles it. The counter is
-        // spent either way (written ahead): a retry keeps it, and the peer sees a gap at worst.
-        const pending = !stored && (result.status === 0 || result.status >= 500);
-        attempt.lost = attempt.lost || pending;
-        unsent = pending ? attempt : null;
-
-        if (stored) {
-            clearSent(conv.id, typed);
-            bump(conv.id);
-            await sync(conv);
-        } else if (result.status === 409) {
-            Errors.report(Errors.CODES.E_MESSAGE_ID_CONFLICT, null, result);
-        } else if (result.status === 429) {
-            Errors.report(Errors.CODES.W_MESSAGE_RATE_LIMITED);
-        } else if (result.status === 404) {
-            scheduleRefresh();
-        } else if (result.status !== 401) {
-            Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, result);
-        }
+        return { attempt, result, rosterLost };
     }
 
     function postAttempt(conv, attempt) {
         return api('POST', `/conversations/${conv.id}/messages`, { id: attempt.id, ciphertext: attempt.ciphertext });
     }
 
-    // A client error other than 409 (a duplicate id, which may be held) stores nothing
+    // A client error stores nothing, except a 409 "Conflict" (a duplicate id: an earlier attempt
+    // may be held); a 409 "Id taken" stores nothing either
     function settledUnstored(result) {
-        return result.status >= 400 && result.status < 500 && result.status !== 409;
+        return result.status >= 400 && result.status < 500 && (result.status !== 409 || Errors.idTaken(result));
     }
 
     function sealAttempt(conv, attempt) {
