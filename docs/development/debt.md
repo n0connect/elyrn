@@ -4,30 +4,32 @@ The single record of what is loose, what was decided and what is unverified. New
 inside each section. An entry leaves only when its fix is verified, never when it is merely
 written. Ids are stable.
 
-## State (13 Nov 2026)
+## State (13 Nov 2026, evening)
 
-- Branch `elyrn` (local, from `noaddx-dev` a3c812f), nothing pushed, not merged.
-- **Full verification at a3c4007, every exit code read:** frontend 111/111 (seven fuzz files
-  included), complete Go suite on both engines, engine equivalence, `make check-hardening`
-  (hardening, nginx edge answers, fuzz list), gofmt, vet and staticcheck on both tag sets. Race
-  detector on both engines at 33d4cbb (not repeated after the last five commits).
-- **Fuzz (stage 3):** 76 Go targets and 7 browser fuzz files, each asserting invariants. Every Go
-  target ran 20 s on the native engine; none ran on the OpenSSL engine and no long campaign ran.
-  Writing and running them found four product defects (address scrubber, two server origins in the
-  agent, an infinite value at the robot door, a status returned beside an error), all fixed.
-- **Live, on the rebuilt development stack (OrbStack, macOS):** in-place upgrade of the existing
-  database (13 users and 4 conversations before and after, schema stamped 0 to 1); nginx edge
-  answers; health endpoint unreachable from outside; second instance refused; ordered shutdown,
-  exit 0; backend stopped behind nginx answers 503 `E_BACKEND_UNAVAILABLE`; database paused 17 s:
-  the agent reports `E_AGENT_SERVER_BUSY` in 12 s, the backend is not restarted, service resumes.
-  Tour: two doors on both paths, register, invite pairing, spent invite, hostile message texts
-  (empty, control, bidi, HTML: no injection), live delivery, draft per conversation, logout,
-  delete identity, rooms with two agents, agent paging and replays over MCP.
-- **Not verified:** Linux hosts and CI; `make onion`; `make test-restore` (written, never run);
-  clock-jump and job-abandon exits (no honest test, no drill); production-mode browser login after
-  these changes; friend requests, the earlier-messages button, lookalike and replay warnings,
-  storage warnings and two tabs in a real browser (unit and integration tests only).
-- Rooms (a3c812f) were on `origin/noaddx-dev` (renamed `elyrn-dev` on 13 Nov), verified there on both engines, not merged to `main`.
+- `main` and `elyrn-dev` are on GitHub at 41669b0 with a green CI run (both engines with the race
+  detector and every fuzz target, equivalence, frontend, images, govulncheck, gitleaks): the first
+  verification on Linux. Local `elyrn-dev` is ahead of it and **not pushed**.
+- **Local head, every exit code read:** frontend 161/161; complete Go suite on both engines (the
+  integration package now ends with a connection guard: open sessions return to the baseline);
+  engine equivalence; `make check-hardening`; gitleaks; govulncheck; staticcheck on both tag sets;
+  gofmt; `go mod tidy -diff`, all at eb9b17e. Race detector on both engines at eb9b17e. After it
+  only the frontend changed (e2643e4): frontend tests rerun, 161/161.
+- **Fuzz campaign at eb9b17e:** all 76 Go targets, 45 s each on the native engine and 15 s each on
+  the OpenSSL engine, no failure; the seven browser fuzz files at 20 times their iteration count.
+- **`make test-restore`:** passed on both engines (dump, drop, restore, key check, the restored
+  account logs in, a new one registers); the development database was not touched.
+- **Negative use:** suites generated from the route table (108 refusals without a session, 50
+  byte-equal "not yours" versus "never existed" answers, order and repetition, limits, cross-protocol
+  confusion, the agent) and for the browser (inputs, a hostile server, auth flows). They found and
+  fixed: an existence oracle on message send, the agent creating an account before parsing a join
+  code, account numbers sent as messages or taken as invites, a listing whose limits changed, a
+  duplicate id answered as stored, and more (commits a901490..e2643e4).
+- **Seen in a real browser on the rebuilt stack:** the ways back from login and registration,
+  Escape, a left registration and a closed room panel leaving nothing behind, wrong pastes into
+  every field, an account number refused as a message, six Enter presses sending once, favicon.
+- **Not verified:** `make onion` end to end; production-mode browser login after these changes;
+  clock-jump and job-abandon exits (no honest test, no drill); friend requests, two tabs, storage
+  warnings and the id-taken redraw in a real browser (tests only).
 
 ## Open findings
 
@@ -130,12 +132,18 @@ Undetermined: back-forward cache after logout, blocked IndexedDB upgrade, an unb
 |---|---|---|---|
 | L-01 | [high] A stopped backend answered 504 with the 503 code: an `error_page` to a named location keeps the trigger's status | every edge `error_page` states `=NNN`; check-hardening enforces it | verified live (a7de107) |
 | L-02 | [high] A database paused 20 s cost the single-instance lock: the watcher's own deadline closed the lock session, the server exited and lost its in-memory state | no deadline on the lock ping; lost only when the connection is closed; `E_INSTANCE_LOCK_UNREACHABLE` once per outage | verified by the suite and live (6e6b21a) |
-| L-03 | [medium] A request stalled on the database lost its 503: statement deadline equal to the HTTP write timeout | request deadlines follow `SERVER_WRITE_TIMEOUT_SEC` minus a margin; background work keeps its limits | verified by the suite (a3c4007). Open: the bound is per statement, not per request |
+| L-03 | [medium] A request stalled on the database lost its 503: statement deadline equal to the HTTP write timeout | one deadline per request from `SERVER_WRITE_TIMEOUT_SEC` minus a margin (the event stream exempt); background work keeps its limits | verified by the suite (a3c4007, a6889fe) |
 | L-04 | [medium] The agent reported an outage as a wrong-shaped answer | any 5xx is a passing failure | verified by the suite and live (6e6b21a) |
 | L-05 | [low] The agent warned `E_AGENT_STATE_REBUILT` on every start of an identity that never sent | counter file written with the identity | verified by the suite and live |
 | L-06 | [medium] JWT signatures could be re-spelled (unused bits, inserted line ends) and still verify | strict decoding, exact three base64url segments | verified by the suite (c18f3c6) |
 | L-07 | [low] Agent and browser trimmed message text differently (U+0085, U+FEFF) | one explicit trim set, pinned on both sides | verified by the suite (c18f3c6) |
-| L-08 | [low] Open: the registration screen shows no way back (no cancel button visible, Escape does nothing); `favicon.ico` answers 404 on every load; startup logs the active master-key id although ids were meant to stay out of logs | decide and fix | open |
+| L-08 | [low] The registration screen showed no way back (a CSS rule hid the button, Escape did nothing); `favicon.ico` answered 404; startup logged the active master-key id | one visible exit and Escape on every pre-login screen, a second confirmation once the account may exist; a favicon; counts only in the log | verified by the suite and in a real browser (a901490, a6889fe, e2643e4) |
+| N-01 | [high] Existence oracle: a non-member sending a well-formed message to a live room got 400, to a missing id 404 | membership first; always 404 | verified by the suite (a6889fe) |
+| N-02 | [medium] An account number could be sent as a message (browser and agent) or was not recognised in the join field in fullwidth form | refused with its own code on both sides, one shared sample table | verified by the suite and in a real browser |
+| N-03 | [medium] Any duplicate message or note id answered "stored" | "stored" only for the sender's own identical resend; `E_ID_TAKEN` otherwise, one automatic redraw in both clients | verified by the suite (22ca108). The browser's redraw path: tests of the mapping only |
+| N-04 | [medium] Driver error text (database user, name, host) reached the log from repository loggers; panic values were logged as-is | one reducer for every repository log line; panics by type, stack without argument words | verified by the suite (eb9b17e) |
+| N-05 | [medium] The integration package opened one database pool per test and closed none (about 130 against a limit of 100); a helper then exited the test binary | one pool at a time, no exiting path reachable from tests, a connection guard in `TestMain` | verified by the suite (eb9b17e) |
+| N-06 | [low] The agent created an account (two proofs of work) before parsing a join code; it echoed a cursor past the room's end | parse first; cursor capped at the real end | verified by the suite |
 | L-09 | [low] Open: `frontend.sha256` is stale since the rename; `docker-compose.test.yaml` has no log limits; `HSTS_*` and `SEC_HEADER_*` are not passed through compose; the retention heartbeat marks a cycle begun, not finished | `make manifest` at release; fix or justify the rest | open |
 
 Feature (13 Nov): two doors. The main menu is the white human side; `robot` is a black door that
