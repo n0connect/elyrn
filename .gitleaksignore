@@ -26,3 +26,8 @@ b6db55fc249785f58b06402ea60a90488f2ddf3e:backend/tests/testutil/env.go:generic-a
 b6db55fc249785f58b06402ea60a90488f2ddf3e:backend/tests/testutil/env.go:generic-api-key:14
 d28c2759e71399f40da8209e9d6dba975c578ea9:docs/operations/configuration-and-tuning.md:generic-api-key:96
 df0ccf843d16faa1ea427842bbd56d25490b5d88:backend/tests/testutil/env.go:generic-api-key:16
+# Reviewed 2026-11-13. Neither is a secret: the hex alphabet beside a variable named key in a
+# fuzz oracle, and a hand-written example token ({"alg":"HS256"}.{"sub":"pending"} with the
+# signature text "signature-bytes") in the contract tests.
+aec7b9a19131b3cfcb547e0ab3ab5e9f3d19194d:backend/tests/middleware/fuzz_test.go:generic-api-key:102
+051c530372898f169ac63a8c61039c64e2afea4b:backend/internal/contract/contract_test.go:jwt:36
