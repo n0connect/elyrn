@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"elyrn/internal/config"
@@ -100,6 +101,27 @@ func (l *Logger) LogResponse(statusCode int, message string) {
 	l.Debug("Response sent: status=%d message=%s", statusCode, message)
 }
 
+// errorReducer is the one reduction LogError applies to an error before it is logged
+// (RegisterErrorReducer); nil logs the error as it is.
+var errorReducer atomic.Pointer[func(error) error]
+
+// RegisterErrorReducer installs the reduction every LogError and LogErrorFrom line applies to its
+// error. The database package installs database.LogSafe when it is linked in, so a driver,
+// connection or outage error logged by any repository or service carries its class only, never
+// the driver's text (which can name the database's user, name and host, or a statement's values).
+// utils cannot import database (database imports utils), hence the hook.
+func RegisterErrorReducer(reduce func(error) error) {
+	errorReducer.Store(&reduce)
+}
+
+// loggable is err as a log line may carry it (RegisterErrorReducer).
+func loggable(err error) error {
+	if reduce := errorReducer.Load(); reduce != nil && err != nil {
+		return (*reduce)(err)
+	}
+	return err
+}
+
 // LogError logs an error with context and stack trace (RULES.md §6.3)
 func (l *Logger) LogError(operation string, err error) {
 	l.LogErrorFrom(1, operation, err)
@@ -111,6 +133,7 @@ func (l *Logger) LogErrorFrom(skip int, operation string, err error) {
 	if !l.Admit(LogLevelERROR, operation) {
 		return
 	}
+	err = loggable(err)
 	// Get caller info for stack trace
 	_, file, line, ok := runtime.Caller(skip + 1)
 	callerInfo := "unknown"

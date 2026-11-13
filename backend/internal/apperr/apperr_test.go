@@ -1,6 +1,7 @@
 package apperr
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,6 +114,7 @@ func TestWireAnswers(t *testing.T) {
 		PendingStoreFull:      {503, "Service unavailable"},
 		StoreUnavailable:      {503, "Service unavailable"},
 		ShuttingDown:          {503, "Service unavailable"},
+		RequestCancelled:      {503, "Service unavailable"},
 		InvalidInput:          {400, "Invalid request"},
 		NotFound:              {404, "Not found"},
 		LimitReached:          {429, "Too many requests"},
@@ -235,6 +237,7 @@ func TestSentinelsMapped(t *testing.T) {
 		pow.ErrInvalidSolution:   PoWInvalid,
 		store.ErrUnavailable:     StoreUnavailable,
 		encryption.ErrClosing:    ShuttingDown,
+		context.Canceled:         RequestCancelled,
 	}
 	if len(want) != len(sentinels) {
 		t.Errorf("pinned %d sentinels, table has %d", len(want), len(sentinels))

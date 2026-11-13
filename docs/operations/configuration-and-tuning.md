@@ -119,7 +119,9 @@ and 38 s (transaction) the deadlines reach their constants and stop growing. Bac
 (the startup key check, re-wrapping, retention) keeps 15 s and 35 s whatever this setting is, and
 retention's bulk deletes and the migration keep their own longer limits (1 and 5 minutes). The
 event stream has no request deadline (it lives for minutes and sets its own write deadline for
-every event); its session check runs under the per-statement deadline.
+every event); its session and member lookups run under the same one database deadline as any
+request. No request's database work is cancelled by the client hanging up or by shutdown
+beginning: only its deadline ends it.
 
 ---
 

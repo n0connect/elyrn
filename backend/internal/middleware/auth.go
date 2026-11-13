@@ -40,7 +40,7 @@ func Authenticate(r *http.Request) (*models.User, *auth.Session, error) {
 		}
 		return nil, nil, ErrNoSession
 	}
-	user, err := userRepository.WithContext(r.Context()).FindByUUID(session.UserUUID)
+	user, err := userRepository.WithContext(DatabaseContext(r)).FindByUUID(session.UserUUID)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			return nil, nil, err

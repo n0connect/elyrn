@@ -35,11 +35,13 @@ func protected(h http.HandlerFunc) http.HandlerFunc {
 	return public(middleware.JWTMiddleware(h))
 }
 
-// stream is protected without the request deadline, for the event stream: it lives for minutes
-// and bounds each write itself (handlers.EventsHandler), so a request deadline would cut it. Its
-// session lookups run under the database's per-statement defaults.
+// stream is protected without the request deadline on the request itself, for the event
+// stream: it lives for minutes and bounds each write itself (handlers.EventsHandler), so a
+// request deadline would cut it. Its session and member lookups run under the same detached,
+// bounded database context as any request (middleware.StreamDeadline), so a client hanging up
+// mid-lookup is never an internal error.
 func stream(h http.HandlerFunc) http.HandlerFunc {
-	return middleware.Recover(guarded(middleware.JWTMiddleware(h)))
+	return middleware.Recover(middleware.StreamDeadline(guarded(middleware.JWTMiddleware(h))))
 }
 
 // NewMux builds the complete HTTP surface with its middleware chains.

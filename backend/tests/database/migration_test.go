@@ -20,16 +20,16 @@ func TestDatabaseMigration(t *testing.T) {
 	defer testutil.TeardownTestEnv(t)
 
 	// Setup database environment variables
-	// These should be set before database.Init() is called
+	// These should be set before the database is started
 	testutil.SetupTestDatabaseEnv()
 
 	// Initialize database (this runs migrations)
 	// This is what backend does on startup
-	database.Init()
+	testutil.StartDatabase(t)
 
 	// Verify database connection is established
 	if database.DB == nil {
-		t.Fatal("database.DB should not be nil after Init()")
+		t.Fatal("database.DB should not be nil after the start")
 	}
 
 	// Verify tables exist
@@ -58,7 +58,7 @@ func TestUserTableSchema(t *testing.T) {
 	// Setup database environment variables
 	testutil.SetupTestDatabaseEnv()
 
-	database.Init()
+	testutil.StartDatabase(t)
 
 	// Check required columns exist
 	hasUUID := database.DB.Migrator().HasColumn(&models.User{}, "uuid")
@@ -108,7 +108,7 @@ func TestChatTableSchema(t *testing.T) {
 	// Setup database environment variables
 	testutil.SetupTestDatabaseEnv()
 
-	database.Init()
+	testutil.StartDatabase(t)
 
 	expected := map[interface{}][]string{
 		&models.Invite{}:             {"id", "lookup", "creator_tag", "creator_ref_enc", "master_key_id", "expires_at"},
@@ -142,7 +142,7 @@ func TestUserTableIndexes(t *testing.T) {
 	// Setup database environment variables
 	testutil.SetupTestDatabaseEnv()
 
-	database.Init()
+	testutil.StartDatabase(t)
 
 	if !database.DB.Migrator().HasIndex(&models.User{}, "idx_users_uuid") {
 		t.Error("users table should have unique index 'idx_users_uuid' on 'uuid'")
@@ -168,7 +168,7 @@ func TestDatabaseConnection(t *testing.T) {
 	// Setup database environment variables
 	testutil.SetupTestDatabaseEnv()
 
-	database.Init()
+	testutil.StartDatabase(t)
 
 	// Test connection by executing a simple query
 	var count int64
@@ -188,7 +188,7 @@ func TestDatabaseConstraints(t *testing.T) {
 	// Setup database environment variables
 	testutil.SetupTestDatabaseEnv()
 
-	database.Init()
+	testutil.StartDatabase(t)
 
 	// A complete row built by the real registration primitives, then each required
 	// column nulled in turn: only the NOT NULL constraint can reject it
@@ -252,7 +252,7 @@ func TestDatabaseMasterKey(t *testing.T) {
 	// Setup database environment variables
 	testutil.SetupTestDatabaseEnv()
 
-	database.Init()
+	testutil.StartDatabase(t)
 
 	if encryption.ActiveMasterKeyID() == "" {
 		t.Fatal("ActiveMasterKeyID should not be empty after Init()")
@@ -269,7 +269,7 @@ func TestConnection_BoundsLockWaitsAndIdleTransactions(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	defer testutil.TeardownTestEnv(t)
 	testutil.SetupTestDatabaseEnv()
-	database.Init()
+	testutil.StartDatabase(t)
 
 	for setting, want := range map[string]string{"lock_timeout": "5s", "idle_in_transaction_session_timeout": "30s", "statement_timeout": "10s"} {
 		var got string

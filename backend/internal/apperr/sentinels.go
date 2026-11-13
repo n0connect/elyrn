@@ -1,6 +1,7 @@
 package apperr
 
 import (
+	"context"
 	"errors"
 
 	"elyrn/internal/auth"
@@ -41,6 +42,7 @@ var sentinels = []struct {
 	{pow.ErrInvalidSolution, PoWInvalid},
 	{store.ErrUnavailable, StoreUnavailable},
 	{encryption.ErrClosing, ShuttingDown},
+	{context.Canceled, RequestCancelled}, // after the outage: a deadline or outage keeps its 503 E_STORE_UNAVAILABLE
 }
 
 // CodeOf returns the code a sentinel error (or one wrapping it) is answered with.

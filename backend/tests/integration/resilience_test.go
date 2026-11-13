@@ -3,11 +3,14 @@ package integration
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +45,9 @@ func breakDatabase(t *testing.T) func() {
 		if !restored {
 			restored = true
 			database.DB = healthy
+			if pool, err := broken.DB(); err == nil {
+				_ = pool.Close()
+			}
 		}
 	}
 	t.Cleanup(restore)
@@ -532,6 +538,85 @@ func TestBurn_RacingSendsLeaveNoCiphertext(t *testing.T) {
 		database.DB.Model(&models.Message{}).Where("conversation_id = ?", convID).Count(&left)
 		if left != 0 {
 			t.Fatalf("round %d: %d messages outlived the burn of their conversation", round, left)
+		}
+	}
+}
+
+// logsDuring returns every line the standard logger wrote while fn ran, at LOG_LEVEL info (the
+// production default; debug turns on GORM's statement log, which production refuses).
+func logsDuring(t *testing.T, fn func()) string {
+	t.Helper()
+	t.Setenv("LOG_LEVEL", "info")
+	var buf lockedBuffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(previous)
+	fn()
+	return buf.String()
+}
+
+// lockedBuffer is a log sink safe for the server's goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// brokenDatabaseText is what the driver's own text says of breakDatabase's address: the
+// database user, name and host a log line must never carry (in production, the real ones).
+var brokenDatabaseText = []string{"nobody", "database=none", "127.0.0.1:1", "failed to connect"}
+
+// During an outage every repository and service that logs the failure logs its class only:
+// no driver text (the database's user, name or host) reaches any log line.
+func TestOutage_NoDriverTextReachesTheLog(t *testing.T) {
+	mux := setup(t)
+	alice := register(t, mux)
+	logged := logsDuring(t, func() {
+		restore := breakDatabase(t)
+		defer restore()
+		expectStatus(t, alice.do("GET", "/api/v2/me", nil), http.StatusServiceUnavailable, "session check during an outage")
+		expectStatus(t, alice.do("GET", "/api/v2/conversations", nil), http.StatusServiceUnavailable, "list during an outage")
+		expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: alice.authKey}),
+			http.StatusServiceUnavailable, "login during an outage")
+	})
+	for _, text := range brokenDatabaseText {
+		if strings.Contains(logged, text) {
+			t.Fatalf("driver text %q reached the log:\n%s", text, logged)
+		}
+	}
+}
+
+// A client that hangs up while its event stream starts never turns the stream's session and
+// member lookups into "context canceled" answered as E_INTERNAL: the lookups run under the
+// request's detached database context (middleware.StreamDeadline), the stream opens, and its loop
+// ends at once because the client is gone.
+func TestEvents_AClientGoneMidStartIsNoInternalError(t *testing.T) {
+	mux := setup(t)
+	alice := register(t, mux)
+	req := httptest.NewRequest(http.MethodGet, models.PathEvents, nil)
+	req.RemoteAddr = alice.ip
+	req.AddCookie(alice.cookie)
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	rr := httptest.NewRecorder()
+	logged := logsDuring(t, func() { mux.ServeHTTP(rr, req.WithContext(ctx)) })
+	if rr.Code != http.StatusOK {
+		t.Fatalf("a stream whose client is gone answered %d %q, want the stream opened (200)", rr.Code, rr.Body.String())
+	}
+	for _, id := range []string{"E_INTERNAL", "context canceled"} {
+		if strings.Contains(logged, id) {
+			t.Fatalf("a client gone mid-start logged %q:\n%s", id, logged)
 		}
 	}
 }

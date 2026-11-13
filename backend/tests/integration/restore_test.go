@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"elyrn/internal/chat"
-	"elyrn/internal/database"
 	"elyrn/internal/encryption"
 	"elyrn/internal/models"
 	"elyrn/internal/server"
@@ -53,9 +52,7 @@ func TestRestoreDrill(t *testing.T) {
 	}
 	encryption.ResetMasterKeysForTesting()
 	t.Cleanup(encryption.ResetMasterKeysForTesting)
-	if f := database.Start(); f != nil {
-		t.Fatalf("start: %s", f.Code.ID)
-	}
+	testutil.StartDatabase(t)
 	if err := chat.NewService().VerifyKeys(); err != nil {
 		t.Fatalf("key check: %v", err)
 	}

@@ -9,6 +9,8 @@ import (
 	"net"
 	"strings"
 
+	"elyrn/internal/utils"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/postgres"
 )
@@ -73,6 +75,11 @@ type dialector struct {
 
 func (d dialector) Translate(err error) error {
 	return classify(d.Dialector.Translate(err))
+}
+
+// Every LogError line of the process reduces its error with LogSafe (utils.LogError).
+func init() {
+	utils.RegisterErrorReducer(LogSafe)
 }
 
 // LogSafe returns err in the form a log line may carry it. A driver error's text can hold what

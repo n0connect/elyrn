@@ -6,7 +6,7 @@ package testutil
 import "os"
 
 // SetupTestDatabaseEnv sets up database environment variables for tests
-// This should be called before database.Init() in migration tests
+// This should be called before StartDatabase in database tests
 // Automatically detects Docker environment and uses appropriate host
 func SetupTestDatabaseEnv() {
 	// Check if running in Docker

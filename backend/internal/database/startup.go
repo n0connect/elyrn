@@ -12,7 +12,6 @@ import (
 	"elyrn/internal/apperr/opcode"
 	"elyrn/internal/encryption"
 	"elyrn/internal/models"
-	"elyrn/internal/utils"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -30,16 +29,10 @@ const (
 	connectMaxAttempts = 64
 )
 
-// Init connects, loads the master keys and migrates; any failure exits through the one startup
-// exit path (utils.ExitStartup). Tests and tools call it; cmd/server runs the steps itself so
-// the single-instance lock is held before the schema is touched.
-func Init() {
-	if f := Start(); f != nil {
-		utils.ExitStartup(f)
-	}
-}
-
-// Start is Init without the exit: connect (bounded wait), master keys, migration.
+// Start connects (bounded wait), loads the master keys and migrates, and returns the failure
+// instead of exiting: tests and drills call it (tests/testutil StartDatabase) and fail the test.
+// cmd/server runs the steps itself so the single-instance lock is held before the schema is
+// touched, and it alone exits (utils.ExitStartup).
 func Start() *opcode.Failure {
 	if f := Connect(); f != nil {
 		return f

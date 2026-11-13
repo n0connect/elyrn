@@ -35,7 +35,7 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		apperr.WriteError(w, "LogoutHandler: Authenticate", err)
 		return
 	default:
-		if err := userRepository.WithContext(r.Context()).BumpSessionEpoch(user.UUID); err != nil {
+		if err := userRepository.WithContext(middleware.DatabaseContext(r)).BumpSessionEpoch(user.UUID); err != nil {
 			apperr.WriteError(w, "LogoutHandler: BumpSessionEpoch", err)
 			return
 		}

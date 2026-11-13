@@ -47,7 +47,7 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 
 	// PHASE 1 (confirm=false) shows a fresh AccountNumber and a pending token; PHASE 2
 	// (confirm=true) redeems the token and creates the account
-	users := userRepository.WithContext(r.Context()) // the request's one database deadline
+	users := userRepository.WithContext(middleware.DatabaseContext(r)) // the request's one database deadline
 	if req.Confirm {
 		confirmRegistration(w, users, req.PendingToken)
 		return
@@ -325,7 +325,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Find user by lookup. Only "no such account" goes on to the credential check: an
 	// unreachable database answers 503 like every route (store.ErrUnavailable), because
 	// "invalid credentials" would tell the user their only key is worthless
-	user, err := userRepository.WithContext(r.Context()).FindByAccountLookup(lookup)
+	user, err := userRepository.WithContext(middleware.DatabaseContext(r)).FindByAccountLookup(lookup)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		apperr.WriteError(w, "LoginHandler: FindByAccountLookup", err)
 		return

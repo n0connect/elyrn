@@ -28,7 +28,9 @@ import (
 )
 
 // TestMain fails fast and loudly when PostgreSQL is unreachable: these tests exercise the
-// real database and must never report success without running.
+// real database and must never report success without running. Around the run it holds the
+// connection guard (connections_test.go): the run fails when the tests leave a database session
+// open that was not open before them.
 func TestMain(m *testing.M) {
 	testutil.SetupTestDatabaseEnv()
 	addr := net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT"))
@@ -38,7 +40,28 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	conn.Close()
-	os.Exit(m.Run())
+	os.Exit(guardedRun(m))
+}
+
+// guardedRun runs the tests between two counts of the database's sessions.
+func guardedRun(m *testing.M) int {
+	guard, err := openConnectionGuard()
+	if err != nil {
+		fmt.Printf("FAIL integration: connection guard: %v\n", err)
+		return 1
+	}
+	defer guard.close()
+	before, err := guard.sessions()
+	if err != nil {
+		fmt.Printf("FAIL integration: connection guard: %v\n", err)
+		return 1
+	}
+	code := m.Run()
+	if err := guard.settledAt(len(before)); err != nil {
+		fmt.Printf("FAIL integration: connection guard: %v\n", err)
+		return 1
+	}
+	return code
 }
 
 var ipCounter uint32

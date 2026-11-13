@@ -48,7 +48,7 @@ func resolveMe(w http.ResponseWriter, r *http.Request) (*chat.Service, *chat.Mem
 		apperr.Write(w, "resolveMe", apperr.SessionContextMissing)
 		return nil, nil, false
 	}
-	svc := chatService.WithContext(r.Context())
+	svc := chatService.WithContext(middleware.DatabaseContext(r))
 	me, err := svc.ResolveMember(userUUID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

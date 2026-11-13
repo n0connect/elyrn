@@ -14,7 +14,6 @@ package apperr
 import (
 	"net/http"
 
-	"elyrn/internal/database"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
 )
@@ -51,6 +50,7 @@ const (
 	PendingStoreFull
 	StoreUnavailable
 	ShuttingDown
+	RequestCancelled
 	HealthUnavailable
 
 	// Chat service outcomes
@@ -163,6 +163,12 @@ var registry = map[Code]entry{
 	// MERGE: a request that reached the server while it closes its master keys (shutdown) is
 	// refused like an outage, never sealed under a zeroized key (encryption.ErrClosing)
 	ShuttingDown: {"E_SHUTTING_DOWN", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
+	// MERGE: work whose context was cancelled (context.Canceled: the client went away, or the
+	// server's base context ended at shutdown) is neither an internal error nor worth an ERROR
+	// line; the request paths detach their database work from cancellation
+	// (middleware.DatabaseContext), so this is the backstop. Nobody may be there to read it; a
+	// client that is gets "retry later"
+	RequestCancelled: {"E_REQUEST_CANCELLED", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelINFO, shapeText},
 	// The container healthcheck (loopback only): the database did not answer SELECT 1 in time,
 	// or retention stopped cycling; a status line only, no detail
 	HealthUnavailable: {"E_HEALTH_UNAVAILABLE", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeEmpty},
@@ -237,14 +243,15 @@ func Write(w http.ResponseWriter, op string, code Code) {
 
 // WriteError answers err: a known sentinel gets its code; anything else is Internal, and only
 // then is the cause logged (server side only, attributed to WriteError's caller; a driver
-// error reduced to its class by database.LogSafe, so no statement value or address reaches it).
+// error reduced to its class by LogError's one reduction, database.LogSafe, so no statement
+// value or address reaches it).
 func WriteError(w http.ResponseWriter, op string, err error) {
 	if code, ok := CodeOf(err); ok {
 		Write(w, op, code)
 		return
 	}
 	e := registry[Internal]
-	logger.LogErrorFrom(1, op+" ("+e.id+")", database.LogSafe(err))
+	logger.LogErrorFrom(1, op+" ("+e.id+")", err)
 	send(w, e)
 }
 
@@ -252,7 +259,7 @@ func WriteError(w http.ResponseWriter, op string, err error) {
 // whose public answer a client contract fixes to something other than Internal.
 func WriteCause(w http.ResponseWriter, op string, code Code, err error) {
 	e := lookup(code)
-	logger.LogErrorFrom(1, op+" ("+e.id+")", database.LogSafe(err))
+	logger.LogErrorFrom(1, op+" ("+e.id+")", err)
 	send(w, e)
 }
 

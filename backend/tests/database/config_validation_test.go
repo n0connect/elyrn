@@ -254,3 +254,40 @@ func TestStartupRefusal_ListEntriesByPosition(t *testing.T) {
 		}
 	}
 }
+
+// Every LogError line reduces its error through the one reducer the database package installs
+// (database.LogSafe): a repository or service that logs a driver failure logs its class, never
+// the driver's text, which names the database's user, name and host.
+func TestLogError_ReducesDriverErrorsToTheirClass(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+	broken, err := database.Open("postgres://nobody:nothing@127.0.0.1:1/none?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	pool, err := broken.DB()
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	pingErr := pool.Ping()
+	if pingErr == nil {
+		t.Fatal("a closed port answered")
+	}
+	if !strings.Contains(pingErr.Error(), "nobody") {
+		t.Fatalf("the driver's own text no longer names the user (%q): this test proves nothing", pingErr.Error())
+	}
+	buf := captureLog(t)
+	for _, wrapped := range []error{pingErr, errors.Join(errors.New("FindByUUID"), pingErr)} {
+		utils.NewLogger("USER_REPOSITORY").LogError("TestLogError_ReducesDriverErrorsToTheirClass", wrapped)
+	}
+	logged := buf.String()
+	for _, text := range []string{"nobody", "database=none", "127.0.0.1:1", "failed to connect"} {
+		if strings.Contains(logged, text) {
+			t.Fatalf("driver text %q reached the log: %s", text, logged)
+		}
+	}
+	if strings.Count(logged, `"error":"database: `) != 2 {
+		t.Fatalf("the error was not reduced to its class: %s", logged)
+	}
+}

@@ -146,10 +146,16 @@ func pgMilliseconds(d time.Duration) string {
 	return strconv.FormatInt(d.Milliseconds(), 10)
 }
 
+// ApplicationName names the backend's sessions in pg_stat_activity (the pool and the
+// single-instance lock alike), so an operator, or the integration tests' connection guard, can
+// tell them from any other client of the database. A fixed word: no identifier, no secret.
+const ApplicationName = "elyrn-backend"
+
 // ConnectionURL builds the PostgreSQL URL with every component escaped, so credentials can
 // contain any character without altering the connection parameters (no DSN injection).
 func ConnectionURL() string {
 	query := url.Values{}
+	query.Set("application_name", ApplicationName)
 	query.Set("sslmode", config.GetDBSSLMode())
 	query.Set("TimeZone", "UTC")
 	query.Set("lock_timeout", pgMilliseconds(lockTimeout))

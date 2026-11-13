@@ -65,6 +65,8 @@ cd backend
 DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=elyrn_test go test -p 1 -race -tags=test ./...
 ```
 
+Every database test brings the database up through `testutil.StartDatabase`: the error-returning `database.Start` (a database that cannot be reached fails that test, it never ends the test binary), with the previous test's pool closed first and its own pool closed when it ends, so one pool is open at a time whatever the number of tests. The integration package runs between two counts of the test database's sessions (`tests/integration/connections_test.go`, from `TestMain`): sessions left open by the tests (a pool, a server, a transaction not released) fail the run, listed by `application_name` (`elyrn-backend` for the backend's own), state and the first word of their statement.
+
 ---
 
 ### Option C: Frontend WebCrypto Derivation Tests

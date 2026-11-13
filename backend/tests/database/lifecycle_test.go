@@ -25,9 +25,7 @@ func startDatabase(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	t.Cleanup(func() { testutil.TeardownTestEnv(t) })
 	testutil.SetupTestDatabaseEnv()
-	if f := database.Start(); f != nil {
-		t.Fatalf("start: %s", f.Error())
-	}
+	testutil.StartDatabase(t)
 }
 
 func storedSchemaVersion(t *testing.T) (string, bool) {

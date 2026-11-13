@@ -74,7 +74,7 @@ go run ./cmd/server
 ## Onemli Notlar
 
 1. **Test Database**: Testler `elyrn_test` database'ini kullanir (production database'i degil)
-2. **Migration**: `database.Init()` cagrildiginda migration'lar otomatik calisir
+2. **Migration**: `testutil.StartDatabase` (`database.Start()`) cagrildiginda migration'lar otomatik calisir; havuz test bitince kapanir
 3. **Clean State**: Her test oncesi database temizlenmez (manuel cleanup gerekebilir)
 4. **Production**: Production'da bu testler calistirilmamali
 
@@ -82,7 +82,7 @@ go run ./cmd/server
 
 Testler `tests/testutil/db.go` icindeki utility fonksiyonlarini kullanir:
 
-- `InitializeTestDatabase()`: Gercek `database.Init()` ile baglanir ve migration'lari calistirir
+- `InitializeTestDatabase()`: Gercek `database.Start()` ile baglanir, migration'lari calistirir; onceki testin havuzunu kapatir, kendi havuzunu test sonunda kapatir
 - `CleanupTestData()`: Test sonrasi tum tablolari bosaltir
 - `InitializeTestDatabase()`: Global database connection'i initialize eder
 
