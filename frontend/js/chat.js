@@ -728,6 +728,8 @@ const Chat = (() => {
         const validation = validateMessageText(typed);
         if (!validation.valid) {
             if (validation.error !== Errors.CODES.E_MESSAGE_EMPTY) Errors.report(validation.error, validation.params);
+            // An account number pasted here is not kept: not in the composer, not as a draft
+            if (validation.error === Errors.CODES.E_MESSAGE_IS_ACCOUNT_NUMBER) clearSent(conv.id, typed);
             return;
         }
 

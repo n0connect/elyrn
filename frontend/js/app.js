@@ -84,6 +84,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 // Wires every control once, area by area, in the page's order
 function setupEventListeners() {
     setupMenuListeners();
+    setupPreLoginExits();
     setupLoginListeners();
     setupRegisterListeners();
     setupAccountListeners();
@@ -163,24 +164,20 @@ function setupDoorListeners() {
 function setupMenuListeners() {
     document.getElementById('showLoginBtn').addEventListener('click', showLogin);
     document.getElementById('showRegisterFormBtn').addEventListener('click', showRegisterForm);
-    document.getElementById('backToMenuFromLogin').addEventListener('click', showMainMenu);
     setupDoorListeners();
     document.getElementById('backToMenuFromRobot').addEventListener('click', showMainMenu);
     document.getElementById('copyRobotBtn').addEventListener('click', copyShownText('robotCommand', Errors.NOTICE.COMMAND_COPIED));
     document.getElementById('retryResumeBtn').addEventListener('click', retryResume);
+}
 
-    // Brand title click - go back to main menu
-    const loginBrandTitle = document.getElementById('loginBrandTitle');
-    const registerBrandTitle = document.getElementById('registerBrandTitle');
-    if (loginBrandTitle) {
-        loginBrandTitle.addEventListener('click', showMainMenu);
-    }
-    if (registerBrandTitle) {
-        registerBrandTitle.addEventListener('click', function() {
-            // Cancel any pending registration first
-            cancelRegistration();
-        });
-    }
+// The pre-login screens' way back, as on the robot side: a "← back to main menu" button and the
+// brand title (Escape: setupGlobalListeners). Leaving login drops the typed number; leaving
+// registration ends it (and asks first where the account may already exist).
+function setupPreLoginExits() {
+    [['backToMenuFromLogin', leaveLogin], ['loginBrandTitle', leaveLogin],
+        ['cancelRegistration', cancelRegistration], ['registerBrandTitle', cancelRegistration]].forEach(([id, leave]) => {
+        document.getElementById(id).addEventListener('click', leave);
+    });
 }
 
 // Login page
@@ -195,7 +192,6 @@ function setupLoginListeners() {
 function setupRegisterListeners() {
     document.getElementById('copyBtn').addEventListener('click', copyAccountNumber);
     document.getElementById('continueBtn').addEventListener('click', continueWithAccountNumber);
-    document.getElementById('cancelRegistration').addEventListener('click', cancelRegistration);
 }
 
 // App header: logging out and deleting the identity
@@ -274,11 +270,16 @@ function setupComposerListeners() {
 
 // Keys and page events that apply whatever is on screen
 function setupGlobalListeners() {
-    // Escape leaves a conversation, or the robot side (its doors and the robot entrance)
+    // Escape leaves a conversation, the robot side (its doors and the robot entrance), or a
+    // pre-login screen (the same way as its back button)
     document.addEventListener('keydown', function(e) {
-        if (e.key !== 'Escape') return;
+        if (e.key !== 'Escape' || e.isComposing) return;
         if (isRobotSide()) {
             showMainMenu();
+        } else if (isViewShown('loginContainer')) {
+            leaveLogin();
+        } else if (isViewShown('registerContainer')) {
+            cancelRegistration();
         } else if (document.getElementById('chatView').style.display !== 'none') {
             Chat.backToList();
         }

@@ -103,7 +103,11 @@ The main menu shows `login`, `new identity`, and `robot`, the inverted black sla
 robot entrance shows the one command to register the agent with an MCP client (with this
 instance's origin filled in), a copy button, what a robot entrance is, and one line addressed to
 software reading the page. No account is involved. Every robot-side screen has a way back to
-the white side (button, brand title, Escape).
+the white side (button, brand title, Escape), and so does every pre-login screen on the white side
+(login and both steps of new identity: `← back to main menu`, the brand title, Escape). Leaving
+login drops the typed number; leaving registration ends its proof of work and drops the number,
+its pending token and, if it still holds it, the clipboard copy. Once a confirmation was sent the
+account may already exist, so leaving then takes a second press (`W_REGISTRATION_LEAVE_CONFIRM`).
 
 <p align="center">
   <img src="../../assets/welcome.png" alt="The human door: white, with the black robot slab below" width="48%" />

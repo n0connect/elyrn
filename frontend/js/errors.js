@@ -52,7 +52,7 @@ const Errors = (() => {
 
         // login
         E_LOGIN_EMPTY: e('please enter account number'),
-        E_LOGIN_INVITE_PASTED: e('that is an invite — log in first, then use join'),
+        E_LOGIN_INVITE_PASTED: e('that is an invite or a room code — log in first, then use join'),
         E_LOGIN_FORMAT: e('invalid format'),
         E_IDENTITY_MISMATCH: e('identity mismatch — the server returned a different public key'),
         // /me answered with a message lifetime or room limits outside what this app accepts
@@ -72,6 +72,8 @@ const Errors = (() => {
         E_REGISTER_REFUSED: e('request refused' + REGISTRATION_RETRY),
         E_ACCOUNT_NUMBER_EXPIRED: e('that account number expired before the account was created — discard it and copy a new one'),
         E_ACCOUNT_CREATED_NOT_ENTERED: e('account created but not opened — save your account number, then log in with it'),
+        // The way back pressed once after a phase 2 request was sent: the account may exist
+        W_REGISTRATION_LEAVE_CONFIRM: w('your account may already exist and this number is the only way into it — save it now (leaving clears it from the clipboard), then press back again to leave'),
 
         // session and identity
         W_SESSION_ENDED: w('session ended — log in again'),
@@ -94,6 +96,8 @@ const Errors = (() => {
         E_MESSAGE_EMPTY: e('message is empty'),
         E_MESSAGE_TOO_MANY_CHARS: e('max {max} characters'),
         E_MESSAGE_CONTROL_CHARS: e('message contains control characters'),
+        // validation.js containsAccountNumber: the message is refused, so the number never leaves
+        E_MESSAGE_IS_ACCOUNT_NUMBER: e('that looks like an account number — never send it. nothing was sent'),
         E_MESSAGE_TOO_LONG: e('message too long'),
         W_MESSAGE_RATE_LIMITED: w('slow down — too many messages'),
         E_MESSAGE_NOT_SENT: e('message not sent — press send again'),

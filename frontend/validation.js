@@ -59,6 +59,11 @@ function validateMessageText(input) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_CONTROL_CHARS };
     }
 
+    // A secret pasted into the composer by mistake is never sent (chat.js also empties the composer)
+    if (containsAccountNumber(normalized)) {
+        return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_IS_ACCOUNT_NUMBER };
+    }
+
     if (!ElyrnCrypto.payloadFits(normalized)) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_TOO_LONG };
     }
@@ -81,13 +86,59 @@ function neutralizeReceivedText(text) {
 }
 
 /**
- * True when a string has the exact shape of a secret AccountNumber.
- * Used to stop users from pasting their account number where an invite belongs.
- * @param {string} input
+ * What an account number field holds, read the way login reads it: Unicode look-alikes folded
+ * (NFKC: fullwidth digits and letters become ASCII) and surrounding whitespace dropped. The one
+ * reading every field uses, so a number refused in one field is recognised in all of them.
+ * @param {any} input
+ * @returns {string} - '' for anything that is not a string
+ */
+function normalizeAccountNumber(input) {
+    return typeof input === 'string' ? input.normalize('NFKC').trim() : '';
+}
+
+/**
+ * True when a string, read as normalizeAccountNumber reads it, has the exact shape of a secret
+ * AccountNumber. Used to stop users from pasting their account number where it does not belong.
+ * @param {any} input
  * @returns {boolean}
  */
 function looksLikeAccountNumber(input) {
-    return typeof input === 'string' && ACCOUNT_NUMBER_REGEX.test(input.trim());
+    return ACCOUNT_NUMBER_REGEX.test(normalizeAccountNumber(input));
+}
+
+/**
+ * Validates what the login field holds. An invite or a room code pasted there is named as such.
+ * @param {any} input
+ * @returns {object} - {valid: boolean, value: string, error: string}; value is the account
+ *     number to use ('' when invalid), error an Errors code
+ */
+function parseAccountNumber(input) {
+    const value = normalizeAccountNumber(input);
+    const refused = (code) => ({ valid: false, value: '', error: code });
+    if (value.length === 0) {
+        return refused(Errors.CODES.E_LOGIN_EMPTY);
+    }
+    if (ElyrnCrypto.codeBody(value, ElyrnCrypto.INVITE_PREFIXES) !== null ||
+        ElyrnCrypto.codeBody(value, ElyrnRoomCrypto.CODE_PREFIXES) !== null) {
+        return refused(Errors.CODES.E_LOGIN_INVITE_PASTED);
+    }
+    if (!ACCOUNT_NUMBER_REGEX.test(value)) {
+        return refused(Errors.CODES.E_LOGIN_FORMAT);
+    }
+    return { valid: true, value: value, error: '' };
+}
+
+// What separates the words of a message when it is searched for an account number
+const MESSAGE_WORD_SEPARATOR = /\s+/u;
+
+/**
+ * True when any whitespace-separated word of text is an account number (looksLikeAccountNumber).
+ * An invite or room code carries its prefix, so sharing one in a message is not refused.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function containsAccountNumber(text) {
+    return text.normalize('NFKC').split(MESSAGE_WORD_SEPARATOR).some(word => ACCOUNT_NUMBER_REGEX.test(word));
 }
 
 /**

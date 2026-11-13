@@ -57,6 +57,11 @@ function setView(activeId) {
     if (activeId !== 'doorVerdictContainer') clearDoorVerdict();
 }
 
+// Whether a view (one of VIEW_IDS) is the one setView shows
+function isViewShown(id) {
+    return document.getElementById(id).style.display === 'block';
+}
+
 function isRobotSide() {
     return document.body.classList.contains(ROBOT_SIDE_CLASS);
 }
@@ -701,6 +706,9 @@ function updateComposerMeta() {
 
 function formatTime(ms) {
     const date = new Date(ms);
+    // A sender's clock past what a Date holds (a modified client can seal any safe integer):
+    // no time is shown rather than "Invalid Date"
+    if (!Number.isFinite(date.getTime())) return '';
     const now = new Date();
     const hhmm = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     if (date.toDateString() === now.toDateString()) {

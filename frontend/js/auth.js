@@ -53,8 +53,10 @@ function powWorkerURL() {
 // no usable answer (Errors.fromResult reads the rest).
 async function getPowChallenge() {
     const result = await apiCall('GET', '/pow/challenge');
-    const challenge = result.ok && result.data && result.data.success ? result.data.challenge : null;
-    return { challenge: challenge || null, status: result.status, timedOut: result.timedOut, tooLarge: result.tooLarge };
+    const served = result.ok && result.data && result.data.success ? result.data.challenge : null;
+    // Anything but an object (a string, a number, a list) is no challenge: no worker is started for it
+    const challenge = served !== null && typeof served === 'object' && !Array.isArray(served) ? served : null;
+    return { challenge: challenge, status: result.status, timedOut: result.timedOut, tooLarge: result.tooLarge };
 }
 
 // Solves a PoW challenge in a Web Worker. Rejects with PowStopped when the challenge is harder
@@ -168,6 +170,22 @@ const ENTRY = Object.freeze({
     REFUSED: 'refused'
 });
 
+// A /me answer body judged against this device's public key: { code: null, ttlDays, limits }
+// when it is taken, else { code } to report. Another key is an attack on the identity
+// (E_IDENTITY_MISMATCH); settings out of range are only refused (E_SERVER_LIMITS_INVALID).
+function judgeMe(data, publicKey) {
+    const sameKey = Boolean(data) && typeof data.public_key === 'string' && data.public_key === publicKey;
+    if (!sameKey) {
+        return { code: Errors.CODES.E_IDENTITY_MISMATCH };
+    }
+    const ttlDays = Number.isSafeInteger(data.message_ttl_days) ? data.message_ttl_days : 0;
+    const limits = roomLimits(data);
+    if (ttlDays < 1 || ttlDays > MAX_MESSAGE_TTL_DAYS || !limits) {
+        return { code: Errors.CODES.E_SERVER_LIMITS_INVALID };
+    }
+    return { code: null, ttlDays: ttlDays, limits: limits };
+}
+
 // Opens the app once /me confirms the session and the identity. Never changes the view on
 // failure: each caller knows what its user still needs on screen. Returns { entry, result }.
 async function enterApp(identity, persist) {
@@ -175,15 +193,12 @@ async function enterApp(identity, persist) {
     if (check.status === 0 || check.status >= 500) {
         return { entry: ENTRY.UNREACHABLE, result: check };
     }
-    const ttlDays = check.data && Number.isSafeInteger(check.data.message_ttl_days) ? check.data.message_ttl_days : 0;
-    const limits = roomLimits(check.data);
-    const sameKey = Boolean(check.data) && check.data.public_key === identity.publicKey;
-    if (!check.ok || !sameKey || ttlDays < 1 || ttlDays > MAX_MESSAGE_TTL_DAYS || !limits) {
+    const judged = judgeMe(check.data, identity.publicKey);
+    if (!check.ok || judged.code) {
         // Server-driven: the replay records stay (Keystore.wipeIdentity)
         await Keystore.wipeIdentity();
         if (check.ok) {
-            // Another key is an attack on the identity; settings out of range are only refused
-            Errors.report(sameKey ? Errors.CODES.E_SERVER_LIMITS_INVALID : Errors.CODES.E_IDENTITY_MISMATCH);
+            Errors.report(judged.code);
             await apiCall('POST', '/logout');
         }
         return { entry: ENTRY.REFUSED, result: check };
@@ -191,8 +206,27 @@ async function enterApp(identity, persist) {
     if (persist) {
         await Keystore.save(identity);
     }
-    await Chat.start(identity, ttlDays, limits);
+    await Chat.start(identity, judged.ttlDays, judged.limits);
     return { entry: ENTRY.ENTERED, result: check };
+}
+
+// Raised whenever the login screen is left: a login still in flight then shows and opens nothing
+let loginRun = 0;
+
+// Empties the login field and the eye animation's copy of what was typed in it
+function clearLoginField() {
+    document.getElementById('accountNumberInput').value = '';
+    if (window.eyeAnimation) window.eyeAnimation.forget();
+}
+
+// The way back from the login screen (its button, its brand title, Escape): the typed number
+// goes with it, and a login still in flight is abandoned
+function leaveLogin() {
+    loginRun++;
+    clearLoginField();
+    document.getElementById('loginError').textContent = '';
+    document.getElementById('loginSuccess').textContent = '';
+    showMainMenu();
 }
 
 // Enter held down in the field, or a click while it runs, never starts a second login
@@ -225,36 +259,21 @@ async function loginNow() {
         accountNumberInputElement.type = 'password';
     }
 
-    const accountNumberInput = accountNumberInputElement.value.trim();
-
-    if (!accountNumberInput) {
-        Errors.inline(errorElement, Errors.CODES.E_LOGIN_EMPTY);
+    // NFKC, trimmed, an invite or room code named as such (validation.js parseAccountNumber)
+    const parsed = parseAccountNumber(accountNumberInputElement.value);
+    if (!parsed.valid) {
+        Errors.inline(errorElement, parsed.error);
         return;
     }
 
-    // Normalize & validate account number format safely
-    const normalizedAccountNumber = String(accountNumberInput)
-        .normalize('NFKC')   // Unicode look-alike cleanup
-        .trim();             // Remove leading/trailing hidden whitespace
-
-    if (ElyrnCrypto.codeBody(normalizedAccountNumber, ElyrnCrypto.INVITE_PREFIXES) !== null) {
-        Errors.inline(errorElement, Errors.CODES.E_LOGIN_INVITE_PASTED);
-        return;
-    }
-
-    if (
-        normalizedAccountNumber.length !== ACCOUNT_NUMBER_LEN ||
-        !ACCOUNT_NUMBER_REGEX.test(normalizedAccountNumber)
-    ) {
-        Errors.inline(errorElement, Errors.CODES.E_LOGIN_FORMAT);
-        return;
-    }
-
+    const run = loginRun;
     loginBtn.disabled = true;
     try {
         // ZERO-KNOWLEDGE: only HKDF(AccountNumber, "noaddx/auth") goes over the wire
-        const authKey = await ElyrnCrypto.deriveAuthKey(normalizedAccountNumber);
+        const authKey = await ElyrnCrypto.deriveAuthKey(parsed.value);
         const result = await apiCall('POST', '/login', { auth_key: authKey });
+        // The login screen was left meanwhile: nothing is shown and the app is not opened
+        if (run !== loginRun) return;
         if (!result.ok || !result.data || !result.data.success) {
             // SECURITY: the server's own text is never shown (Errors.fromResult maps it)
             Errors.inline(errorElement, Errors.fromResult(result), null, result);
@@ -262,7 +281,8 @@ async function loginNow() {
         }
 
         successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
-        const identity = await deriveSession(normalizedAccountNumber);
+        const identity = await deriveSession(parsed.value);
+        if (run !== loginRun) return;
         const opened = await enterApp(identity, true);
         successElement.textContent = '';
         if (opened.entry === ENTRY.UNREACHABLE) {
@@ -270,7 +290,7 @@ async function loginNow() {
             Errors.inline(errorElement, Errors.fromResult(opened.result), null, opened.result);
             return;
         }
-        accountNumberInputElement.value = '';
+        clearLoginField();
         errorElement.textContent = '';
         if (opened.entry === ENTRY.REFUSED) {
             showMainMenu();
@@ -286,6 +306,14 @@ async function loginNow() {
 let stopScramble = null;
 let pendingRegistrationAccountNumber = null;
 let pendingRegistrationToken = null;  // Zero-trust: token from backend
+// Set once a phase 2 request was sent: from then on the account may exist, and the number on
+// screen is the only way into it, so leaving takes a second press (cancelRegistration)
+let registrationAccountMayExist = false;
+// The first press of the way back while the account may exist: the next one leaves
+let registrationLeaveArmed = false;
+// Raised whenever registration is left: a run still in flight then stops at its next step and
+// never holds, shows or copies a number again
+let registrationRun = 0;
 
 // Scramble animation: random characters cycle until the real AccountNumber arrives (visual only)
 function startAccountNumberScramble(accountNumberElement, successElement, accountNumberDisplay) {
@@ -318,7 +346,13 @@ function stopAccountNumberScramble() {
 // Copy button - get real Account Number from backend (but don't create account yet)
 // Zero-trust: Backend returns a pending_token that we must use to confirm
 function copyAccountNumber() {
-    return once('register', copyAccountNumberNow);
+    return once(registrationKey(), copyAccountNumberNow);
+}
+
+// The lock phase 1 and phase 2 share. It belongs to one registration: a run left behind (still
+// waiting on its request) never blocks the next registration's buttons.
+function registrationKey() {
+    return 'register-' + registrationRun;
 }
 
 async function copyAccountNumberNow() {
@@ -339,14 +373,18 @@ async function copyAccountNumberNow() {
         copyBtn.disabled = true;
     }
     errorElement.textContent = '';
+    const run = registrationRun;
 
     await maskAccountNumber(accountNumberElement, successElement);
+    if (run !== registrationRun) return;
 
     // First, get PoW challenge from backend
     successElement.textContent = Errors.NOTICE.PREPARING_CHALLENGE;
 
     try {
-        const issued = await requestAccountNumber(accountNumberElement, successElement, errorElement);
+        const issued = await requestAccountNumber(run, accountNumberElement, successElement, errorElement);
+        // Left meanwhile: the number is never held, shown or copied
+        if (run !== registrationRun) return;
         if (!issued) {
             allowRetry();
             return;
@@ -357,6 +395,11 @@ async function copyAccountNumberNow() {
         pendingRegistrationToken = issued.pendingToken;
 
         await revealAccountNumber(accountNumberElement, successElement, issued.accountNumber);
+        if (run !== registrationRun) {
+            // The reveal's last frame wrote the number back after the screen was cleared
+            accountNumberElement.textContent = '';
+            return;
+        }
         await copyIssuedAccountNumber(issued.accountNumber);
 
         // Enable continue button
@@ -365,7 +408,7 @@ async function copyAccountNumberNow() {
     } catch (error) {
         allowRetry();
         // Registration was left while the proof of work ran: nothing to tell
-        if (isPowCancelled(error)) return;
+        if (isPowCancelled(error) || run !== registrationRun) return;
         // SECURITY: Generic error message; the log keeps only the error's name
         Errors.inline(errorElement, powFailureCode(error, Errors.fromApi(null, 500)), null, error);
         accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
@@ -388,8 +431,9 @@ async function maskAccountNumber(accountNumberElement, successElement) {
 
 // Registration phase 1: pays a proof of work and has the server issue an account number and
 // its pending token. Returns { accountNumber, pendingToken }, or null once the failure has been
-// shown; throws only when the proof of work fails (the caller reports it).
-async function requestAccountNumber(accountNumberElement, successElement, errorElement) {
+// shown (or registration was left: run is no longer registrationRun); throws only when the
+// proof of work fails (the caller reports it).
+async function requestAccountNumber(run, accountNumberElement, successElement, errorElement) {
     const failed = (code, cause) => {
         Errors.inline(errorElement, code, null, cause);
         accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
@@ -397,6 +441,8 @@ async function requestAccountNumber(accountNumberElement, successElement, errorE
     };
 
     const issued = await getPowChallenge();
+    // Left meanwhile: no proof of work is started for a registration nobody waits for
+    if (run !== registrationRun) return null;
     if (!issued.challenge) {
         return failed(Errors.fromResult(issued), issued);
     }
@@ -488,7 +534,7 @@ function failRegistrationStep(status, cause) {
 
 // Shares its key with the copy step: phase 1 and phase 2 never run at once
 function continueWithAccountNumber() {
-    return once('register', continueWithAccountNumberNow);
+    return once(registrationKey(), continueWithAccountNumberNow);
 }
 
 async function continueWithAccountNumberNow() {
@@ -506,7 +552,7 @@ async function continueWithAccountNumberNow() {
     // Zero-trust: We need the pending token from Phase 1
     if (!pendingRegistrationToken) {
         Errors.report(Errors.CODES.E_REGISTRATION_EXPIRED);
-        cancelRegistration();
+        leaveRegistration();
         return;
     }
 
@@ -514,10 +560,14 @@ async function continueWithAccountNumberNow() {
     continueBtn.disabled = true;
     successElement.textContent = Errors.NOTICE.PREPARING_CHALLENGE;
     errorElement.textContent = '';
+    // Pressing continue answers a pending "press back again": the next back asks again
+    registrationLeaveArmed = false;
+    const run = registrationRun;
 
     try {
         // SECURITY: Phase 2 requires separate PoW (prevents Phase 1 replay)
         const issued = await getPowChallenge();
+        if (run !== registrationRun) return;
         if (!issued.challenge) {
             failRegistrationStep(issued.status);
             return;
@@ -529,23 +579,27 @@ async function continueWithAccountNumberNow() {
         successElement.textContent = Errors.NOTICE.CREATING_ACCOUNT;
 
         // Phase 2: Create account using pending token (not Account Number from frontend);
-        // the HttpOnly session cookie is set by the response
+        // the HttpOnly session cookie is set by the response. Once sent, the account may exist
+        // whatever comes back (a lost answer hides a creation), until registration ends.
+        registrationAccountMayExist = true;
         const result = await apiCall('POST', '/register', {
             confirm: true,
             pending_token: pendingRegistrationToken,
             pow: powSolution
         });
+        // Left meanwhile, after a second press that accepted the loss: nothing more happens
+        if (run !== registrationRun) return;
 
         if (result.ok && result.data && result.data.success) {
-            await finishRegistration();
+            await finishRegistration(run);
         } else if (result.status === 401) {
-            await recoverRegistration();
+            await recoverRegistration(run);
         } else {
             failRegistrationStep(result.status);
         }
     } catch (error) {
         // Registration was left while the proof of work ran: nothing to tell
-        if (isPowCancelled(error)) return;
+        if (isPowCancelled(error) || run !== registrationRun) return;
         const powCode = powFailureCode(error, null);
         if (powCode) {
             document.getElementById('registerSuccess').textContent = '';
@@ -562,11 +616,13 @@ async function continueWithAccountNumberNow() {
 // Account created: derive the E2E identity locally from the account number we hold. The number
 // stays on screen (and pending) until the app has opened: if it does not, the account exists
 // anyway and the number is the only way back into it.
-async function finishRegistration() {
+async function finishRegistration(run) {
     const accountNumber = pendingRegistrationAccountNumber;
     const successElement = document.getElementById('registerSuccess');
     successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
     const identity = await deriveSession(accountNumber);
+    // Left meanwhile (a second press accepted the loss): the app is not opened behind the menu
+    if (run !== registrationRun) return;
     const opened = await enterApp(identity, true);
     successElement.textContent = '';
     if (opened.entry !== ENTRY.ENTERED) {
@@ -576,13 +632,8 @@ async function finishRegistration() {
     }
 
     // The account number was copied for the user to save; do not leave it in the clipboard
-    // (clipboard histories and cross-device sync would keep it). Best effort only, and only if the
-    // clipboard still holds it (utils.js): registration must not fail over it.
-    clearClipboardIfHolds(accountNumber);
-
-    // Clear pending state
-    pendingRegistrationAccountNumber = null;
-    pendingRegistrationToken = null;
+    // (clipboard histories and cross-device sync would keep it): dropRegistrationSecrets
+    dropRegistrationSecrets();
     document.getElementById('generatedAccountNumber').textContent = '';
     showSuccess(Errors.NOTICE.WELCOME);
 }
@@ -590,19 +641,20 @@ async function finishRegistration() {
 // A 401 means the server no longer holds this registration. Either an earlier attempt created
 // the account and only its answer was lost (then the number logs in), or the registration
 // expired first: that number will never work, so it is replaced rather than kept.
-async function recoverRegistration() {
+async function recoverRegistration(run) {
     const authKey = await ElyrnCrypto.deriveAuthKey(pendingRegistrationAccountNumber);
     const login = await apiCall('POST', '/login', { auth_key: authKey });
+    if (run !== registrationRun) return;
     if (login.ok && login.data && login.data.success) {
-        await finishRegistration();
+        await finishRegistration(run);
         return;
     }
     if (login.status !== 401) {
         failRegistrationStep(login.status);
         return;
     }
-    pendingRegistrationAccountNumber = null;
-    pendingRegistrationToken = null;
+    // The number never opened an account and never will: nothing is lost by dropping it
+    dropRegistrationSecrets();
     showRegisterForm();
     Errors.inline(document.getElementById('registerError'), Errors.CODES.E_ACCOUNT_NUMBER_EXPIRED);
 }
@@ -621,7 +673,7 @@ async function logoutNow() {
     await Keystore.wipeAll();
     const result = await apiCall('POST', '/logout');
     showMainMenu();
-    document.getElementById('accountNumberInput').value = '';
+    clearLoginField();
     if (!result.ok) {
         // This device is logged out either way; say so if other sessions could not be revoked
         Errors.report(Errors.CODES.W_LOGOUT_SERVER_UNREACHABLE, null, result);
@@ -637,12 +689,14 @@ function deleteIdentity() {
 
 async function deleteIdentityNow() {
     const input = document.getElementById('deleteAccountInput');
-    const accountNumber = String(input.value).normalize('NFKC').trim();
+    // Read as login reads it; any refusal here is one code (the field asks for this identity's number)
+    const parsed = parseAccountNumber(input.value);
     input.value = '';
-    if (accountNumber.length !== ACCOUNT_NUMBER_LEN || !ACCOUNT_NUMBER_REGEX.test(accountNumber)) {
+    if (!parsed.valid) {
         Errors.report(Errors.CODES.E_DELETE_INVALID_NUMBER);
         return;
     }
+    const accountNumber = parsed.value;
 
     const button = document.getElementById('deleteConfirmBtn');
     button.disabled = true;
@@ -685,16 +739,57 @@ async function deletionOutcome(result) {
     return check.ok ? DELETION.KEPT : DELETION.UNKNOWN;
 }
 
-// Cancel registration - just go back (no account was created yet)
-function cancelRegistration() {
-    // Stop the scramble animation and any proof of work still running for this registration
-    stopAccountNumberScramble();
-    cancelProofsOfWork();
-
-    // Clear any pending state
+// Forgets the account number and pending token this page holds and every flag about them.
+// The number was copied for the user to save: it is cleared from the clipboard if the clipboard
+// still holds it (best effort, utils.js clearClipboardIfHolds; never throws). Resolves once that
+// clipboard attempt settled.
+function dropRegistrationSecrets() {
+    const accountNumber = pendingRegistrationAccountNumber;
     pendingRegistrationAccountNumber = null;
     pendingRegistrationToken = null;
+    registrationAccountMayExist = false;
+    registrationLeaveArmed = false;
+    return accountNumber ? clearClipboardIfHolds(accountNumber) : Promise.resolve();
+}
 
-    // Return to main menu
+// Gives up the registration in progress, whatever it was doing: every run still in flight stops
+// at its next step (registrationRun), its proof of work ends, and its secrets are dropped.
+// No DOM is touched here (leaveRegistration clears the screen).
+function forgetRegistration() {
+    registrationRun++;
+    stopAccountNumberScramble();
+    cancelProofsOfWork();
+    return dropRegistrationSecrets();
+}
+
+// What the way back does now: LEAVE, or ASK first because the account may exist and the number
+// on screen is the only way into it (a second press then leaves)
+const REGISTRATION_EXIT = Object.freeze({ LEAVE: 'leave', ASK: 'ask' });
+
+function registrationExit() {
+    return registrationAccountMayExist && !registrationLeaveArmed ? REGISTRATION_EXIT.ASK : REGISTRATION_EXIT.LEAVE;
+}
+
+// Leaves registration for the main menu, with nothing of it left on the page
+function leaveRegistration() {
+    const cleared = forgetRegistration();
+    document.getElementById('generatedAccountNumber').textContent = '';
+    document.getElementById('registerError').textContent = '';
+    document.getElementById('registerSuccess').textContent = '';
     showMainMenu();
+    return cleared;
+}
+
+// The way back from registration (its button, its brand title, Escape), in both of its steps.
+// One press at a time; where the account may already exist the first press only asks.
+function cancelRegistration() {
+    return once('register-leave', async () => {
+        if (registrationExit() === REGISTRATION_EXIT.ASK) {
+            registrationLeaveArmed = true;
+            document.getElementById('registerSuccess').textContent = '';
+            Errors.inline(document.getElementById('registerError'), Errors.CODES.W_REGISTRATION_LEAVE_CONFIRM);
+            return;
+        }
+        await leaveRegistration();
+    });
 }

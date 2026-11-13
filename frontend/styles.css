@@ -367,11 +367,6 @@ button:disabled {
     text-align: left;
 }
 
-/* Hide back button when Account Number is displayed */
-.register-form:has(.account-number-display[style*="block"]) .text-btn {
-    display: none;
-}
-
 .account-number-label {
     font-size: 14px;
     text-transform: uppercase;

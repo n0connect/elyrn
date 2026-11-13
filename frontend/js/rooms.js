@@ -55,10 +55,12 @@ const Rooms = (() => {
         };
     }
 
-    // The listing's counters change; the code and keys never do
+    // The listing's counters change; the code, its limits and the keys never do: a listing that
+    // reports other limits than the code (checked once by adopt) is the server changing its story
     function refreshView(room, item) {
         const view = item.room;
         if (!view || view.vault !== room.vault || typeof view.owner !== 'boolean' ||
+            view.max_members !== room.maxMembers || view.expires_at !== room.code.expiresHour * HOUR_SECONDS ||
             !isCount(view.members, R.MAX_MEMBERS) || !isCount(view.notes, R.MAX_MEMBERS)) {
             return false;
         }
@@ -261,8 +263,11 @@ const Rooms = (() => {
             return [];
         }
         const opened = [];
+        const seen = new Set();
         for (const raw of result.data.notes.slice(0, R.MAX_MEMBERS)) {
-            if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || typeof raw.blob !== 'string') continue;
+            // A note listed twice is one request: shown once, answered once
+            if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || typeof raw.blob !== 'string' || seen.has(raw.id)) continue;
+            seen.add(raw.id);
             try {
                 const note = await R.openNote(conv.room.keys, conv.room.member, raw.id, raw.blob);
                 if (note.text.length > MAX_NOTE_CHARS) continue;

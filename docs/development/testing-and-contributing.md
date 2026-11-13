@@ -175,6 +175,53 @@ FUZZ_SCALE=20 make fuzz-js        # twenty times the iterations of every target
 
 A failing JS target prefixes its assertion with `[fuzz seed=0x... iteration=N]`. Every target draws all its inputs from one generator started at that seed, so the same seed replays the same inputs in the same order: pass it back, with enough iterations to reach N (`FUZZ_SCALE` only changes how many are drawn, not which), and narrow the run to the failing test by name, e.g. `FUZZ_SEED=0x5eed0001 node --test --test-name-pattern='validateMessageText' frontend/tests/validation.fuzz.test.mjs` (decimal or `0x` hex; `FUZZ_SEED` replaces every target's seed in that run). Each file's targets have fixed seeds, so a CI failure also reproduces with the plain command. Turn the input into a plain test next to the fix.
 
+### Option E: Negative Use (careless, confused or hostile users and servers)
+
+Beyond edge cases and disasters, the browser client is checked by what a user does wrong at the UI and what a hostile server sends. Three files load the real modules in a `vm` context (no module under test is mocked); a real `node:http` server plays the hostile elyrn server (`negative-helpers.mjs`). Every scenario asserts the exact registered code or the exact refusal, never only "does not throw". They run with the other frontend tests (`node --test frontend/tests/*.test.mjs`).
+
+| File | Scenarios |
+|---|---|
+| `negative-input.test.mjs` | login field (`validation.js parseAccountNumber`, also read by the delete field): blank, non-string, over-length, wrong alphabet, padding, multi-line, zero-width, homoglyph, markup → `E_LOGIN_EMPTY` / `E_LOGIN_FORMAT`; fullwidth and padded numbers read as the same number; an invite or room code under every prefix → `E_LOGIN_INVITE_PASTED`. Join field: blank → `E_JOIN_CODE_EMPTY` / `E_INVITE_EMPTY`; an account number (padded, fullwidth) → `E_INVITE_IS_ACCOUNT_NUMBER`; a room code where only an invite is read → `E_INVITE_INVALID`; broken invites → `E_INVITE_INVALID`, broken room codes → `E_ROOM_CODE_INVALID`; own invite recognised by fingerprint; an expired room code parses (its expiry is judged by `chat.js`). Composer: blank → `E_MESSAGE_EMPTY`, over-length → `E_MESSAGE_TOO_MANY_CHARS` (with its limit) or `E_MESSAGE_TOO_LONG`, controls and bidi → `E_MESSAGE_CONTROL_CHARS`, an account number anywhere (fullwidth too) → `E_MESSAGE_IS_ACCOUNT_NUMBER`; invites, room codes, near-misses and markup are sent as text. Door answer: blank, junk, look-alike, account number never pass |
+| `negative-server.test.mjs` | markup, header text and odd types in error bodies map to registered codes; an HTML body is no data; a success body on an error status is a failure; no file in `frontend/js` writes HTML into the DOM, and nginx's CSP requires Trusted Types. Listed rooms with wrong types (`malformed room`), limits other than the code's or another account's vault are refused; limits that change between two listings are refused (`E_ROOM_DATA_CHANGED` in `chat.js`). Member lists of the wrong shape (`malformed roster`), an error status (by `Errors.fromResult`), `mine` flags that lie, cards that are invites / room codes / account numbers / markup / duplicates (skipped and counted), more cards than seats, members dropped and added between reads. Notes: wrong shapes dropped, a note listed twice shown once, a note holding a room code / account number / markup refused when accepted. Join and create: a 2xx naming another room, a 2xx error body, a success body on an error status take no seat; a join request carries no code and no account number. Messages: a flipped `mine` does not open a pair message; a room message names its real sender |
+| `negative-auth.test.mjs` | proof-of-work challenge that is not an object, on a 2xx error body or an error status → no challenge, by code; a difficulty over the cap → `E_POW_TOO_HARD` before any worker. `/me` (`auth.js judgeMe`): any other or missing key → `E_IDENTITY_MISMATCH`; settings of the wrong type or out of range → `E_SERVER_LIMITS_INVALID`; extra fields ignored. Registration left mid-way: number, token and flags dropped, proofs of work ended, the clipboard cleared only if it still holds the number, a left run never holds the next registration's lock; where the account may exist the way back asks once (`W_REGISTRATION_LEAVE_CONFIRM`). Every guarded action pressed twice runs once |
+
+#### Negative-use tour (manual, real browser)
+
+What lives in DOM-bound code (`app.js`, `auth.js`'s screens, `chat.js`, `ui.js`) is checked by hand in a real browser, against a local stack, with the console open: no line may carry a secret, and each expected code must appear in the console's `[elyrn]` line. Each line is screen · action · expected.
+
+Pre-login screens:
+- Main menu · open the page · no `404` for `/favicon.ico` or `/favicon.svg` in the network panel; the tab shows a black square with a white dot (also on the 404 page).
+- Login · press `← back to main menu`, click the brand title, press Escape (each in turn) · the main menu; opening login again shows an empty field; the eye icon reveals nothing.
+- Login · type a number, press login, press Escape before it answers · the main menu stays; the app never opens behind it.
+- Login · paste a room code · `that is an invite or a room code — log in first, then use join` (`E_LOGIN_INVITE_PASTED`); nothing is sent (network panel).
+- Login · paste the number in fullwidth characters · logs in as the same account.
+- Login · hold Enter down · one `POST /login`.
+- Login · log in, log out · the login field and the eye animation hold nothing (open login again, hover the eye).
+- New identity (before copy) · `← back to main menu` is visible; press it, click the brand title, press Escape · the main menu.
+- New identity · press copy, press Escape while the proof of work runs · the main menu; the CPU drops (worker ended); open new identity again and press copy: it runs (not blocked by the left run).
+- New identity · press copy, leave while `POST /register` (confirm false) is in flight (throttle the network) · the main menu; no number is shown or copied afterwards; the clipboard is unchanged.
+- New identity (number shown) · press back · the main menu; the number element is empty; the clipboard no longer holds the number (if nothing else was copied since).
+- New identity (number shown) · press continue, then back while `POST /register` (confirm true) is in flight · the warning `your account may already exist and this number is the only way into it — save it now (leaving clears it from the clipboard), then press back again to leave` (`W_REGISTRATION_LEAVE_CONFIRM`); a second press leaves; the app does not open behind the menu.
+- New identity · make `/me` fail after the account is created (stop the backend between the two calls) · `E_ACCOUNT_CREATED_NOT_ENTERED`; back asks first (`W_REGISTRATION_LEAVE_CONFIRM`); pressing continue in between makes the next back ask again.
+- New identity · double-click copy, double-click continue · one challenge request and one `POST /register` each.
+
+Inside the app:
+- Composer · paste your account number (alone, in a sentence, fullwidth) and send · `E_MESSAGE_IS_ACCOUNT_NUMBER`; nothing is posted; the composer is emptied and no draft keeps it (switch conversation and back).
+- Composer · hold Enter down on a message · one message posted.
+- Composer · type while a send is in flight (throttle) · the new text stays in the composer after the send settles.
+- Join · paste your own invite · `W_OWN_INVITE`; nothing posted.
+- Join · paste an expired room code · `E_ROOM_CODE_EXPIRED`; nothing posted.
+- Join · paste a room code of a full room · `W_ROOM_FULL`.
+- Join · paste a spent invite · `E_INVITE_SPENT`.
+- Join · press join twice fast · one request.
+- Join · paste a room code you are in, with its limit byte edited · `E_ROOM_CODE_INVALID`; nothing posted.
+- Conversation · have the server return `seq` going backwards, duplicate message ids, or a message whose `mine` is flipped (a proxy rewriting `/messages`) · each such message is skipped, or shown unreadable, never twice.
+- Conversation · a peer (modified client) sends a message with `sentAt` beyond what a Date holds · the message shows with no time, not `Invalid Date`.
+- Room · a member list missing yourself or marking another card `mine` (proxy) · `E_ROSTER_UNVERIFIED`; sending is refused.
+- Room · a friend request whose text is a room code or an account number · accept gives `E_FRIEND_REQUEST_MALFORMED` and the note is dismissed.
+- Any screen · log out while an invite or a room is being created · the panels close; no code is revealed or copied afterwards.
+- Any screen · back, then the browser's forward (bfcache) · the session is checked again (`/me`); a revoked one goes to login with `W_SESSION_ENDED`.
+
 ### Continuous Integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and `elyrn-dev`, on tags and on pull requests: the complete suite with the race detector for **both crypto engines**, the engine **equivalence** suite, short fuzz runs, the frontend interop tests, `govulncheck`, `gitleaks` over the full history, and the Docker images: the backend must boot as the unprivileged user and pass the startup self-test, nginx must render and accept its config (`nginx -t`), and tor must accept its config with the onion defenses compiled in.

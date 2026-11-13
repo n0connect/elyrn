@@ -263,6 +263,15 @@ class EyeHoverAnimation {
         this.displayValue = '';
     }
 
+    // Drops what was typed: the field and this animation's copy of it (leaving login, logging
+    // in or out). The field stays masked.
+    forget() {
+        this.stopAnimation();
+        this.currentZone = 'none';
+        this.originalValue = '';
+        this.resetToMasked();
+    }
+
     destroy() {
         this.stopAnimation();
         if (this.boundHandleMouseMove) {
