@@ -276,9 +276,9 @@ function setupGlobalListeners() {
         if (e.key !== 'Escape' || e.isComposing) return;
         if (isRobotSide()) {
             showMainMenu();
-        } else if (isViewShown('loginContainer')) {
+        } else if (isShown('loginContainer')) {
             leaveLogin();
-        } else if (isViewShown('registerContainer')) {
+        } else if (isShown('registerContainer')) {
             cancelRegistration();
         } else if (document.getElementById('chatView').style.display !== 'none') {
             Chat.backToList();

@@ -57,8 +57,8 @@ function setView(activeId) {
     if (activeId !== 'doorVerdictContainer') clearDoorVerdict();
 }
 
-// Whether a view (one of VIEW_IDS) is the one setView shows
-function isViewShown(id) {
+// Whether a view (VIEW_IDS, shown by setView) or a pair panel (PAIR_PANELS) is shown
+function isShown(id) {
     return document.getElementById(id).style.display === 'block';
 }
 
@@ -163,8 +163,7 @@ function showRegisterForm() {
     const copyBtn = document.getElementById('copyBtn');
     const accountNumberBox = document.querySelector('.account-number-box');
 
-    accountNumberElement.textContent = '';
-    accountNumberElement.classList.remove('generating', 'masking', 'revealed');
+    clearCodeElement(accountNumberElement);
     continueBtn.disabled = true;
     if (copyBtn) {
         copyBtn.disabled = false;
@@ -234,12 +233,48 @@ function startScramble(element, length, prefix = '') {
     return () => clearInterval(timer);
 }
 
-// Turns the characters after the prefix into '*', a few per step
-function animateToMask(element, prefix = '') {
+// The states a scrambled, masked and revealed code element passes through (account number,
+// invite, room code)
+const CODE_STATES = ['generating', 'masking', 'revealed'];
+
+// Empties a code element and takes it out of every animation state
+function clearCodeElement(element) {
+    element.textContent = '';
+    element.classList.remove(...CODE_STATES);
+}
+
+// Puts a code element into one animation state (CODE_STATES), out of the others
+function setCodeState(element, state) {
+    element.classList.remove(...CODE_STATES);
+    element.classList.add(state);
+}
+
+// Masks the scramble, then reveals the real code after its prefix: the account number's sequence.
+// Resolves to alive(): false when the screen was left meanwhile and nothing more was drawn.
+async function maskThenReveal(element, code, prefix, alive) {
+    setCodeState(element, 'masking');
+    await animateToMask(element, prefix, alive);
+    await revealText(element, code, prefix, alive);
+    if (!alive()) return false;
+    setCodeState(element, 'revealed');
+    return true;
+}
+
+// Every animation step asks alive() first: once the screen it draws for was left, the step
+// stops the animation and resolves without writing, so nothing lands after the screen was cleared
+const ALWAYS_ALIVE = () => true;
+
+// Turns the characters after the prefix into '*', a few per step (until alive() turns false)
+function animateToMask(element, prefix = '', alive = ALWAYS_ALIVE) {
     return new Promise((resolve) => {
         const masked = element.textContent.slice(prefix.length).split('');
         let step = 0;
         const timer = setInterval(() => {
+            if (!alive()) {
+                clearInterval(timer);
+                resolve();
+                return;
+            }
             for (let i = 0; i < MASK_CHARS_PER_STEP; i++) {
                 const index = Math.floor(Math.random() * masked.length);
                 if (masked[index] !== undefined) {
@@ -257,8 +292,9 @@ function animateToMask(element, prefix = '') {
     });
 }
 
-// Replaces the mask with the real value in a random order, a few characters per step
-function revealText(element, value, prefix = '') {
+// Replaces the mask with the real value in a random order, a few characters per step (until
+// alive() turns false: animateToMask)
+function revealText(element, value, prefix = '', alive = ALWAYS_ALIVE) {
     return new Promise((resolve) => {
         const body = value.slice(prefix.length);
         const shown = MASK_CHAR.repeat(body.length).split('');
@@ -269,6 +305,11 @@ function revealText(element, value, prefix = '') {
         }
         let step = 0;
         const timer = setInterval(() => {
+            if (!alive()) {
+                clearInterval(timer);
+                resolve();
+                return;
+            }
             for (let i = 0; i < REVEAL_CHARS_PER_STEP && step < order.length; i++, step++) {
                 shown[order[step]] = body[order[step]];
             }
@@ -361,8 +402,7 @@ function showPairPanel(panelId) {
 // Returns the function that stops the scramble.
 function showInviteGenerating() {
     const codeElement = document.getElementById('inviteCode');
-    codeElement.classList.remove('masking', 'revealed');
-    codeElement.classList.add('generating');
+    setCodeState(codeElement, 'generating');
     document.getElementById('inviteBox').classList.add('show');
     document.getElementById('newInviteBtn').disabled = true;
     document.getElementById('copyInviteBtn').disabled = true;
@@ -372,27 +412,21 @@ function showInviteGenerating() {
     return startScramble(codeElement, ElyrnCrypto.INVITE_BODY_CHARS, ElyrnCrypto.INVITE_PREFIX);
 }
 
-// Masks the noise, then reveals the real code (the account number's sequence)
-async function revealInvite(code, expiresAtSeconds) {
-    const codeElement = document.getElementById('inviteCode');
-    codeElement.classList.remove('generating');
-    codeElement.classList.add('masking');
-    await animateToMask(codeElement, ElyrnCrypto.INVITE_PREFIX);
-    await revealText(codeElement, code, ElyrnCrypto.INVITE_PREFIX);
-    codeElement.classList.remove('masking');
-    codeElement.classList.add('revealed');
+// Masks the noise, then reveals the real code while alive() holds. Resolves to whether it was
+// shown; when not, nothing was drawn after alive() turned false.
+async function revealInvite(code, expiresAtSeconds, alive) {
+    if (!(await maskThenReveal(document.getElementById('inviteCode'), code, ElyrnCrypto.INVITE_PREFIX, alive))) return false;
     document.getElementById('inviteExpiry').textContent = formatExpiry(expiresAtSeconds);
     document.getElementById('inviteStatus').style.display = 'none';
     document.getElementById('inviteHint').style.display = 'block';
     document.getElementById('copyInviteBtn').disabled = false;
     document.getElementById('newInviteBtn').disabled = false;
+    return true;
 }
 
 // Puts the invite panel away and forgets the code it showed
 function resetInvitePanel() {
-    const codeElement = document.getElementById('inviteCode');
-    codeElement.classList.remove('generating', 'masking', 'revealed');
-    codeElement.textContent = '';
+    clearCodeElement(document.getElementById('inviteCode'));
     document.getElementById('invitePanel').style.display = 'none';
     document.getElementById('inviteStatus').style.display = 'none';
     document.getElementById('inviteHint').style.display = 'block';
@@ -816,8 +850,7 @@ function setRoomLimits(maxMembers, ttlChoices) {
 // While the proof of work runs the room code scrambles, as invites and account numbers do
 function showRoomGenerating() {
     const codeElement = document.getElementById('roomCode');
-    codeElement.classList.remove('masking', 'revealed');
-    codeElement.classList.add('generating');
+    setCodeState(codeElement, 'generating');
     document.getElementById('roomBox').style.display = 'flex';
     document.getElementById('roomBox').classList.add('show');
     document.getElementById('roomForm').style.display = 'none';
@@ -829,26 +862,26 @@ function showRoomGenerating() {
     return startScramble(codeElement, ElyrnRoomCrypto.CODE_CHARS - ElyrnRoomCrypto.CODE_PREFIX.length, ElyrnRoomCrypto.CODE_PREFIX);
 }
 
-async function revealRoomCode(code, expiresAtSeconds) {
-    const codeElement = document.getElementById('roomCode');
-    codeElement.classList.remove('generating');
-    codeElement.classList.add('masking');
-    await animateToMask(codeElement, ElyrnRoomCrypto.CODE_PREFIX);
-    await revealText(codeElement, code, ElyrnRoomCrypto.CODE_PREFIX);
-    codeElement.classList.remove('masking');
-    codeElement.classList.add('revealed');
+// Whether the room panel still shows the box a new code is drawn into: closing the panel, or
+// reopening it for another room (resetRoomPanel), puts the box away
+function roomCodeBoxShown() {
+    return isShown('roomPanel') && document.getElementById('roomBox').style.display !== 'none';
+}
+
+// As revealInvite: resolves to whether the code was shown
+async function revealRoomCode(code, expiresAtSeconds, alive) {
+    if (!(await maskThenReveal(document.getElementById('roomCode'), code, ElyrnRoomCrypto.CODE_PREFIX, alive))) return false;
     document.getElementById('roomExpiry').textContent = formatTimeLeft(expiresAtSeconds * SECOND_MS);
     document.getElementById('roomStatus').style.display = 'none';
     document.getElementById('roomHint').style.display = 'block';
     document.getElementById('copyRoomBtn').disabled = false;
     document.getElementById('newRoomBtn').disabled = false;
+    return true;
 }
 
 // Puts the room panel away and forgets the code it showed
 function resetRoomPanel() {
-    const codeElement = document.getElementById('roomCode');
-    codeElement.classList.remove('generating', 'masking', 'revealed');
-    codeElement.textContent = '';
+    clearCodeElement(document.getElementById('roomCode'));
     document.getElementById('roomPanel').style.display = 'none';
     document.getElementById('roomBox').style.display = 'none';
     document.getElementById('roomForm').style.display = 'flex';

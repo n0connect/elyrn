@@ -201,6 +201,8 @@ Pre-login screens:
 - Login · log in, log out · the login field and the eye animation hold nothing (open login again, hover the eye).
 - New identity (before copy) · `← back to main menu` is visible; press it, click the brand title, press Escape · the main menu.
 - New identity · press copy, press Escape while the proof of work runs · the main menu; the CPU drops (worker ended); open new identity again and press copy: it runs (not blocked by the left run).
+- New identity · press copy, press back about 700 ms later (the masking animation still running, the number not yet revealed) · the main menu; in the elements panel `#generatedAccountNumber` stays empty (text length 0) and its class list holds none of `generating`, `masking`, `revealed`, also a few seconds later.
+- New identity · press copy, press back while the number is being revealed · the same: text empty, class list clean; the clipboard unchanged.
 - New identity · press copy, leave while `POST /register` (confirm false) is in flight (throttle the network) · the main menu; no number is shown or copied afterwards; the clipboard is unchanged.
 - New identity (number shown) · press back · the main menu; the number element is empty; the clipboard no longer holds the number (if nothing else was copied since).
 - New identity (number shown) · press continue, then back while `POST /register` (confirm true) is in flight · the warning `your account may already exist and this number is the only way into it — save it now (leaving clears it from the clipboard), then press back again to leave` (`W_REGISTRATION_LEAVE_CONFIRM`); a second press leaves; the app does not open behind the menu.
@@ -222,6 +224,8 @@ Inside the app:
 - Room · a member list missing yourself or marking another card `mine` (proxy) · `E_ROSTER_UNVERIFIED`; sending is refused.
 - Room · a friend request whose text is a room code or an account number · accept gives `E_FRIEND_REQUEST_MALFORMED` and the note is dismissed.
 - Any screen · log out while an invite or a room is being created · the panels close; no code is revealed or copied afterwards.
+- App home · press `new invite`, then during the mask or reveal animation log out, or open `join` (closing the invite panel) · `#inviteCode` stays empty with none of `generating`, `masking`, `revealed`, a few seconds later too; the clipboard is unchanged; pressing `new invite` again works.
+- App home · press create room, then during the mask or reveal animation press cancel, or `new room` again (reopening the form), or log out · `#roomCode` stays empty with a clean class list, a few seconds later too; the clipboard is unchanged; after cancel or `new room` the room still appears in the list (its code panel shows the code).
 - Any screen · back, then the browser's forward (bfcache) · the session is checked again (`/me`); a revoked one goes to login with `W_SESSION_ENDED`.
 
 ### Continuous Integration

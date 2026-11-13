@@ -331,7 +331,7 @@ function startAccountNumberScramble(accountNumberElement, successElement, accoun
     if (accountNumberBox) accountNumberBox.classList.add('show');
     
     successElement.textContent = Errors.NOTICE.GENERATING_ACCOUNT_NUMBER;
-    accountNumberElement.classList.add('generating');
+    setCodeState(accountNumberElement, 'generating');
 
     stopAccountNumberScramble();
     stopScramble = startScramble(accountNumberElement, ACCOUNT_NUMBER_LEN);
@@ -376,9 +376,11 @@ async function copyAccountNumberNow() {
     }
     errorElement.textContent = '';
     const run = registrationRun;
+    // Every animation step of this run checks it: once registration is left, none writes again
+    const alive = () => run === registrationRun;
 
-    await maskAccountNumber(accountNumberElement, successElement);
-    if (run !== registrationRun) return;
+    await maskAccountNumber(accountNumberElement, successElement, alive);
+    if (!alive()) return;
 
     // First, get PoW challenge from backend
     successElement.textContent = Errors.NOTICE.PREPARING_CHALLENGE;
@@ -396,12 +398,8 @@ async function copyAccountNumberNow() {
         pendingRegistrationAccountNumber = issued.accountNumber;
         pendingRegistrationToken = issued.pendingToken;
 
-        await revealAccountNumber(accountNumberElement, successElement, issued.accountNumber);
-        if (run !== registrationRun) {
-            // The reveal's last frame wrote the number back after the screen was cleared
-            accountNumberElement.textContent = '';
-            return;
-        }
+        await revealAccountNumber(accountNumberElement, successElement, issued.accountNumber, alive);
+        if (!alive()) return;
         await copyIssuedAccountNumber(issued.accountNumber);
 
         // Enable continue button
@@ -418,17 +416,16 @@ async function copyAccountNumberNow() {
 }
 
 // Stops the scramble and turns it into asterisks while the real number is fetched
-async function maskAccountNumber(accountNumberElement, successElement) {
+async function maskAccountNumber(accountNumberElement, successElement, alive) {
     // Stop the scramble animation
     stopAccountNumberScramble();
 
     // Show masking animation
-    accountNumberElement.classList.remove('generating');
-    accountNumberElement.classList.add('masking');
+    setCodeState(accountNumberElement, 'masking');
     successElement.textContent = Errors.NOTICE.SECURING_IDENTIFIER;
 
-    // Animate to all asterisks
-    await animateToMask(accountNumberElement);
+    // Animate to all asterisks; a step after leaving writes nothing
+    await animateToMask(accountNumberElement, '', alive);
 }
 
 // Registration phase 1: pays a proof of work and has the server issue an account number and
@@ -458,6 +455,7 @@ async function requestAccountNumber(run, accountNumberElement, successElement, e
 
     // Get Account Number from backend (Phase 1 - no account creation)
     const result = await apiCall('POST', '/register', { confirm: false, pow: powSolution });
+    if (run !== registrationRun) return null;
     if (!result.ok || !result.data || !result.data.success) {
         // SECURITY: the server's own text is never shown (Errors.fromResult maps it)
         return failed(Errors.fromResult(result), result);
@@ -475,11 +473,11 @@ async function requestAccountNumber(run, accountNumberElement, successElement, e
 }
 
 // Reveal the real AccountNumber with animation, then say it is ready
-async function revealAccountNumber(accountNumberElement, successElement, accountNumber) {
-    await revealText(accountNumberElement, accountNumber);
+async function revealAccountNumber(accountNumberElement, successElement, accountNumber, alive) {
+    await revealText(accountNumberElement, accountNumber, '', alive);
+    if (!alive()) return;
 
-    accountNumberElement.classList.remove('masking');
-    accountNumberElement.classList.add('revealed');
+    setCodeState(accountNumberElement, 'revealed');
     successElement.textContent = Errors.NOTICE.ACCOUNT_NUMBER_READY;
 }
 
@@ -636,7 +634,7 @@ async function finishRegistration(run) {
     // The account number was copied for the user to save; do not leave it in the clipboard
     // (clipboard histories and cross-device sync would keep it): dropRegistrationSecrets
     dropRegistrationSecrets();
-    document.getElementById('generatedAccountNumber').textContent = '';
+    clearCodeElement(document.getElementById('generatedAccountNumber'));
     showSuccess(Errors.NOTICE.WELCOME);
 }
 
@@ -775,7 +773,7 @@ function registrationExit() {
 // Leaves registration for the main menu, with nothing of it left on the page
 function leaveRegistration() {
     const cleared = forgetRegistration();
-    document.getElementById('generatedAccountNumber').textContent = '';
+    clearCodeElement(document.getElementById('generatedAccountNumber'));
     document.getElementById('registerError').textContent = '';
     document.getElementById('registerSuccess').textContent = '';
     showMainMenu();

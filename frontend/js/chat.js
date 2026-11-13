@@ -889,6 +889,9 @@ const Chat = (() => {
         const owner = me;
         const run = { stopScramble: showInviteGenerating() };
         inviteRun = run;
+        // This request still owns the panel: the same session, still the current run, panel open.
+        // Every reveal step checks it, so the code is never drawn after any of them ends.
+        const alive = () => me === owner && inviteRun === run && isShown('invitePanel');
 
         let invite = null;
         try {
@@ -905,13 +908,14 @@ const Chat = (() => {
             return;
         }
 
-        await revealInvite(invite.code, invite.expiresAt);
-        if (me !== owner) {
-            // Logged out mid-reveal: the last animation frame wrote the code back
-            document.getElementById('inviteCode').textContent = '';
+        const shown = await revealInvite(invite.code, invite.expiresAt, alive);
+        if (me !== owner) return;  // stop() put the panel away
+        inviteRun = null;
+        if (!shown) {
+            // The panel was closed meanwhile: the code is neither shown nor copied
+            resetInvitePanel();
             return;
         }
-        inviteRun = null;
         await copyWithNotice(invite.code, Errors.NOTICE.INVITE_COPIED, true);
     }
 
@@ -1065,6 +1069,8 @@ const Chat = (() => {
         const ttlHours = Number(document.getElementById('roomTtlSelect').value);
         const run = { stopScramble: showRoomGenerating() };
         roomRun = run;
+        // As createInviteNow: the room panel still shows this request's box (not closed, not reopened)
+        const alive = () => me === owner && roomRun === run && roomCodeBoxShown();
         // The challenge's refusal, if any, and the server's clock as the last challenge gave it
         const clock = { refused: null, serverSeconds: null, at: 0 };
         const solve = async () => {
@@ -1096,13 +1102,15 @@ const Chat = (() => {
             return;
         }
         const expiresAtSeconds = ElyrnRoomCrypto.parseRoomCode(created.code).expiresHour * HOUR_MS / SECOND_MS;
-        await revealRoomCode(created.code, expiresAtSeconds);
-        if (me !== owner) {
-            document.getElementById('roomCode').textContent = '';
+        const shown = await revealRoomCode(created.code, expiresAtSeconds, alive);
+        if (me !== owner) return;  // stop() put the panel away
+        roomRun = null;
+        // The room exists either way: the list shows it, and its code panel shows the code
+        scheduleRefresh();
+        if (!shown) {
+            resetRoomPanel();
             return;
         }
-        roomRun = null;
-        scheduleRefresh();
         await copyWithNotice(created.code, Errors.NOTICE.ROOM_CODE_COPIED, true);
     }
 
