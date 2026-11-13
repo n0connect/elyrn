@@ -96,18 +96,42 @@ type clientDeadlines struct {
 // backgroundDeadlines are the full constants (BackgroundDB).
 var backgroundDeadlines = clientDeadlines{statement: statementDeadline, transaction: transactionDeadline}
 
+// requestBudget is a whole request's database budget for a positive write timeout: the write
+// timeout less writeMargin, never below requestDeadlineFloor; clamped reports a write timeout
+// too short to leave the floor.
+func requestBudget(writeTimeout time.Duration) (budget time.Duration, clamped bool) {
+	budget = writeTimeout - writeMargin
+	return max(budget, requestDeadlineFloor), budget < requestDeadlineFloor
+}
+
 // requestDeadlines derives DB's deadlines from the write timeout (0: none, the constants
 // apply); clamped reports a write timeout too short to leave requestDeadlineFloor.
 func requestDeadlines(writeTimeout time.Duration) (deadlines clientDeadlines, clamped bool) {
 	if writeTimeout <= 0 {
 		return backgroundDeadlines, false
 	}
-	budget := writeTimeout - writeMargin
-	deadlines = clientDeadlines{
-		statement:   max(min(statementDeadline, budget), requestDeadlineFloor),
-		transaction: max(min(transactionDeadline, budget), requestDeadlineFloor),
+	budget, clamped := requestBudget(writeTimeout)
+	return clientDeadlines{
+		statement:   min(statementDeadline, budget),
+		transaction: min(transactionDeadline, budget),
+	}, clamped
+}
+
+// RequestBudget is the one deadline of a whole request's database work (finding L-03): the
+// request deadline middleware starts it at the handler boundary and every statement and
+// transaction of that request runs under it (the store binds its repositories to the
+// request's context), so a handler that runs several statements still answers its 503 before
+// net/http's write deadline. It is the same budget the per-statement and per-transaction
+// defaults of DB are cut from, which stay as the backstop of work bound to no request deadline
+// (GORM applies its defaults only to a context without one). 0: no write timeout, no request
+// deadline. Read from the configuration at each call, like the write timeout itself.
+func RequestBudget() time.Duration {
+	writeTimeout := config.GetServerWriteTimeout()
+	if writeTimeout <= 0 {
+		return 0
 	}
-	return deadlines, budget < requestDeadlineFloor
+	budget, _ := requestBudget(writeTimeout)
+	return budget
 }
 
 // RetentionStatementTimeout bounds one retention statement: a bulk delete after a long pause may

@@ -15,18 +15,31 @@ import (
 
 var serverLogger = utils.NewLogger("SERVER")
 
-// public wraps an unauthenticated endpoint with the base security chain:
-// panic recovery -> headers -> CORS (exact origins) -> same-origin proof for writes -> the input
-// contract's gate (path, method, query, content type, body size, JSON shape, every field). The
-// gate runs before the session check, so a malformed request costs no database lookup.
+// guarded is the security chain every route shares: headers -> CORS (exact origins) ->
+// same-origin proof for writes -> the input contract's gate (path, method, query, content type,
+// body size, JSON shape, every field). The gate runs before the session check, so a malformed
+// request costs no database lookup.
+func guarded(h http.HandlerFunc) http.HandlerFunc {
+	return middleware.SecurityHeadersMiddleware(middleware.CORSMiddleware(
+		middleware.SameOriginWritesMiddleware(contract.Gate(h))))
+}
+
+// public wraps an unauthenticated endpoint: panic recovery -> the request's one database
+// deadline (middleware.RequestDeadline) -> the security chain (guarded).
 func public(h http.HandlerFunc) http.HandlerFunc {
-	return middleware.Recover(middleware.SecurityHeadersMiddleware(middleware.CORSMiddleware(
-		middleware.SameOriginWritesMiddleware(contract.Gate(h)))))
+	return middleware.Recover(middleware.RequestDeadline(guarded(h)))
 }
 
 // protected additionally requires a valid, non-revoked session
 func protected(h http.HandlerFunc) http.HandlerFunc {
 	return public(middleware.JWTMiddleware(h))
+}
+
+// stream is protected without the request deadline, for the event stream: it lives for minutes
+// and bounds each write itself (handlers.EventsHandler), so a request deadline would cut it. Its
+// session lookups run under the database's per-statement defaults.
+func stream(h http.HandlerFunc) http.HandlerFunc {
+	return middleware.Recover(guarded(middleware.JWTMiddleware(h)))
 }
 
 // NewMux builds the complete HTTP surface with its middleware chains.
@@ -48,7 +61,7 @@ func NewMux() *http.ServeMux {
 		{models.PathRoomsJoin, protected(handlers.JoinRoomHandler)},
 		{models.PathConversations, protected(handlers.ConversationsHandler)},
 		{models.PathConversations + "/", protected(handlers.ConversationsHandler)},
-		{models.PathEvents, protected(handlers.EventsHandler)},
+		{models.PathEvents, stream(handlers.EventsHandler)},
 		{models.PathHealth, public(handlers.HealthHandler)},
 	}
 	for _, route := range routes {

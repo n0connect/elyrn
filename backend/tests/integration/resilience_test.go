@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -101,14 +102,119 @@ func postLogin(t *testing.T, base, authKey string) (*http.Response, []byte, erro
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+	return overTheNetwork(t, http.MethodPost, base+models.PathLogin, raw, nil)
+}
+
+// overTheNetwork sends one request to a real server (a JSON body when raw is not nil, the
+// session cookie when given) and reads the whole answer.
+func overTheNetwork(t *testing.T, method, url string, raw []byte, cookie *http.Cookie) (*http.Response, []byte, error) {
+	t.Helper()
+	req, err := http.NewRequest(method, url, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if raw != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
 	client := &http.Client{Timeout: stallClientTimeout}
-	resp, err := client.Post(base+models.PathLogin, "application/json", bytes.NewReader(raw))
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	return resp, body, err
+}
+
+// slowChunkDelay is how late the slowed proxy delivers each chunk: one statement (a request
+// and an answer chunk) takes about twice this, well inside its own deadline (12 s with the
+// shipped write timeout), while the several statements of one list request together take
+// longer than the write timeout (15 s).
+const slowChunkDelay = 1500 * time.Millisecond
+
+// L-03: a request that runs several statements on a slow database, each one well inside its own
+// deadline, still answers its registered 503 before the write deadline, because the whole
+// request runs under one database deadline. With per-statement deadlines alone, the list below
+// (the session, the member, the index, memberships, sequence numbers and room details: more
+// than five statements of about 3 s each) outlived the write timeout and lost its answer.
+func TestSlowDatabase_ARequestOfSeveralStatementsStillGetsIts503(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	pair(t, alice, bob)
+	t.Setenv("SERVER_WRITE_TIMEOUT_SEC", stallWriteTimeout)
+	proxy := stallDatabase(t)
+	base := serveForReal(t, mux)
+	list := base + models.PathConversations
+
+	// Warm the pool and its prepared statements through the proxy, at full speed
+	if resp, body, err := overTheNetwork(t, http.MethodGet, list, nil, alice.cookie); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("list through the proxy before the slowdown: %v %q", err, body)
+	}
+	proxy.Slow(slowChunkDelay)
+	started := time.Now()
+	resp, body, err := overTheNetwork(t, http.MethodGet, list, nil, alice.cookie)
+	took := time.Since(started)
+	proxy.Slow(0)
+	if err != nil {
+		t.Fatalf("the slow request got no complete answer after %s (the connection was cut): %v", took, err)
+	}
+	if !testutil.IsWireAnswer(resp, body, apperr.StoreUnavailable) {
+		t.Fatalf("the slow request got %d %q after %s, want the registered E_STORE_UNAVAILABLE answer", resp.StatusCode, body, took)
+	}
+	if took >= config.GetServerWriteTimeout() {
+		t.Fatalf("the 503 took %s, not within the write timeout %s", took, config.GetServerWriteTimeout())
+	}
+	if took < database.RequestBudget() {
+		t.Fatalf("the 503 came after %s, before the request's database budget %s: something else failed", took, database.RequestBudget())
+	}
+}
+
+// The event stream has no request deadline: it outlives the request budget (and the write
+// timeout) and still delivers an event, on a real server with the production configuration.
+func TestEvents_StreamOutlivesTheRequestDeadline(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	t.Setenv("SERVER_WRITE_TIMEOUT_SEC", stallWriteTimeout)
+	base := serveForReal(t, mux)
+
+	req, err := http.NewRequest(http.MethodGet, base+models.PathEvents, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.AddCookie(alice.cookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("events connect: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("events status %d", resp.StatusCode)
+	}
+	lines := make(chan string, 16)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+		close(lines)
+	}()
+	waitFor(t, lines, "retry: 3000")
+
+	outlive := max(database.RequestBudget(), config.GetServerWriteTimeout()) + time.Second
+	select {
+	case line, open := <-lines:
+		if !open {
+			t.Fatal("the stream closed before the request deadline passed")
+		}
+		t.Fatalf("unexpected line %q before any event", line)
+	case <-time.After(outlive):
+	}
+	send(t, bob, alice, conv, 1)
+	waitFor(t, lines, "event: msg")
 }
 
 // The drill: PostgreSQL stops answering (paused) under a running server. A request stalled on

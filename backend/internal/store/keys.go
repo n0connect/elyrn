@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -39,6 +40,9 @@ type KeyRepository interface {
 	// When the last retention pass ran (chat retention's clock check), kept beside the key checks
 	RetentionMark() (time.Time, bool, error)
 	SaveRetentionMark(at time.Time) error
+
+	// WithContext is this repository bound to a request's context (its deadline)
+	WithContext(ctx context.Context) KeyRepository
 }
 
 // retentionMarkName is the key_checks row that holds the retention mark (an RFC 3339 UTC time:
@@ -52,6 +56,11 @@ type keyRepository struct {
 // NewKeyRepository creates a KeyRepository for request paths (database.DB)
 func NewKeyRepository() KeyRepository {
 	return &keyRepository{requestHandle}
+}
+
+// WithContext binds the repository to ctx (see handle)
+func (r *keyRepository) WithContext(ctx context.Context) KeyRepository {
+	return &keyRepository{r.handle.bound(ctx)}
 }
 
 // NewBackgroundKeyRepository creates a KeyRepository for background work (database.BackgroundDB)

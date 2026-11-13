@@ -47,17 +47,18 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 
 	// PHASE 1 (confirm=false) shows a fresh AccountNumber and a pending token; PHASE 2
 	// (confirm=true) redeems the token and creates the account
+	users := userRepository.WithContext(r.Context()) // the request's one database deadline
 	if req.Confirm {
-		confirmRegistration(w, req.PendingToken)
+		confirmRegistration(w, users, req.PendingToken)
 		return
 	}
-	issueAccountNumber(w)
+	issueAccountNumber(w, users)
 }
 
 // issueAccountNumber is registration phase 1: it generates an AccountNumber, keeps only what
 // phase 2 needs (derived auth key and public key) under a pending id, and answers the number
 // once with a signed pending token. No account exists yet.
-func issueAccountNumber(w http.ResponseWriter) {
+func issueAccountNumber(w http.ResponseWriter, users store.UserRepository) {
 	authLogger.Debug("Phase 1: Generating AccountNumber preview (no account creation)")
 
 	// Generate AccountNumber (256-bit CSPRNG, base64url encoded)
@@ -87,7 +88,7 @@ func issueAccountNumber(w http.ResponseWriter) {
 	}
 
 	// Check for collision - regenerate if needed (very unlikely but safe)
-	exists, err := userRepository.ExistsByAccountLookup(lookup)
+	exists, err := users.ExistsByAccountLookup(lookup)
 	if err != nil {
 		apperr.WriteError(w, "ExistsByAccountLookup", err)
 		return
@@ -132,7 +133,7 @@ func issueAccountNumber(w http.ResponseWriter) {
 
 // confirmRegistration is registration phase 2: it redeems a pending token and creates the
 // account from the identity derived in phase 1, then opens a session.
-func confirmRegistration(w http.ResponseWriter, pendingToken string) {
+func confirmRegistration(w http.ResponseWriter, users store.UserRepository, pendingToken string) {
 	authLogger.Debug("Phase 2: Confirming account creation")
 
 	// SECURITY: RegisterHandler validated a fresh, single-use phase 2 PoW: no phase 1 replay,
@@ -162,7 +163,7 @@ func confirmRegistration(w http.ResponseWriter, pendingToken string) {
 	}
 
 	// Check if account already exists (race condition or replay attack)
-	exists, err := userRepository.ExistsByAccountLookup(lookup)
+	exists, err := users.ExistsByAccountLookup(lookup)
 	if err != nil {
 		apperr.WriteError(w, "ExistsByAccountLookup", err)
 		return
@@ -182,7 +183,7 @@ func confirmRegistration(w http.ResponseWriter, pendingToken string) {
 		return
 	}
 
-	if err := userRepository.Create(user); err != nil {
+	if err := users.Create(user); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			// A concurrent confirmation of the same token created it first
 			auth.CompletePendingRegistration(pendingID)
@@ -324,7 +325,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Find user by lookup. Only "no such account" goes on to the credential check: an
 	// unreachable database answers 503 like every route (store.ErrUnavailable), because
 	// "invalid credentials" would tell the user their only key is worthless
-	user, err := userRepository.FindByAccountLookup(lookup)
+	user, err := userRepository.WithContext(r.Context()).FindByAccountLookup(lookup)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		apperr.WriteError(w, "LoginHandler: FindByAccountLookup", err)
 		return

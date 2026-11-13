@@ -37,6 +37,15 @@ func TestRequestDeadlines_FollowTheWriteTimeout(t *testing.T) {
 			t.Fatalf("write timeout %s: a request deadline exceeds its constant: %+v", c.writeTimeout, got)
 		}
 		inTime := c.writeTimeout == 0 || max(got.statement, got.transaction)+writeMargin <= c.writeTimeout
+		if c.writeTimeout > 0 {
+			// The request's one deadline bounds every statement and transaction of it, and leaves
+			// writeMargin before the write deadline whenever the per-statement ones do
+			budget, budgetClamped := requestBudget(c.writeTimeout)
+			if budget < max(got.statement, got.transaction) || budgetClamped != c.clamped ||
+				(budget+writeMargin <= c.writeTimeout) != c.answersInTime {
+				t.Fatalf("write timeout %s: request budget %s clamped=%v against %+v", c.writeTimeout, budget, budgetClamped, got)
+			}
+		}
 		if inTime != c.answersInTime {
 			t.Fatalf("write timeout %s: the 503 fits before the write deadline: %v, want %v", c.writeTimeout, inTime, c.answersInTime)
 		}

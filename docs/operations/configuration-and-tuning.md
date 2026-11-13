@@ -95,13 +95,20 @@ At startup the backend checks these keys against the database before it serves a
 counted from the end of the request's headers; an answer written later is dropped with the
 connection (behind nginx the client then sees a `502`/`503` from nginx instead of the
 backend's own). So that a request stalled on the database still gets its `503`
-(`E_STORE_UNAVAILABLE`) in time, the backend derives a request's database deadlines from it once
-at start, without any setting of their own:
+(`E_STORE_UNAVAILABLE`) in time, the backend derives a request's database deadlines from it,
+without any setting of their own:
 
 | Deadline | Rule | Default config (15 s) |
 |---|---|---|
-| One statement, including the wait for a pooled connection | min(15 s, write timeout - 3 s), at least 11 s | 12 s |
-| One transaction | min(35 s, write timeout - 3 s), at least 11 s | 12 s |
+| The whole request: every statement and transaction it runs, together, counted from the moment the request reaches its handler chain | write timeout - 3 s, at least 11 s | 12 s |
+| One statement, including the wait for a pooled connection (backstop for work bound to no request) | min(15 s, write timeout - 3 s), at least 11 s | 12 s |
+| One transaction (backstop, as above) | min(35 s, write timeout - 3 s), at least 11 s | 12 s |
+
+The request deadline is one deadline for everything a request does with the database, so a
+request that runs several statements still answers before the write deadline (a per-statement
+bound alone would let three slow statements take three times as long). A client that hangs up
+does not cancel its request's statements: only the deadline does, so a write is never abandoned
+half-way.
 
 The 3 s are what a request keeps for the work before its first statement and for writing the
 `503`. The floor of 11 s keeps the backend's deadline above PostgreSQL's own `statement_timeout`
@@ -111,7 +118,8 @@ start, because there a stalled request can still outlive the write deadline. Fro
 and 38 s (transaction) the deadlines reach their constants and stop growing. Background work
 (the startup key check, re-wrapping, retention) keeps 15 s and 35 s whatever this setting is, and
 retention's bulk deletes and the migration keep their own longer limits (1 and 5 minutes). The
-event stream is not affected: it sets its own write deadline for every event.
+event stream has no request deadline (it lives for minutes and sets its own write deadline for
+every event); its session check runs under the per-statement deadline.
 
 ---
 
@@ -317,7 +325,7 @@ Rotation replaces the master key without losing any record. The backend then re-
    Master key rotation: 1234 records re-wrapped; no record uses an old key any more, MASTER_KEY_OLD can be emptied
    ```
 
-5. **Remove the old key.** Empty `MASTER_KEY_OLD` (or drop that entry) and restart. Removing a key that records still need is refused at startup, so this step cannot lose data by mistake; the startup log also names every old key that encrypts nothing any more.
+5. **Remove the old key.** Empty `MASTER_KEY_OLD` (or drop that entry) and restart. Removing a key that records still need is refused at startup, so this step cannot lose data by mistake; the startup log also counts the old keys that encrypt nothing any more (a count only: key ids stay out of logs; `SELECT DISTINCT master_key_id FROM users` lists the ids still in use).
 
 What rotation does not change: each account's own server key (it wraps that account's conversation list and peer keys) stays the same, only its wrapping changes. Someone who already held both the old master key and a copy of the database keeps what that copy revealed; rotation protects every copy taken afterwards.
 

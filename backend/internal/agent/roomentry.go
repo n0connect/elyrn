@@ -90,9 +90,8 @@ func (a *Agent) settleLost(ctx context.Context, keys *e2e.Room, lost error) (*ro
 func (a *Agent) JoinRoom(ctx context.Context, codeText string) (*RoomJoined, error) {
 	var result *RoomJoined
 	err := a.serialized(func() error {
-		if err := a.ensureSession(ctx); err != nil {
-			return err
-		}
+		// The code is judged before anything is spent: a malformed or expired code never
+		// creates the account (two proofs of work) or opens a session
 		code, err := e2e.ParseRoomCode(strings.TrimSpace(codeText))
 		if err != nil {
 			return fail(CodeRoomCode, err)
@@ -100,6 +99,9 @@ func (a *Agent) JoinRoom(ctx context.Context, codeText string) (*RoomJoined, err
 		defer zeroBytes(code.Secret)
 		if code.ExpiresAt() <= time.Now().Unix() {
 			return fail(CodeRoomExpired, nil)
+		}
+		if err := a.ensureSession(ctx); err != nil {
+			return err
 		}
 		keys, member, vault, err := a.seat(code)
 		if err != nil {

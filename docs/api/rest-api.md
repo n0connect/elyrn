@@ -344,7 +344,7 @@ Sends an end-to-end encrypted message ciphertext.
 ```
 *Note: Returns `409 Conflict` if the client-generated message ID was already used. That makes sending safe to retry: a client whose answer was lost resends the same `id` and `ciphertext`, and a `409` means the first attempt was stored.*
 
-In a room the ciphertext must have the room format (`NADR`, docs/architecture/rooms.md), with at most one wrap per member, and its roster digest must match the current members. A member who joined or left since the sender fetched the roster makes it `412 Precondition Failed`: fetch `/members` again, re-encrypt under the same `id`, and send again.
+A conversation the caller is not a member of (or that does not exist, expired or was burned) answers `404` before the ciphertext is judged against its format, so the answer never tells a non-member whether the id is a room, or how large. In a room the ciphertext must have the room format (`NADR`, docs/architecture/rooms.md), with at most one wrap per member, and its roster digest must match the current members. A member who joined or left since the sender fetched the roster makes it `412 Precondition Failed`: fetch `/members` again, re-encrypt under the same `id`, and send again.
 
 ---
 

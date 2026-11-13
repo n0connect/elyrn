@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -59,6 +60,10 @@ type ChatRepository interface {
 	DeleteNote(conversationID, noteID uuid.UUID, recipientTag string) error
 
 	PurgeExpired(today, latest, now time.Time) (PurgeCounts, error)
+
+	// WithContext is this repository bound to a request's context (its deadline); an open
+	// transaction is rebound with it
+	WithContext(ctx context.Context) ChatRepository
 }
 
 // PurgeCounts reports what one retention pass removed.
@@ -118,6 +123,15 @@ func (r *chatRepository) db() *gorm.DB {
 		return r.tx
 	}
 	return r.handle.db()
+}
+
+// WithContext binds the repository to ctx (see handle)
+func (r *chatRepository) WithContext(ctx context.Context) ChatRepository {
+	bound := &chatRepository{handle: r.handle.bound(ctx)}
+	if r.tx != nil {
+		bound.tx = r.tx.WithContext(ctx)
+	}
+	return bound
 }
 
 func (r *chatRepository) Transaction(fn func(tx ChatRepository) error) error {

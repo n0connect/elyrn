@@ -13,6 +13,7 @@ package apperr
 import (
 	"net/http"
 
+	"elyrn/internal/database"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
 )
@@ -226,14 +227,15 @@ func Write(w http.ResponseWriter, op string, code Code) {
 }
 
 // WriteError answers err: a known sentinel gets its code; anything else is Internal, and only
-// then is the cause logged (server side only, attributed to WriteError's caller).
+// then is the cause logged (server side only, attributed to WriteError's caller; a driver
+// error reduced to its class by database.LogSafe, so no statement value or address reaches it).
 func WriteError(w http.ResponseWriter, op string, err error) {
 	if code, ok := CodeOf(err); ok {
 		Write(w, op, code)
 		return
 	}
 	e := registry[Internal]
-	logger.LogErrorFrom(1, op+" ("+e.id+")", err)
+	logger.LogErrorFrom(1, op+" ("+e.id+")", database.LogSafe(err))
 	send(w, e)
 }
 
@@ -241,7 +243,7 @@ func WriteError(w http.ResponseWriter, op string, err error) {
 // whose public answer a client contract fixes to something other than Internal.
 func WriteCause(w http.ResponseWriter, op string, code Code, err error) {
 	e := lookup(code)
-	logger.LogErrorFrom(1, op+" ("+e.id+")", err)
+	logger.LogErrorFrom(1, op+" ("+e.id+")", database.LogSafe(err))
 	send(w, e)
 }
 

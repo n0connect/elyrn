@@ -7,12 +7,17 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // StallingProxy forwards TCP connections to PostgreSQL and can stop delivering in both
 // directions without closing anything: what a paused or overloaded database looks like from
-// the server (the kernel still accepts the bytes, nobody answers them). The sessions behind it
+// the server (the kernel still accepts the bytes, nobody answers them). It can also slow down
+// instead (Slow): every chunk is delivered, each one late, what an overloaded database or a
+// congested link looks like: each statement answers within its own deadline, several together
+// do not. The sessions behind it
 // (and any lock they hold) and PostgreSQL itself stay real. Point DB_HOST/DB_PORT at
 // 127.0.0.1:Port() before a connection is opened through it.
 type StallingProxy struct {
@@ -22,6 +27,7 @@ type StallingProxy struct {
 	mu       sync.Mutex
 	stalled  bool
 	conns    []net.Conn
+	delay    atomic.Int64 // nanoseconds every chunk waits before it is delivered (Slow)
 }
 
 // StartStallingProxy forwards to target (host:port) until the test ends.
@@ -68,6 +74,9 @@ func (p *StallingProxy) pipe(src, dst net.Conn) {
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
+			if delay := time.Duration(p.delay.Load()); delay > 0 {
+				time.Sleep(delay)
+			}
 			p.gate.RLock()
 			_, werr := dst.Write(buf[:n])
 			p.gate.RUnlock()
@@ -89,6 +98,11 @@ func (p *StallingProxy) Stall() {
 	p.mu.Unlock()
 }
 
+// Slow delays every chunk from now on by delay, in both directions (0: deliver at once again).
+func (p *StallingProxy) Slow(delay time.Duration) {
+	p.delay.Store(int64(delay))
+}
+
 // Resume delivers the held bytes and everything after them.
 func (p *StallingProxy) Resume() {
 	p.mu.Lock()
@@ -101,6 +115,7 @@ func (p *StallingProxy) Resume() {
 }
 
 func (p *StallingProxy) close() {
+	p.Slow(0)
 	p.Resume()
 	_ = p.listener.Close()
 	p.mu.Lock()

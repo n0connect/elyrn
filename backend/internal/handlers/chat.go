@@ -38,25 +38,28 @@ var pageCursors = map[string]chat.CursorKind{
 
 var chatService = chat.NewService()
 
-// resolveMe turns the JWT-authenticated user into a chat member or writes the error.
-func resolveMe(w http.ResponseWriter, r *http.Request) (*chat.Member, bool) {
+// resolveMe turns the JWT-authenticated user into a chat member or writes the error. It also
+// returns the chat service bound to the request (its one database deadline, set by
+// middleware.RequestDeadline), which serves the rest of the request.
+func resolveMe(w http.ResponseWriter, r *http.Request) (*chat.Service, *chat.Member, bool) {
 	w.Header().Set(utils.HeaderCacheControl, utils.CacheNoStore)
 	userUUID, ok := auth.GetUserUUID(r.Context())
 	if !ok {
 		apperr.Write(w, "resolveMe", apperr.SessionContextMissing)
-		return nil, false
+		return nil, nil, false
 	}
-	me, err := chatService.ResolveMember(userUUID)
+	svc := chatService.WithContext(r.Context())
+	me, err := svc.ResolveMember(userUUID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// The session outlived its account: same answer as no session at all
 			apperr.Write(w, "ResolveMember", apperr.MemberNotFound)
-			return nil, false
+			return nil, nil, false
 		}
 		apperr.WriteError(w, "ResolveMember", err)
-		return nil, false
+		return nil, nil, false
 	}
-	return me, true
+	return svc, me, true
 }
 
 func allowOrTooMany(w http.ResponseWriter, bucket string, me *chat.Member) bool {
@@ -98,12 +101,12 @@ func MeHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	me, ok := resolveMe(w, r)
+	svc, me, ok := resolveMe(w, r)
 	if !ok {
 		return
 	}
 	if in.Op.ID == contract.OpMeDelete {
-		deleteAccount(w, r, me)
+		deleteAccount(w, r, svc, me)
 		return
 	}
 	utils.EncodeJSONResponse(w, models.MeResponse{
@@ -117,7 +120,7 @@ func MeHandler(w http.ResponseWriter, r *http.Request) {
 
 // deleteAccount erases the caller once the request re-proves the account number (as its auth
 // key): a live session alone, or a request riding on one, cannot erase an identity.
-func deleteAccount(w http.ResponseWriter, r *http.Request, me *chat.Member) {
+func deleteAccount(w http.ResponseWriter, r *http.Request, svc *chat.Service, me *chat.Member) {
 	if !allowOrTooMany(w, bucketDelete, me) {
 		return
 	}
@@ -125,7 +128,7 @@ func deleteAccount(w http.ResponseWriter, r *http.Request, me *chat.Member) {
 	if !bindInput(w, r, &req, "deleteAccount") {
 		return
 	}
-	streams, err := chatService.DeleteAccount(me, req.AuthKey)
+	streams, err := svc.DeleteAccount(me, req.AuthKey)
 	if err != nil {
 		apperr.WriteError(w, "DeleteAccount", err)
 		return
@@ -139,7 +142,7 @@ func deleteAccount(w http.ResponseWriter, r *http.Request, me *chat.Member) {
 // CreateInviteHandler issues a single-use pairing token (POST /api/v2/invites).
 // Each invite costs a fresh proof of work, like each registration phase.
 func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
-	me, ok := resolveMe(w, r)
+	svc, me, ok := resolveMe(w, r)
 	if !ok || !allowOrTooMany(w, bucketInvite, me) {
 		return
 	}
@@ -150,7 +153,7 @@ func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 	if !requireProofOfWork(w, req.PoW, bucketInvite) {
 		return
 	}
-	token, expiresAt, err := chatService.CreateInvite(me)
+	token, expiresAt, err := svc.CreateInvite(me)
 	if err != nil {
 		apperr.WriteError(w, "CreateInvite", err)
 		return
@@ -160,7 +163,7 @@ func CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 
 // RedeemInviteHandler pairs the caller with the invite creator (POST /api/v2/invites/redeem).
 func RedeemInviteHandler(w http.ResponseWriter, r *http.Request) {
-	me, ok := resolveMe(w, r)
+	svc, me, ok := resolveMe(w, r)
 	if !ok || !allowOrTooMany(w, bucketRedeem, me) {
 		return
 	}
@@ -168,7 +171,7 @@ func RedeemInviteHandler(w http.ResponseWriter, r *http.Request) {
 	if !bindInput(w, r, &req, "RedeemInviteHandler") {
 		return
 	}
-	conversation, creatorStream, err := chatService.RedeemInvite(me, req.Token)
+	conversation, creatorStream, err := svc.RedeemInvite(me, req.Token)
 	if err != nil {
 		apperr.WriteError(w, "RedeemInvite", err)
 		return
@@ -184,38 +187,38 @@ func ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	me, ok := resolveMe(w, r)
+	svc, me, ok := resolveMe(w, r)
 	if !ok {
 		return
 	}
 	id := in.PathID(contract.PathConversation)
 	switch in.Op.ID {
 	case contract.OpConversationList:
-		listConversations(w, me)
+		listConversations(w, svc, me)
 	case contract.OpConversationBurn:
-		burnConversation(w, me, id)
+		burnConversation(w, svc, me, id)
 	case contract.OpMessageList:
-		listMessages(w, in, me, id)
+		listMessages(w, in, svc, me, id)
 	case contract.OpMessageSend:
-		sendMessage(w, r, me, id)
+		sendMessage(w, r, svc, me, id)
 	case contract.OpReadMark:
-		markRead(w, r, me, id)
+		markRead(w, r, svc, me, id)
 	case contract.OpMemberList:
-		roomMembers(w, me, id)
+		roomMembers(w, svc, me, id)
 	case contract.OpNoteList:
-		listNotes(w, me, id)
+		listNotes(w, svc, me, id)
 	case contract.OpNoteSend:
-		sendNote(w, r, me, id)
+		sendNote(w, r, svc, me, id)
 	case contract.OpNoteDelete:
-		deleteNote(w, me, id, in.PathID(contract.PathNote))
+		deleteNote(w, svc, me, id, in.PathID(contract.PathNote))
 	default:
 		// The table routed another endpoint's operation here: a wiring fault
 		apperr.Write(w, "ConversationsHandler", apperr.InputUnchecked)
 	}
 }
 
-func listConversations(w http.ResponseWriter, me *chat.Member) {
-	conversations, err := chatService.ListConversations(me)
+func listConversations(w http.ResponseWriter, svc *chat.Service, me *chat.Member) {
+	conversations, err := svc.ListConversations(me)
 	if err != nil {
 		apperr.WriteError(w, "ListConversations", err)
 		return
@@ -223,8 +226,8 @@ func listConversations(w http.ResponseWriter, me *chat.Member) {
 	utils.EncodeJSONResponse(w, models.ConversationsResponse{Conversations: conversations}, http.StatusOK)
 }
 
-func burnConversation(w http.ResponseWriter, me *chat.Member, id uuid.UUID) {
-	peers, err := chatService.BurnConversation(me, id)
+func burnConversation(w http.ResponseWriter, svc *chat.Service, me *chat.Member, id uuid.UUID) {
+	peers, err := svc.BurnConversation(me, id)
 	if err != nil {
 		apperr.WriteError(w, "BurnConversation", err)
 		return
@@ -243,8 +246,8 @@ func pageCursor(in *contract.Input) chat.PageCursor {
 	return chat.PageCursor{Kind: chat.CursorLatest}
 }
 
-func listMessages(w http.ResponseWriter, in *contract.Input, me *chat.Member, id uuid.UUID) {
-	messages, err := chatService.ListMessages(me, id, pageCursor(in))
+func listMessages(w http.ResponseWriter, in *contract.Input, svc *chat.Service, me *chat.Member, id uuid.UUID) {
+	messages, err := svc.ListMessages(me, id, pageCursor(in))
 	if err != nil {
 		apperr.WriteError(w, "ListMessages", err)
 		return
@@ -252,7 +255,7 @@ func listMessages(w http.ResponseWriter, in *contract.Input, me *chat.Member, id
 	utils.EncodeJSONResponse(w, models.MessagesResponse{Messages: messages}, http.StatusOK)
 }
 
-func sendMessage(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.UUID) {
+func sendMessage(w http.ResponseWriter, r *http.Request, svc *chat.Service, me *chat.Member, id uuid.UUID) {
 	if !allowOrTooMany(w, bucketMsg, me) {
 		return
 	}
@@ -260,7 +263,7 @@ func sendMessage(w http.ResponseWriter, r *http.Request, me *chat.Member, id uui
 	if !bindInput(w, r, &req, "sendMessage") {
 		return
 	}
-	seq, peers, err := chatService.SendMessage(me, id, req.ID, req.Ciphertext)
+	seq, peers, err := svc.SendMessage(me, id, req.ID, req.Ciphertext)
 	if err != nil {
 		apperr.WriteError(w, "SendMessage", err)
 		return
@@ -269,12 +272,12 @@ func sendMessage(w http.ResponseWriter, r *http.Request, me *chat.Member, id uui
 	utils.EncodeJSONResponse(w, models.SendMessageResponse{Seq: seq}, http.StatusCreated)
 }
 
-func markRead(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.UUID) {
+func markRead(w http.ResponseWriter, r *http.Request, svc *chat.Service, me *chat.Member, id uuid.UUID) {
 	var req models.MarkReadRequest
 	if !bindInput(w, r, &req, "markRead") {
 		return
 	}
-	if err := chatService.MarkRead(me, id, req.Seq); err != nil {
+	if err := svc.MarkRead(me, id, req.Seq); err != nil {
 		apperr.WriteError(w, "MarkRead", err)
 		return
 	}
@@ -286,7 +289,7 @@ func markRead(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.U
 // CreateRoomHandler stores a room the client derived from a fresh room code (POST /api/v2/rooms).
 // Each room costs a proof of work, like each invite.
 func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
-	me, ok := resolveMe(w, r)
+	svc, me, ok := resolveMe(w, r)
 	if !ok || !allowOrTooMany(w, bucketRoom, me) {
 		return
 	}
@@ -302,7 +305,7 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if !requireProofOfWork(w, req.PoW, bucketRoom) {
 		return
 	}
-	conversation, err := chatService.CreateRoom(me, in)
+	conversation, err := svc.CreateRoom(me, in)
 	if err != nil {
 		apperr.WriteError(w, "CreateRoom", err)
 		return
@@ -314,7 +317,7 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 // JoinRoomHandler takes a seat in a room whose code the caller holds (POST /api/v2/rooms/join):
 // 201 for a new seat, 200 when the caller was already a member.
 func JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
-	me, ok := resolveMe(w, r)
+	svc, me, ok := resolveMe(w, r)
 	if !ok || !allowOrTooMany(w, bucketJoin, me) {
 		return
 	}
@@ -327,7 +330,7 @@ func JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		apperr.WriteError(w, "JoinRoom", err)
 		return
 	}
-	conversation, created, peers, err := chatService.JoinRoom(me, in)
+	conversation, created, peers, err := svc.JoinRoom(me, in)
 	if err != nil {
 		apperr.WriteError(w, "JoinRoom", err)
 		return
@@ -340,8 +343,8 @@ func JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	utils.EncodeJSONResponse(w, models.ConversationResponse{Conversation: *conversation}, status)
 }
 
-func roomMembers(w http.ResponseWriter, me *chat.Member, id uuid.UUID) {
-	members, err := chatService.RoomMembers(me, id)
+func roomMembers(w http.ResponseWriter, svc *chat.Service, me *chat.Member, id uuid.UUID) {
+	members, err := svc.RoomMembers(me, id)
 	if err != nil {
 		apperr.WriteError(w, "RoomMembers", err)
 		return
@@ -349,8 +352,8 @@ func roomMembers(w http.ResponseWriter, me *chat.Member, id uuid.UUID) {
 	utils.EncodeJSONResponse(w, models.RoomMembersResponse{Members: members}, http.StatusOK)
 }
 
-func listNotes(w http.ResponseWriter, me *chat.Member, id uuid.UUID) {
-	notes, err := chatService.ListNotes(me, id)
+func listNotes(w http.ResponseWriter, svc *chat.Service, me *chat.Member, id uuid.UUID) {
+	notes, err := svc.ListNotes(me, id)
 	if err != nil {
 		apperr.WriteError(w, "ListNotes", err)
 		return
@@ -358,7 +361,7 @@ func listNotes(w http.ResponseWriter, me *chat.Member, id uuid.UUID) {
 	utils.EncodeJSONResponse(w, models.NotesResponse{Notes: notes}, http.StatusOK)
 }
 
-func sendNote(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.UUID) {
+func sendNote(w http.ResponseWriter, r *http.Request, svc *chat.Service, me *chat.Member, id uuid.UUID) {
 	if !allowOrTooMany(w, bucketNote, me) {
 		return
 	}
@@ -366,7 +369,7 @@ func sendNote(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.U
 	if !bindInput(w, r, &req, "sendNote") {
 		return
 	}
-	recipient, err := chatService.SendNote(me, id, req.ID, req.To, req.Blob)
+	recipient, err := svc.SendNote(me, id, req.ID, req.To, req.Blob)
 	if err != nil {
 		apperr.WriteError(w, "SendNote", err)
 		return
@@ -375,8 +378,8 @@ func sendNote(w http.ResponseWriter, r *http.Request, me *chat.Member, id uuid.U
 	w.WriteHeader(http.StatusCreated)
 }
 
-func deleteNote(w http.ResponseWriter, me *chat.Member, id, noteID uuid.UUID) {
-	if err := chatService.DeleteNote(me, id, noteID); err != nil {
+func deleteNote(w http.ResponseWriter, svc *chat.Service, me *chat.Member, id, noteID uuid.UUID) {
+	if err := svc.DeleteNote(me, id, noteID); err != nil {
 		apperr.WriteError(w, "DeleteNote", err)
 		return
 	}

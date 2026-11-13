@@ -50,7 +50,8 @@ func InitMasterKeys() error {
 	masterKeyOnce.Do(func() {
 		masterKeys, masterKeyError = loadMasterKeys()
 		if masterKeyError == nil {
-			masterKeyLogger.Info("Master keys initialized: active_id=%s old_keys=%d", masterKeys.activeID, len(masterKeys.old))
+			// Counts only: a key id stays out of logs (D-08)
+			masterKeyLogger.Info("Master keys initialized: active=%t old_keys=%d", len(masterKeys.active) > 0, len(masterKeys.old))
 		}
 	})
 	return masterKeyError

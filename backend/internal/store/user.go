@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 
 	"elyrn/internal/models"
@@ -18,6 +19,9 @@ type UserRepository interface {
 	Create(user *models.User) error
 	ExistsByAccountLookup(lookup string) (bool, error)
 	BumpSessionEpoch(uuid string) error
+
+	// WithContext is this repository bound to a request's context (its deadline)
+	WithContext(ctx context.Context) UserRepository
 }
 
 // userRepository implements UserRepository
@@ -33,6 +37,11 @@ func NewUserRepository() UserRepository {
 // NewBackgroundUserRepository creates a UserRepository for background work (database.BackgroundDB)
 func NewBackgroundUserRepository() UserRepository {
 	return &userRepository{backgroundHandle}
+}
+
+// WithContext binds the repository to ctx (see handle)
+func (r *userRepository) WithContext(ctx context.Context) UserRepository {
+	return &userRepository{r.handle.bound(ctx)}
 }
 
 // FindByUUID finds a user by UUID

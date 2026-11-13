@@ -80,6 +80,14 @@ func NewBackgroundService() *Service {
 	return newService(store.NewBackgroundUserRepository(), store.NewBackgroundChatRepository(), store.NewBackgroundKeyRepository())
 }
 
+// WithContext is the service bound to a request's context: every statement of the request
+// runs under its one deadline (database.RequestBudget, set by middleware.RequestDeadline).
+func (s *Service) WithContext(ctx context.Context) *Service {
+	bound := *s
+	bound.users, bound.chats, bound.keys = s.users.WithContext(ctx), s.chats.WithContext(ctx), s.keys.WithContext(ctx)
+	return &bound
+}
+
 func newService(users store.UserRepository, chats store.ChatRepository, keys store.KeyRepository) *Service {
 	return &Service{users: users, chats: chats, keys: keys, logger: utils.NewLogger("CHAT_SERVICE")}
 }
@@ -783,17 +791,15 @@ func (s *Service) SendMessage(me *Member, conversationID uuid.UUID, rawID, ciphe
 	if err != nil {
 		return 0, nil, err
 	}
-	var blob *utils.RoomBlob
-	if room != nil {
-		if blob, ok = utils.ParseRoomBlob(ciphertext, utils.RoomMessageMagic, room.MaxMembers); !ok {
-			return 0, nil, ErrInvalidInput
-		}
-	} else if !utils.ValidateCiphertext(ciphertext) {
-		return 0, nil, ErrInvalidInput
-	}
 	var seq int64
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
+		// Membership first: the format a conversation expects (pair or room, and a room's size)
+		// is told only to its members, so "not yours" answers exactly like "does not exist"
 		member, err := s.requireMembership(tx, me, conversationID)
+		if err != nil {
+			return err
+		}
+		blob, err := messageBlob(room, ciphertext)
 		if err != nil {
 			return err
 		}
@@ -831,6 +837,23 @@ func (s *Service) SendMessage(me *Member, conversationID uuid.UUID, rawID, ciphe
 		return seq, nil, nil
 	}
 	return seq, streams, nil
+}
+
+// messageBlob checks a ciphertext against the format of its conversation: the room format with
+// at most one wrap per seat in a room (returned parsed, for checkRoomMessage), the one-to-one
+// format elsewhere (nil).
+func messageBlob(room *models.Room, ciphertext string) (*utils.RoomBlob, error) {
+	if room == nil {
+		if !utils.ValidateCiphertext(ciphertext) {
+			return nil, ErrInvalidInput
+		}
+		return nil, nil
+	}
+	blob, ok := utils.ParseRoomBlob(ciphertext, utils.RoomMessageMagic, room.MaxMembers)
+	if !ok {
+		return nil, ErrInvalidInput
+	}
+	return blob, nil
 }
 
 // MarkRead advances the caller's read marker (never backwards, never past the end). seq is at

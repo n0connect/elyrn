@@ -43,7 +43,7 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, ok := admitted(w, r, "EventsHandler"); !ok {
 		return
 	}
-	me, ok := resolveMe(w, r)
+	_, me, ok := resolveMe(w, r)
 	if !ok {
 		return
 	}

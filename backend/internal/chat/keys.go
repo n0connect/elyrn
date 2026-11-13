@@ -64,10 +64,16 @@ func (s *Service) VerifyKeys() error {
 			return opcode.Fail(opcode.KeyCheck, envOldKeys, "a configured master key does not open the records stored under its id")
 		}
 	}
+	unused := 0
 	for _, id := range encryption.OldMasterKeyIDs() {
 		if _, used := inUse[id]; !used {
-			s.logger.Info("Old master key %s encrypts nothing any more: remove it from MASTER_KEY_OLD", id)
+			unused++
 		}
+	}
+	if unused > 0 {
+		// A count, never the ids: key ids stay out of logs (D-08); the operator finds them with
+		// SELECT DISTINCT master_key_id FROM users
+		s.logger.Info("%d old master keys encrypt nothing any more: remove them from MASTER_KEY_OLD", unused)
 	}
 	return s.verifyPepper(inUse)
 }

@@ -74,3 +74,17 @@ type dialector struct {
 func (d dialector) Translate(err error) error {
 	return classify(d.Dialector.Translate(err))
 }
+
+// LogSafe returns err in the form a log line may carry it. A driver error's text can hold what
+// the statement was given (a lookup, an id, a key) or the database's address and user (a
+// connect error), so it is reduced to its class (failureDetail: a SQLSTATE, "timed out",
+// "connection refused", ...); every other error is returned unchanged.
+func LogSafe(err error) error {
+	var pgErr *pgconn.PgError
+	var connectErr *pgconn.ConnectError
+	var netErr net.Error
+	if errors.As(err, &pgErr) || errors.As(err, &connectErr) || errors.As(err, &netErr) || errors.Is(err, ErrUnavailable) {
+		return errors.New("database: " + failureDetail(err))
+	}
+	return err
+}
