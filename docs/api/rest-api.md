@@ -11,9 +11,72 @@ answer) is generated from the code in [input-contract.md](input-contract.md). In
 
 ---
 
+## Error Answers
+
+Every failure the backend answers comes from one registry (`backend/internal/apperr`): a stable
+code (logged by the server, never sent), a status and one sentence. Several causes deliberately
+share one public answer, so a client cannot tell them apart (an unknown room from a wrong code,
+an expired session from none). Three shapes reach the wire:
+
+| Shape | Used by | Body |
+|---|---|---|
+| text | almost every failure | `<sentence>\n`, `text/plain` |
+| JSON | login's failures and `409 Id taken` | `{"success":false,"message":"<sentence>"}` |
+| empty | `HEAD` on register, login and the PoW challenge (`405`); the health endpoint | status line only |
+
+| Status | Sentence | Codes (server side) | Meaning |
+|---|---|---|---|
+| 400 | `Invalid request` | `E_INVALID_REQUEST`, `E_INVALID_INPUT`, `E_LOGIN_BODY_INVALID` (JSON) | the input contract or the service refused the input |
+| 400 | `Pending token required` | `E_PENDING_TOKEN_REQUIRED` | registration phase 2 without its token |
+| 401 | `Unauthorized` | `E_NO_SESSION`, `E_SESSION_CONTEXT_MISSING`, `E_MEMBER_NOT_FOUND`, `E_PENDING_TOKEN_INVALID`, `E_ACCOUNT_EXISTS` | no session, a revoked or expired one, an account that is gone, a spent or expired pending token |
+| 401 | `Invalid credentials` (JSON) | `E_LOGIN_KEY_MALFORMED`, `E_LOGIN_NO_ACCOUNT`, `E_LOGIN_LEGACY_ACCOUNT`, `E_LOGIN_LOOKUP_FAILED` | login: no account for this key, whatever the reason |
+| 403 | `Forbidden` | `E_CROSS_ORIGIN`, `E_IDENTITY_UNSET`, `E_FORBIDDEN` | a cross-origin write, or an action the caller may not take |
+| 403 | `Invalid proof of work` | `E_POW_INVALID` | forged, expired, already used, below the issued difficulty, or issued before a restart |
+| 404 | `Not Found` | `E_ROUTE_NOT_FOUND` | no such route (a malformed id answers the same) |
+| 404 | `Not found` | `E_NOT_FOUND` | no such conversation, room, invite or note *for the caller*: unknown, expired, burned, a wrong room code, or one the caller is not a member of |
+| 405 | `Method not allowed` | `E_METHOD_NOT_ALLOWED`, `E_HEAD_NOT_ALLOWED` (empty) | another method |
+| 409 | `Conflict` | `E_CONFLICT` | the id holds the caller's own identical earlier attempt (stored); a room id that exists |
+| 409 | `Id taken` (JSON) | `E_ID_TAKEN` | a message or note id held by anything else: nothing stored, send again under a fresh id |
+| 409 | `Room full` | `E_ROOM_FULL` | no free seat |
+| 412 | `Proof of work required` | `E_POW_REQUIRED` | a PoW-gated request without `pow` |
+| 412 | `Roster changed` | `E_ROSTER_CHANGED` | a room message for a member list that is no longer current |
+| 415 | `Unsupported Media Type` | `E_UNSUPPORTED_MEDIA_TYPE` | a body not declared as exactly `application/json` |
+| 429 | `Too many requests` | `E_RATE_LIMITED`, `E_POW_RATE_LIMITED`, `E_SUBSCRIBER_LIMIT`, `E_LIMIT_REACHED` | any rate limit, stream share or per-account cap |
+| 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED` | a server fault |
+| 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_ARGON2_BUSY`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full; retry later |
+
+`503 E_STORE_UNAVAILABLE` never means a key, session or conversation is gone: clients retry
+instead of logging out. A request's whole database work runs under one deadline derived from
+`SERVER_WRITE_TIMEOUT_SEC` ([the rule](../operations/configuration-and-tuning.md#request-deadlines-follow-server_write_timeout_sec)),
+so a stalled request still gets its `503` before the write deadline.
+
+### Answers from nginx
+
+nginx (`nginx-site.conf`) admits only the contract's routes and methods, each with a body bound,
+and answers its own refusals without the backend, in JSON with a code
+(`backend/internal/apperr/edge.go`):
+
+```json
+{"success":false,"message":"Not Found","code":"E_EDGE_NOT_FOUND"}
+```
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `E_EDGE_NOT_FOUND` | a path outside the whitelist |
+| 405 | `E_EDGE_METHOD_NOT_ALLOWED` | a method the route does not take |
+| 413 | `E_BODY_TOO_LARGE` (`Request entity too large`) | a body over the route group's bound (1k, 2k or 8k) |
+| 429 | `E_EDGE_RATE_LIMITED` | over 20 requests per second per client (burst 40) |
+| 503 | `E_BACKEND_UNAVAILABLE` | the backend is down, failed or too slow (also for 500, 502 and 504 from upstream) |
+
+The backend's own answers pass through unchanged. `GET /internal/health` (the container
+healthcheck) is outside `/api/`; nginx never forwards it and the backend answers it to loopback
+peers only (`200` or `503 E_HEALTH_UNAVAILABLE`, no body; any other peer gets `404`).
+
+---
+
 ## Authentication & Sessions
 
-- **Session Delivery:** The only credential is an HttpOnly, `SameSite=Strict` cookie: `noaddx_session` in development, `__Host-Session` (Secure, host-only) in production. The token never appears in a response body and the `Authorization` header is ignored, so page script can never read or replay it.
+- **Session Delivery:** The only credential is an HttpOnly, `SameSite=Strict` cookie: `noaddx_session` in development (a name kept from the project's former name, so sessions survived the rename), `__Host-Session` (Secure, host-only) in production. The token never appears in a response body and the `Authorization` header is ignored, so page script can never read or replay it.
 - **Same-Origin Writes:** `POST`/`PUT`/`PATCH`/`DELETE` requests are refused with `403` unless the browser marks them `Sec-Fetch-Site: same-origin` (or, without that header, sends an `Origin` listed exactly in `ALLOWED_ORIGINS`). Clients that send neither header are not browsers and hold no ambient cookies.
 - **Sliding Expiration:** Sessions expire after `JWT_EXPIRATION_MINUTES` (default: 15m). If an active session is used past its half-life, the backend automatically issues a refreshed cookie.
 - **Saturation and outages:** phase 2 of `POST /api/v2/register` answers `503 Service Unavailable` when every Argon2id slot (`ARGON2_MAX_CONCURRENT`) stays busy for 3 seconds. `POST /api/v2/login` runs no Argon2id and is never refused for that reason; it answers `503` only while the database is unreachable: `401` always means the auth key matches no account, never that the server could not tell. Neither answer depends on whether the account exists; retry with backoff. Every other route answers a database outage (unreachable, restarting, out of connections, or a statement past its timeout) the same way, `503 Service Unavailable`, the session check included, so an outage never logs a client out.
@@ -57,7 +120,7 @@ per-boot secret, so a solution must echo all five fields exactly as issued (see
 forged, expired, already used, or issued before a server restart, and 503 while the set of used,
 unexpired challenges is full.
 
-- **Rate Limit:** 5 requests per minute per client key (an IPv4 address, an IPv6 /64, or one Tor circuit on the onion service), shared by registration and invites.
+- **Rate Limit:** 5 requests per minute per client key (an IPv4 address, an IPv6 /64, or one Tor circuit on the onion service), shared by every proof of work (registration, invites, rooms): `429` beyond it; `503` while the server tracks its maximum of clients.
 - **Response (200 OK):**
 ```json
 {
@@ -194,7 +257,7 @@ A live session is not enough: the request re-proves the account number with its 
   "auth_key": "HKDF(AccountNumber, \"noaddx/auth\") base64url"
 }
 ```
-- **Errors:** `400` malformed body or key, `403` the key belongs to another account, `415` body not declared as JSON, `429` too many attempts.
+- **Errors:** `400` malformed body or key, `403` the key belongs to another account (`E_FORBIDDEN`), `415` body not declared as JSON, `429` too many attempts.
 - **Response (200 OK):**
 ```json
 {
@@ -223,7 +286,7 @@ Creates a single-use pairing token. Every invite costs a fresh, single-use PoW c
   }
 }
 ```
-- **Errors:** `415` without a JSON body, `412` without `pow`, `403` for a solution that is unknown, expired, already used or below the issued difficulty.
+- **Errors:** `415` without a JSON body, `412` without `pow` (`E_POW_REQUIRED`), `403` for a solution that is unknown, expired, already used or below the issued difficulty (`E_POW_INVALID`).
 - **Rate Limit:** Bounded by `MAX_ACTIVE_INVITES` (default: 5 concurrent unredeemed invites). Returns `429 Too Many Requests` when limit is exceeded. Challenges themselves are limited to 5 per minute per client key, shared with registration.
 - **Response (201 Created):**
 ```json
@@ -255,7 +318,7 @@ Redeems an invite token and creates an isolated two-party conversation.
   }
 }
 ```
-*Note: Returns `404 Not Found` if token is invalid, expired, already redeemed, or created by the caller.*
+*Note: Returns `404 Not Found` (`E_NOT_FOUND`) if the token is invalid, expired, already redeemed, or created by the caller; `429` when the caller holds `MAX_CONVERSATIONS_PER_USER` conversations or redeems too often.*
 
 ---
 
@@ -303,7 +366,7 @@ Lists the caller's conversations, newest first (the server keeps no recency acro
 ---
 
 ### `GET /api/v2/conversations/{id}/messages[?after=seq | ?before=seq]`
-Fetches encrypted messages for a conversation, at most `MESSAGE_PAGE_LIMIT` (`message_page_limit` in `/me`) per page, always in ascending `seq`.
+Fetches encrypted messages for a conversation, at most `MESSAGE_PAGE_LIMIT` (`message_page_limit` in `/me`) per page, always in ascending `seq`. A conversation the caller is not in answers `404`, exactly like one that does not exist. Expired messages are never served, whether or not retention has deleted them yet.
 - With no query, returns the latest page.
 - With `?after=seq` (`seq` >= 0), returns the oldest page of messages with sequence numbers greater than `seq`: catching up.
 - With `?before=seq` (`seq` >= 1), returns the newest page of messages with sequence numbers lower than `seq`: paging back. A page shorter than the limit is the beginning.
@@ -385,7 +448,7 @@ Stores a new room. Costs a fresh proof of work, like an invite.
 }
 ```
 - `max_members` is 2 to `ROOM_MAX_MEMBERS`. `expires_at` is on the hour, at least 50 minutes and at most `ROOM_MAX_TTL_HOURS` + 1 hours (plus 10 minutes of clock skew) ahead.
-- **Errors:** `400` any field out of shape or range, `412` / `403` proof of work missing or invalid, `409` the id exists (draw a new secret), `429` too many conversations or requests.
+- **Errors:** `400` any field out of shape or range, `412` / `403` proof of work missing or invalid, `409` the id exists (`E_CONFLICT`: draw a new secret), `429` too many conversations or requests.
 - **Response (201 Created):** `{"conversation": { … "room": { … "owner": true, "members": 1 } }}`
 
 ---
@@ -404,7 +467,7 @@ Takes a seat. A wrong lookup, limits other than the room's, an unknown room and 
   "expires_at": "the code's expiry in Unix seconds, as on create"
 }
 ```
-- **Errors:** `400` out of shape (or a copy of a member's card), `404` no such room for this code, `409` the room is full, `429` too many conversations or requests.
+- **Errors:** `400` out of shape (or a copy of a member's card), `404` no such room for this code (`E_NOT_FOUND`, also for limits other than the room's), `409` the room is full (`E_ROOM_FULL`), `429` too many conversations or requests.
 - **Response:** `201 Created` (new seat) or `200 OK` (already a member), with the room as in the listing.
 
 ---

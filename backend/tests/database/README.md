@@ -1,91 +1,41 @@
-# Database Migration Tests
+# Database Tests
 
-## Amac
+These tests run the real `database.Start` (connection, schema migration, the single-instance
+lock) against a real PostgreSQL, plus the startup validation of every environment variable. The
+backend migrates its own schema at every start, under a schema version and a migration lock, so
+nothing here has to run before it.
 
-Bu testler **backend ayaga kalkmadan once** calistirilmalidir. Amaclari:
-
-1. [x] Database baglantisinin dogru calistigini dogrulamak
-2. [x] Migration'larin basariyla calistigini test etmek
-3. [x] Database schema'sinin dogru olusturuldugunu dogrulamak
-4. [x] Index'lerin ve constraint'lerin dogru ayarlandigini test etmek
-5. [x] Database'in backend baslamadan once hazir oldugunu garantilemek
-
-## Kullanim
-
-### Test Database Setup
-
-Testler otomatik olarak test database'ine baglanir. Environment variables:
+## Running
 
 ```bash
-export DB_HOST=localhost
-export DB_PORT=5432
-export DB_USER=postgres
-export DB_PASSWORD=postgres
-export DB_NAME=elyrn_test
-export DB_SSL_MODE=disable
+make test-db                                           # with tests/integration, TEST_DB_* overrides
+cd backend && go test -count=1 -tags test ./tests/database -v
+go test -tags test ./tests/database -v -run TestMigrate_  # one group
 ```
 
-### Test Calistirma
+Defaults when unset (`tests/testutil/db_helper.go`): `DB_HOST=localhost`, `DB_PORT=5432`,
+`DB_USER=postgres`, `DB_PASSWORD=postgres`, `DB_NAME=noaddx_test` (`noaddx` is the stored
+database name kept across the rename to elyrn.), `DB_SSL_MODE=disable`. Use a separate local
+PostgreSQL, never the bundled one: it holds live data and accepts TLS connections only. `make test`
+runs the same tests in Docker against a disposable tmpfs database.
 
-```bash
-# Tum migration testleri
-cd backend
-go test -tags=test ./tests/database -v
+## Tests (20, and one fuzz target)
 
-# Sadece migration testi
-go test -tags=test ./tests/database -v -run TestDatabaseMigration
+| Group | Tests |
+|---|---|
+| Schema (`migration_test.go`) | `TestDatabaseMigration`, `TestUserTableSchema`, `TestChatTableSchema` (no column that links a row to a user: no `user_uuid`, no `created_at`), `TestUserTableIndexes`, `TestDatabaseConstraints`, `TestDatabaseConnection`, `TestDatabaseMasterKey` |
+| Session bounds | `TestConnection_BoundsLockWaitsAndIdleTransactions`: `lock_timeout` 5 s, `idle_in_transaction_session_timeout` 30 s |
+| Schema version (`lifecycle_test.go`) | `TestMigrate_RefusesASchemaNewerThanThisBinary` (`E_SCHEMA_NEWER`, the stamp stays), `TestMigrate_StampsAnUnversionedDatabase`, `TestMigrate_ConcurrentStartsSerialise` |
+| Single-instance lock | `TestInstanceLock_SecondHolderIsRefused` (`E_SECOND_INSTANCE`), `TestInstanceLock_LostConnectionIsReported` (`E_INSTANCE_LOCK_LOST`), `TestInstanceLock_AnUnansweringDatabaseKeepsTheLock` |
+| Startup validation (`config_validation_test.go`) | `TestValidateStartupConfig_RejectsOutOfRangeValues`, `TestValidateStartupConfig_ProductionFloors`, `TestConnectionURL_EscapesCredentials`, `TestStartupRefusal_CodedNamedAndValueFree`, `TestStartupRefusal_ListEntriesByPosition`, `TestLogError_ReducesDriverErrorsToTheirClass` |
+| Fuzz (`fuzz_test.go`) | `FuzzValidateStartupConfig` |
 
-# Schema testleri
-go test -tags=test ./tests/database -v -run TestUserTableSchema
-go test -tags=test ./tests/database -v -run TestChatTableSchema
+## Infrastructure
 
-# Connection testi
-go test -tags=test ./tests/database -v -run TestDatabaseConnection
-```
+`tests/testutil/db.go`:
 
-### Backend Baslatmadan Once
-
-```bash
-# 1. Migration testlerini calistir
-go test -tags=test ./tests/database -v
-
-# 2. Testler basariliysa backend'i baslat
-go run ./cmd/server
-```
-
-## Test Kategorileri
-
-### 1. Migration Tests
-
-- `TestDatabaseMigration`: Migration'larin basariyla calistigini test eder
-- `TestDatabaseConnection`: Database baglantisini test eder
-- `TestDatabaseMasterKey`: Master key'in initialize edildigini test eder
-
-### 2. Schema Tests
-
-- `TestUserTableSchema`: User tablosunun dogru schema'ya sahip oldugunu test eder
-- `TestChatTableSchema`: Mesajlasma tablolarinin dogru schema'ya sahip oldugunu ve kullaniciya baglanabilecek kolon icermedigini test eder
-
-### 3. Constraint Tests
-
-- `TestUserTableIndexes`: User tablosundaki index'leri test eder
-- `TestDatabaseConstraints`: NOT NULL constraint'lerini test eder
-
-## Onemli Notlar
-
-1. **Test Database**: Testler `elyrn_test` database'ini kullanir (production database'i degil)
-2. **Migration**: `testutil.StartDatabase` (`database.Start()`) cagrildiginda migration'lar otomatik calisir; havuz test bitince kapanir
-3. **Clean State**: Her test oncesi database temizlenmez (manuel cleanup gerekebilir)
-4. **Production**: Production'da bu testler calistirilmamali
-
-## Test Infrastructure
-
-Testler `tests/testutil/db.go` icindeki utility fonksiyonlarini kullanir:
-
-- `InitializeTestDatabase()`: Gercek `database.Start()` ile baglanir, migration'lari calistirir; onceki testin havuzunu kapatir, kendi havuzunu test sonunda kapatir
-- `CleanupTestData()`: Test sonrasi tum tablolari bosaltir
-- `InitializeTestDatabase()`: Global database connection'i initialize eder
-
----
-
-**Son Guncelleme:** Ekim 2026
+- `StartDatabase` / `InitializeTestDatabase`: the real `database.Start` (migration included);
+  the previous test's pool is closed first and this test's pool when it ends, so one pool is open
+  at a time. An unreachable database fails the test; it never ends the test binary.
+- `CleanupTestData`: empties every table after a test. The database is not emptied before each
+  test.

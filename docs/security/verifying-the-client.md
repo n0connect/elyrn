@@ -45,4 +45,10 @@ identity and recorded in Sigstore's public transparency log.
 It proves what the instance served to **this** request. A targeted server could serve the
 released client to verifiers and a modified one to a chosen user. Closing that gap needs a
 client the browser does not fetch from the server each time (a packaged client or a
-verifying extension), which is on the roadmap.
+verifying extension), which this project does not have. A compromised server is outside what
+the project can change ([threat model](threat-model.md#conditions-of-the-design)); this check is
+how a user or auditor can find one out.
+
+The `frontend.sha256` committed in the repository is not the reference: the release workflow
+writes a fresh one with `make manifest` from the tagged tree and signs that. Always take the
+manifest from the release.

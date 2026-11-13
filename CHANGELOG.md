@@ -9,6 +9,37 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 - **Go 1.27.4.** Builds use Go 1.27.4 (GO-2026-6859, net/http HTTP/1 server crash in the
   MaxBytesReader header race).
+- **Existence oracle on send (N-01).** A non-member sending a well-formed message to a live room
+  got `400` where a missing id got `404`. Membership is now checked first: both answer `404`.
+  Negative-use suites generated from the route table pin it (108 refusals without a session,
+  50 byte-equal "not yours" and "never existed" answers).
+- **An account number is never sent (N-02).** The browser and the agent refused nothing that
+  looked like an account number: it could be sent as a message or pasted as an invite. Both now
+  refuse it with their own code (`E_MESSAGE_IS_ACCOUNT_NUMBER`, `E_INVITE_IS_ACCOUNT_NUMBER`,
+  `E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER`), fullwidth look-alikes included, from one shared sample
+  table; a room code in the login field says what it is.
+- **"Stored" only for one's own resend (N-03).** Any duplicate message or note id answered
+  `409 Conflict`, which clients read as "stored". `409 Conflict` now means only the caller's own
+  identical earlier attempt; any other holder of the id answers `409` JSON `Id taken`
+  (`E_ID_TAKEN`), nothing is stored, and the browser and the agent send once more under a fresh id.
+- **A join is bound to its code's limits (S-10).** The room id and lookup derive from the secret
+  alone, so a code with edited limit bytes still joined and replaced the member's vault with one
+  that never verifies (the room was hidden for good). Join now carries `max_members` and
+  `expires_at` and the server refuses other limits like a wrong code (`404`) before any seat or
+  vault changes; the browser and the agent refuse a known room pasted with other limits.
+- **Replay records survive a server-ended session (C-03).** Any `401` wiped the whole browser
+  storage, replay counters included, so a hostile server could answer `401` once and replay
+  undetected. A session the server ends now removes the identity only; the user's own logout or
+  deletion removes everything. The agent no longer drops a room's counter record because a
+  listing omitted it or the server answered `404` (A-09); only the room's own expiry or the
+  agent's own leave does.
+- **Strict session tokens (L-06).** A JWT signature re-spelled with unused bits or inserted line
+  ends still verified; only the exact three base64url segments verify now.
+- **No identifiers in logs (N-04, D-08).** Repository loggers and startup failures printed driver
+  error text (database user, name, host); every database error is now reduced to its class,
+  startup failures name the variable and never its value, panics are logged by type, the
+  peer-address scrubber catches bare and zoned IPv6 and glued IPv4, and the active master key id
+  is no longer logged.
 - **nginx mirrors the input contract.** `/api/` was one prefix proxied whole, with a 1 MiB body
   limit. nginx now admits only the contract's routes (exact paths, canonical UUIDv4 segments),
   their methods and a body bound per route group at the smallest round size above the
@@ -140,6 +171,33 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Added
 
+- **Two doors.** The main menu is the white side for people (login, new identity); `robot` is a
+  black door that judges whoever presses it in the page (pointer trail, or a SHA-256 question),
+  walks a human back and lets a robot in to the agent command. It gates nothing, measures in
+  memory only, and sends and stores nothing. Every screen before login has a way back
+  (`← back to main menu`, the brand title, Escape); leaving registration ends its proof of work
+  and asks twice once the account may exist. A favicon.
+- **Operations (D-06, D-07, D-13, D-14, D-16).** A schema version with a migration lock
+  (`E_SCHEMA_NEWER` refuses a database migrated by a newer binary); a single-instance advisory
+  lock (`E_SECOND_INSTANCE`); a loopback-only health endpoint (`/internal/health`: `SELECT 1`
+  within 3 s and retention cycling) behind the compose healthcheck; log rotation on every service
+  and a per-code log flood bound; `make certs` warns 60 days before a certificate expires;
+  `make test-restore`, a restore drill entirely inside the disposable test stack. Every startup
+  and lifecycle failure has a registered operator code (`backend/internal/apperr/opcode`) and one
+  exit path (status 78).
+- **JSON answers from nginx (D-11, C-18, L-01).** nginx no longer replaces the backend's coded
+  answers with HTML pages; its own refusals answer JSON with a registered code
+  (`E_EDGE_NOT_FOUND`, `E_EDGE_METHOD_NOT_ALLOWED`, `E_BODY_TOO_LARGE`, `E_EDGE_RATE_LIMITED`,
+  and `503 E_BACKEND_UNAVAILABLE` for a backend that is down or slow, which used to answer 502 or
+  504). The browser and the agent map them by code. Five status pages nothing pointed to are gone.
+- **Fuzz stage.** 76 Go fuzz targets (47 new on the server, plus the agent and MCP), each asserting
+  invariants, not only "no panic"; one list in CI checked by `scripts/check-fuzz-targets.py`;
+  `make fuzz` and `make fuzz-js`; seven seeded browser fuzz files whose failures carry their seed.
+- **Negative-use suites.** Generated from the route table for the server and the agent, and for
+  the browser (inputs, a hostile server, auth flows).
+- **MCP `room_read` pages back** with `before` (F-01); every tool argument is validated before
+  the agent is touched.
+
 - **Earlier messages.** Only the latest `MESSAGE_PAGE_LIMIT` messages of a conversation were
   reachable. `GET /api/v2/conversations/{id}/messages?before=seq` returns the page just below
   `seq` (never below a room member's join), `/me` reports `message_page_limit`, and the browser
@@ -204,6 +262,42 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
   never messages) and how to restore; `make backup-accounts`.
 
 ### Fixed
+
+- **Server situation handling (D-01..D-05, D-10, D-12, D-15, D-17).** Retention compares wall and
+  monotonic time and pauses on a clock jump (`E_CLOCK_JUMP`), so a jump never purges early; reads
+  never serve expired rows; an abandoned critical job exits the process (`E_JOB_ABANDONED`) so the
+  restart policy starts a fresh one; statements, waits and transactions have deadlines; a
+  database outage answers `503 E_STORE_UNAVAILABLE` on every route, the session check included;
+  deletes lock the conversation before its children, so a racing send leaves no orphan
+  ciphertext; handler panics answer `500 E_PANIC`; shutdown stops requests, then jobs, then the
+  database, and zeroizes keys last, refusing to seal afterwards (`E_SHUTTING_DOWN`); re-wrapping
+  retries until no record uses an old key (`E_REWRAP_INCOMPLETE`).
+- **One deadline per request (L-03).** A request's whole database work runs under one deadline
+  derived from `SERVER_WRITE_TIMEOUT_SEC`, so a request stalled on the database still writes its
+  `503` before the write deadline; background work keeps its own limits.
+- **A slow database no longer costs the instance lock (L-02).** The lock watcher's own deadline
+  closed the lock's session when the database paused, and the server exited with its in-memory
+  state. A database that stops answering now logs `E_INSTANCE_LOCK_UNREACHABLE` once and the
+  server keeps running; only a closed connection is `E_INSTANCE_LOCK_LOST`.
+- **Browser situation handling (C-01..C-17).** Requests time out (`E_REQUEST_TIMEOUT`); the
+  account number stays until the app opens (`E_ACCOUNT_CREATED_NOT_ENTERED`); a draft per
+  conversation; a bounded, cancellable proof of work (`E_POW_TIMEOUT`); inline login and
+  registration errors; one global error handler and a retry for failed loads; counters allocated
+  under a Web Lock with write-ahead, so two tabs never reuse one; single-flight list refresh;
+  rooms that fail verification are listed with a leave action; one busy flag per action; storage
+  failures shown; delete with a lost answer probes `/me`; a first-attempt `409` is never taken as
+  stored; clock hints; the room code cleared from the clipboard; bounded answer bodies; a
+  back-forward cache check. A left registration, invite or room panel leaves nothing behind.
+- **Agent situation handling (A-01..A-08, A-10, L-04, L-05, N-06).** One process per identity
+  (`E_AGENT_IDENTITY_IN_USE`); send and seen counters persisted write-ahead, and replays detected
+  and listed without text; an interrupted registration is finished by the next run; a failed `/me`
+  check leaves no session; `room_wait` outlives a dying stream; a lost create answer is settled;
+  shutdown waits for the call in flight; a TLS code; history pages follow the browser's ceiling
+  rule; any `5xx` is a passing failure; one canonical server origin; the join code is parsed
+  before an account is created; the cursor never runs past the room's end.
+- **Agent and browser trim message text alike (L-07).** One explicit trim set on both sides.
+- **The integration package exhausted PostgreSQL's connections (N-05).** One pool at a time, no
+  exiting path reachable from tests, and a connection guard in `TestMain`.
 
 - **"Copied" shown when the copy failed.** Without the async clipboard API (older browsers,
   insecure contexts) a failed copy was logged and then reported as a success. It now fails, and

@@ -21,29 +21,30 @@
 |                       NGINX (Reverse Proxy)                            |
 |  - Static SPA file server (/usr/share/nginx/html)                      |
 |  - Zero Telemetry: access logs disabled, error logs restricted to crit |
-|  - Strict CSP + Trusted Types policy ('elyrn-worker')                 |
+|  - Strict CSP + Trusted Types policy ('noaddx-worker')                 |
+|  - /api/ whitelist mirroring the input contract; own refusals as JSON  |
 |  - Unbuffered SSE proxy for /api/v2/events (proxy_buffering off)       |
 |  - Strips/Overrides untrusted client proxy headers                     |
 |  - Onion listener :8081: tor container only; forwards the circuit as   |
 |    the client address, so rate limits stay per circuit                 |
 +-----------------------------------+------------------------------------+
-                                    | HTTP (Loopback / Internal Network)
+                                    | HTTP on the internal `app` network
                                     v
 +------------------------------------------------------------------------+
 |                        GO BACKEND SERVER                               |
-|  - Go 1.26+, crypto engine: OpenSSL (cgo) or Go stdlib (equivalent)    |
-|  - Custom http.ServeMux with strict route & query parameter whitelist  |
-|  - Middleware: Headers -> CORS -> SameOrigin -> ContentType -> JWT     |
+|  - Go 1.27.4, crypto engine: OpenSSL (cgo) or Go stdlib (equivalent)   |
+|  - http.ServeMux; every route behind one input contract (default deny) |
+|  - Recover -> Deadline -> Headers -> CORS -> SameOrigin -> Gate -> JWT |
 |  - In-Memory Realtime Hub (SSE subscriber management & stream tags)    |
 |  - Master Key Management with dual-key rotation support                |
 |  - Background Retention Daemon (expiration purge every five minutes)   |
 +-----------------------------------+------------------------------------+
-                                    | SQL (Port 5432)
+                                    | SQL over TLS 1.3 (verify-full), internal `data` network
                                     v
 +------------------------------------------------------------------------+
 |                      POSTGRESQL 15 DATABASE                            |
 |  - Tables: users, invites, conversations, conversation_members,        |
-|            messages                                                    |
+|            messages, rooms, room_notes, key_checks                     |
 |  - Pseudonymous storage: isolated per-conversation HMAC tags           |
 |  - Coarse day-granular message retention dates (no timestamp tracking) |
 +------------------------------------------------------------------------+
@@ -53,7 +54,7 @@
 
 ## Zero-Knowledge Identity Derivation
 
-Users have **no username, no email, no phone number, and no password**. An identity is created from a single 256-bit CSPRNG `AccountNumber`.
+Users have **no username, no email, no phone number, and no password**. An identity is created from a single 256-bit CSPRNG `AccountNumber`. (`noaddx` in the labels and names on this page is the protocol and storage namespace kept from the project's former name; see [Cryptography](../security/cryptography.md).)
 
 ```text
 AccountNumber (256-bit CSPRNG, base64url, 43 chars)
@@ -116,7 +117,7 @@ Alice (Creator)                           Server                               B
 ```
 
 ### Why This Defeats Key Substitution:
-Even if a compromised server attempted a Man-In-The-Middle (MITM) attack by returning a forged public key to Bob, Bob's client immediately recomputes `SHA-256("noaddx/invite-fp" || token || returnedPub)[0:16]`. Since the forged key will produce a different fingerprint, Bob instantly rejects the connection and burns the room.
+Even if a compromised server attempted a Man-In-The-Middle (MITM) attack by returning a forged public key to Bob, Bob's client immediately recomputes `SHA-256("noaddx/invite-fp" || token || returnedPub)[0:16]`. Since the forged key will produce a different fingerprint, Bob instantly rejects the connection and burns the conversation (`E_PEER_KEY_SUBSTITUTED`).
 
 ---
 
@@ -199,7 +200,7 @@ AAD = "NADM" (4 bytes)
 ```
 
 ### Key Architectural Upgrades:
-1. **Per-Conversation Member Tags:** In `conversation_members`, `member_tag` is `HMAC(convTagKey, userUUID || convID)`. A user has completely different, unlinkable tags across their conversations.
+1. **Per-Conversation Member Tags:** In `conversation_members`, `member_tag` is an HMAC of `userUUID || convID` under the pepper subkey `noaddx/conversation-tag`. A user has completely different, unlinkable tags across their conversations.
 2. **Per-Conversation Sequence Numbers:** `messages.seq` is generated atomically via `tx.NextSeq(conversationID)`. It is **not** a global counter.
 3. **No User Timestamps:** The `users` table contains zero `created_at` or `updated_at` columns.
 4. **Day-Granular Retention (`ExpiresOn`):** Messages store `ExpiresOn` (UTC date truncated to 00:00:00). No fine-grained send timestamps are kept in the database.
@@ -210,6 +211,7 @@ AAD = "NADM" (4 bytes)
 
 Ciphertexts do not live forever. The backend launches a supervised background goroutine:
 - **Interval:** Runs immediately on startup, then every **5 minutes** (rooms expire on the hour and should not linger).
+- **Clock check:** a cycle in which the wall clock moved differently from the time that passed, or is behind the last pass (`retention-clock` in `key_checks`), deletes nothing and logs `E_CLOCK_JUMP`; reads never serve an expired message either way.
 - **Configuration:** `MESSAGE_TTL_DAYS` (default: 7 days, maximum: 365 days).
 - **Purge Operation:** Caps every stored `expires_on` at `today_utc + MESSAGE_TTL_DAYS` (so a lowered setting also shortens what is stored), then deletes all messages where `expires_on < today_utc`, all unredeemed invites and room notes where `expires_at <= now_utc`, and every room past its `expires_at` with all its members, messages and notes. An expired room already stops answering at that instant; the purge only removes its rows.
 - **Client Visibility:** `GET /api/v2/me` returns `message_ttl_days` so the client UI can inform the user of room ephemerality.
@@ -259,7 +261,7 @@ After a master key rotation a supervised goroutine (`chat.RunRewrap`) re-encrypt
 
 ## Errors
 
-Every failure the server answers is registered in `backend/internal/apperr`: a typed code with a stable `E_...` id, its HTTP status, the public sentence and the log level. Handlers and middleware answer with `apperr.Write` (a known cause) or `apperr.WriteError` (an error from a service: sentinel errors map to codes through the one table in `sentinels.go`; anything else is `E_INTERNAL`, with the cause logged server side only). Each failure is logged once, by operation name and code, never with request data. Several causes deliberately share one public answer (for example every session or account miss is `401 Unauthorized`) so a client cannot tell them apart; the registry marks each such merge. The body is the plain-text sentence `http.Error` writes, which the browser maps in `frontend/js/errors.js`; login's codes (`E_LOGIN_*`) are registered with a JSON shape instead and answer `{"success":false,"message":"<sentence>"}` exactly as login always did, and so is a send's `409 E_ID_TAKEN` (`{"success":false,"message":"Id taken"}`: the client-generated id of a message or note is held by something other than the caller's own identical earlier attempt, nothing was stored), so the browser, which reads only JSON bodies, tells it from the plain-text `409 E_CONFLICT` that confirms a stored earlier attempt. `apperr.WriteCause` answers a code and logs the error behind it, for a server fault whose public answer a client contract fixes. A handler panic is recovered by the outermost middleware (`middleware.Recover`) and answered `500 E_PANIC`, logged as the panic value's Go type (and a database error's class, `database.ErrorClass`), never its text, with the stack reduced to function names and source lines (argument words and pc offsets cut); work whose context was cancelled (the client went away, or shutdown began) answers `503 E_REQUEST_CANCELLED` at INFO, never `E_INTERNAL` (a backstop: request paths run their database work under a context detached from cancellation, `middleware.DatabaseContext`); every `LogError` line of the server reduces a driver, connection or outage error to its class (`database.LogSafe`, installed once into the logger), so no driver text (the database's user, name or host, a statement's values) reaches the log; a database outage answers `503 E_STORE_UNAVAILABLE` on every route (`store.ErrUnavailable`, classified once in `backend/internal/database/errors.go`). Failures no request answers (the server's own background work) are registered beside them in `backend/internal/apperr/opcode`, each with an `E_...` id and the sentence the operator reads in the log: `E_CLOCK_JUMP` (retention paused because the clock cannot be trusted) and `E_JOB_ABANDONED` (a background job kept panicking; the process exits so it restarts).
+Every failure the server answers is registered in `backend/internal/apperr`: a typed code with a stable `E_...` id, its HTTP status, the public sentence and the log level. Handlers and middleware answer with `apperr.Write` (a known cause) or `apperr.WriteError` (an error from a service: sentinel errors map to codes through the one table in `sentinels.go`; anything else is `E_INTERNAL`, with the cause logged server side only). Each failure is logged once, by operation name and code, never with request data. Several causes deliberately share one public answer (for example every session or account miss is `401 Unauthorized`) so a client cannot tell them apart; the registry marks each such merge. The body is the plain-text sentence `http.Error` writes, which the browser maps in `frontend/js/errors.js`; login's codes (`E_LOGIN_*`) are registered with a JSON shape instead and answer `{"success":false,"message":"<sentence>"}` exactly as login always did, and so is a send's `409 E_ID_TAKEN` (`{"success":false,"message":"Id taken"}`: the client-generated id of a message or note is held by something other than the caller's own identical earlier attempt, nothing was stored), so the browser, which reads only JSON bodies, tells it from the plain-text `409 E_CONFLICT` that confirms a stored earlier attempt. `apperr.WriteCause` answers a code and logs the error behind it, for a server fault whose public answer a client contract fixes. A handler panic is recovered by the outermost middleware (`middleware.Recover`) and answered `500 E_PANIC`, logged as the panic value's Go type (and a database error's class, `database.ErrorClass`), never its text, with the stack reduced to function names and source lines (argument words and pc offsets cut); work whose context was cancelled (the client went away, or shutdown began) answers `503 E_REQUEST_CANCELLED` at INFO, never `E_INTERNAL` (a backstop: request paths run their database work under a context detached from cancellation, `middleware.DatabaseContext`); every `LogError` line of the server reduces a driver, connection or outage error to its class (`database.LogSafe`, installed once into the logger), so no driver text (the database's user, name or host, a statement's values) reaches the log; a database outage answers `503 E_STORE_UNAVAILABLE` on every route (`store.ErrUnavailable`, classified once in `backend/internal/database/errors.go`). Failures no request answers (startup and the server's own background work) are registered beside them in `backend/internal/apperr/opcode`, each with an `E_...` id and the sentence the operator reads in the log: at startup `E_SELFTEST`, `E_CONFIG_INVALID`, `E_DB_UNREACHABLE`, `E_SECOND_INSTANCE`, `E_SCHEMA_NEWER`, `E_MIGRATE`, `E_KEY_CHECK`, `E_LISTEN` (one exit path, status 78); while running `E_CLOCK_JUMP`, `E_JOB_ABANDONED` (exit status 70), `E_INSTANCE_LOCK_LOST`, `E_INSTANCE_LOCK_UNREACHABLE`, `E_SHUTDOWN_LATE`, `E_REWRAP_INCOMPLETE` and `E_PEPPER_UNVERIFIED`. [Disaster Recovery](../operations/disaster-recovery.md) says what each one asks of the operator.
 
 In the browser every API request goes through `apiCall` (`frontend/js/utils.js`), which never leaves the page: login and registration explain a wrong number, a rate limit or a lost connection in place. A request is aborted after `REQUEST_TIMEOUT_MS` (30 s) and reported as no answer (`E_REQUEST_TIMEOUT`), so no button or queued sync waits forever; the live event stream is not an `apiCall` and is never cut by it. Anything thrown and not caught elsewhere is reported once as `E_UNEXPECTED`, logged with the error's name only. `Errors.fromResult` (`frontend/js/errors.js`) turns a failed answer into a registered browser code and never shows the server's own text: a JSON body whose `code` is one of nginx's edge codes (`backend/internal/apperr/edge.go`) maps by that code first (`E_BACKEND_UNAVAILABLE` to `E_API_UNAVAILABLE`, `E_EDGE_RATE_LIMITED` to `E_API_TOO_MANY_REQUESTS`, `E_BODY_TOO_LARGE` to `E_API_BODY_TOO_LARGE`, `E_EDGE_NOT_FOUND` and `E_EDGE_METHOD_NOT_ALLOWED` to `E_API_ROUTE_UNKNOWN`, which asks for a reload); any other code is ignored, a known message maps next, and a `text/plain` body (no data) maps by its status alone. `frontend/tests/errors.test.mjs` reads `edge.go` and fails when an edge code has no browser mapping. No API failure leads to an HTML status page; only page navigation does (404).
 
@@ -267,11 +269,12 @@ In the browser every API request goes through `apiCall` (`frontend/js/utils.js`)
 
 ## Graceful Shutdown & Memory Zeroization
 
-When the backend server receives `SIGINT` or `SIGTERM`:
+When the backend server receives `SIGINT` or `SIGTERM` (`backend/cmd/server/main.go`):
 1. **SSE Termination:** The root `context.Context` is cancelled, closing all open SSE client streams.
-2. **Graceful Drain:** HTTP server allows in-flight requests 10 seconds to finish (`srv.Shutdown`).
-3. **Background Janitors Stop:** The registration pending-store cleanup is halted.
-4. **Key Zeroization:** `encryption.ZeroizeAllKeys()` immediately wipes active and old master keys from memory using secure byte zeroization.
+2. **Graceful Drain:** in-flight requests get 10 seconds (`srv.Shutdown`); any still running are then cut off.
+3. **Background Jobs Stop:** retention, re-wrapping and the cleanup janitors get 5 seconds more (`E_SHUTDOWN_LATE` if one outlives it).
+4. **Database:** the pool and the single-instance lock are closed.
+5. **Key Zeroization:** `encryption.Close()` wipes the active and old master keys last; a request that still reaches encryption is refused (`503 E_SHUTTING_DOWN`) instead of sealing under a zeroized key. Compose waits 30 s (`stop_grace_period`) before it kills.
 
 ---
 

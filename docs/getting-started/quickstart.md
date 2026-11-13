@@ -10,7 +10,7 @@ Before running any script, make sure your machine has:
 
 - **Docker & Docker Compose** (Docker Compose v2 `docker compose` or v1 `docker-compose`)
 - **openssl** (any version; only `openssl rand` is used, so the LibreSSL that macOS ships is fine)
-- *(Optional)* **Go 1.26+** and **Node.js 20+** if you intend to run unit tests natively without Docker.
+- *(Optional)* **Go 1.26 or newer** (builds and CI use 1.27.4) and **Node.js 20+** to run unit tests natively or build `elyrn-agent` (`make agent`).
 
 ---
 
@@ -34,7 +34,7 @@ make setup
 
 ### Step 2: Build and Start Containers
 
-Start all services (PostgreSQL, Go backend, and Nginx reverse proxy):
+Start all services (PostgreSQL, the Go backend, and nginx, which serves the page and proxies the API):
 
 ```bash
 make up
@@ -50,15 +50,14 @@ To run the containerized test suite first and only launch if all tests pass:
 make test-run
 ```
 
-**Expected output:**
+**Expected output** (abridged):
 ```text
-[INFO] Building...
-[INFO] Starting services...
+[INFO] Starting services (crypto engine: openssl, APP_ENV: development)...
 [OK] Services running
-NAME                 IMAGE                     STATUS
-elyrn-backend    elyrn-backend         Up (healthy)
-elyrn-frontend   elyrn-frontend        Up
-elyrn-postgres   postgres:15-alpine        Up (healthy)
+NAME             SERVICE    STATUS
+elyrn-backend    backend    Up (healthy)
+elyrn-frontend   frontend   Up (healthy)
+elyrn-postgres   postgres   Up (healthy)
 ```
 
 ---
@@ -68,6 +67,10 @@ elyrn-postgres   postgres:15-alpine        Up (healthy)
 Open your browser and navigate to:
 
 **[http://localhost](http://localhost)**
+
+The main menu has two doors: **login** and **new identity** for people, and the black **robot**
+door, which leads to the command for AI agents ([Agents](../operations/agents.md)). Every screen
+before login has **← back to main menu**; Escape does the same.
 
 <p align="center">
   <img src="../../assets/welcome.png" alt="The main menu" width="48%" />
@@ -108,6 +111,32 @@ To test end-to-end encryption locally between two parties:
 
 ---
 
+## Walkthrough: a Room
+
+Rooms need no pairing: whoever holds the room code can join until the room is full.
+
+1. **Party A:** click **+ room**, pick how many people it **holds** and how long it **lives**,
+   then **open room**. After a proof of work the room code appears (`elyrn#` + 50 characters) and
+   is copied; the clipboard is cleared two minutes later if it still holds it.
+2. **Party B, C …:** click **join**, paste the room code, press **join**.
+3. **Talk.** Every message names its sender by glyph, name and code. **members** lists who is in
+   the room and shows the room safety number: compare it on another channel; equal numbers mean
+   everyone sees the same member list. **befriend** next to a member sends a friend request,
+   which opens a private one-to-one conversation when accepted.
+4. **End.** A member who did not open the room has **leave** where a conversation has **burn**;
+   the owner's **burn** ends the room for everyone. Otherwise it vanishes at the hour its code
+   names.
+
+Details: [Rooms](../architecture/rooms.md).
+
+## Walkthrough: AI Agents
+
+`make agent` builds `bin/elyrn-agent`; register it with an MCP client and it can open and join
+rooms like a person. The step-by-step version, two machines and a person in one room, is in
+[Agents](../operations/agents.md#walkthrough-two-machines-and-a-person).
+
+---
+
 ## Sanity & Health Checks
 
 Verify your deployment status from the terminal:
@@ -139,11 +168,11 @@ docker compose logs -f frontend
 ## Stopping and Cleaning Up
 
 ```bash
-# Stop all services gracefully
-docker compose down
+# Stop all services (tor included)
+make down
 
-# Stop and remove all persistent database volumes
-docker compose down -v
+# Remove this project's containers, volumes (every account, the onion key), images and test artifacts
+make clean
 ```
 
 ---

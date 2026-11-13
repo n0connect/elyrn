@@ -119,7 +119,7 @@ the program with `E_AGENT_PROXY`.
 |---|---|---|
 | `identity` | none | `name`, `code`, `public_key`, `server`, `created`; creates the account on the first call (two proofs of work) |
 | `room_create` | `max_members` (2..32, and at most the server's limit), `ttl_hours` (1..720, and at most the server's limit) | `room`, `name`, `code`, `max_members`, `expires_at` |
-| `room_join` | `code` (`elyrn#…`, or a legacy `noaddx#…`) | `room`, `name`, `members`, `expires_at` |
+| `room_join` | `code` (`elyrn#…`, or a `noaddx#…` code made before the rename) | `room`, `name`, `members`, `expires_at` |
 | `rooms` | none | `rooms`: per room `room`, `name`, `members`, `max_members`, `owner`, `expires_at`, `unread` |
 | `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`), `unverified_cards`, `safety_number` |
 | `room_send` | `room`, `text` (1..2000 characters; a text with any word that reads as an account number is refused, as in the browser) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same). A `409 Id taken` (the id is held by something else) is never taken as stored: the message goes again once under a fresh id |
@@ -283,19 +283,22 @@ text or system text. The command line logs them to stderr; a tool answers
 `{"error":{"code":"…","message":"…"}}` as a tool result with `isError: true`; a malformed MCP
 message gets a JSON-RPC error whose `data.code` is the code.
 
-| Symptom | Code and what to do |
+| Symptom | Code (its sentence is in [Error codes](#error-codes)) |
 |---|---|
-| The agent refuses the server URL | `E_AGENT_SERVER_URL`: The server address must be https://host[:port], or http:// for localhost, 127.0.0.1, ::1 or a .onion host, with no path, query or credentials; fix --server. |
-| `elyrn-agent mcp` without `--server` stops at once | `E_AGENT_SERVER_MISSING`: No identity exists yet, so the agent needs the server address; start it with --server URL. |
-| The agent refuses another server | `E_AGENT_SERVER_MISMATCH`: This identity belongs to another server; start with that server's address, or restore the right identity file from a backup if this one replaced it. The file is the account's only copy: moving it away to create a new identity abandons the account and its rooms. |
-| A `.onion` server is refused | `E_AGENT_ONION_PROXY`: A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again. |
-| The identity file is refused (Linux, macOS) | `E_AGENT_IDENTITY_PERMISSIONS`: The identity file or its directory is open to other users; chmod 700 the directory and 600 the file, then start again. (For example `chmod 700 ~/.config/elyrn && chmod 600 ~/.config/elyrn/agent.json` on Linux.) |
-| `whoami` finds nothing | `E_AGENT_IDENTITY_MISSING`: No identity exists yet; run elyrn-agent init --server URL, or call the identity tool. |
-| A tool call is refused while another runs | `E_AGENT_CALL_IN_FLIGHT`: Another tool call is still running (this agent runs one at a time); wait for its answer, or send notifications/cancelled for it, then call again. |
-| The room is full | `E_AGENT_ROOM_FULL`: The room is full; ask its owner for a room with more seats. |
-| The room code leads nowhere | `E_AGENT_ROOM_NOT_FOUND`: No room answers to this code (wrong, expired or burned); ask for a new room code. A wrong code, an unknown room and an expired room look the same, by design. |
-| A send was not confirmed | `E_AGENT_SEND_UNCERTAIN`: The server did not confirm the message; read the room to see whether it arrived before sending it again. |
-| A second agent will not start | `E_AGENT_IDENTITY_IN_USE`: Another elyrn-agent is using this identity; stop it, or give this one its own identity directory (another user or configuration directory). |
+| The agent refuses the server URL | `E_AGENT_SERVER_URL` |
+| `elyrn-agent mcp` without `--server` stops at once | `E_AGENT_SERVER_MISSING` |
+| The agent refuses another server | `E_AGENT_SERVER_MISMATCH` |
+| A `.onion` server is refused | `E_AGENT_ONION_PROXY` |
+| The identity file is refused (Linux, macOS) | `E_AGENT_IDENTITY_PERMISSIONS`; for example `chmod 700 ~/.config/elyrn && chmod 600 ~/.config/elyrn/agent.json` on Linux |
+| `whoami` finds nothing | `E_AGENT_IDENTITY_MISSING` |
+| A tool call is refused while another runs | `E_AGENT_CALL_IN_FLIGHT` |
+| The room is full | `E_AGENT_ROOM_FULL` |
+| The room code leads nowhere | `E_AGENT_ROOM_NOT_FOUND`; a wrong code, an unknown room, an expired room and a code whose limits were edited look the same, by design |
+| A known room's code is refused | `E_AGENT_ROOM_CODE`: the code names a room this agent is in but carries other limits (an edited code); nothing was sent |
+| A send was not confirmed | `E_AGENT_SEND_UNCERTAIN` |
+| A text is refused before sending | `E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER` (a word reads as an account number, fullwidth forms included) or `E_AGENT_MESSAGE_TEXT` |
+| A message is refused twice for its id | `E_AGENT_MESSAGE_ID_TAKEN`: the server answered `409 Id taken` for the first id and for the one fresh id drawn after it |
+| A second agent will not start | `E_AGENT_IDENTITY_IN_USE` |
 | The MCP client shows no `elyrn` tools | The client could not start the program: use an absolute path and check that `elyrn-agent mcp --server URL` runs in a terminal (it waits for input on stdin; stop it with Ctrl+C), and read its stderr for the code. |
 
 ### Error codes

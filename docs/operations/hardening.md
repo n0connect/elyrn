@@ -6,8 +6,12 @@ nginx publishes a port, on loopback. `make check-hardening` fails if the rendere
 (production and development layouts) loses any control below or gains a forbidden one.
 
 ```bash
-make check-hardening     # rendered config of both layouts, nginx's /api/ answers and log levels
+make check-hardening     # the fuzz list, the rendered config of both layouts, nginx's /api/ answers and log levels
 ```
+
+It first checks the one list of Go fuzz targets (`scripts/check-fuzz-targets.py`: every target
+listed once, sorted, and every listed one exists), then pipes `docker compose config` for each
+layout into `scripts/check-hardening.py`, which prints variable names only, never values.
 
 Besides the per-service controls below it fails when a service loses its log rotation, when the
 backend's `stop_grace_period` no longer exceeds its shutdown budget (read from
@@ -50,7 +54,7 @@ it, a runtime that routes between bridges (OrbStack does) let the host and a con
 reach the backend and PostgreSQL by IP; with it both are refused. Ranges: `EDGE_SUBNET`,
 `COMPOSE_SUBNET` (app, the range kept its name) and `DATA_SUBNET` in `.env`.
 
-An installation from before this layout had one network, `noaddx_default`; `make up` stops
+An installation from before this layout had one network, `noaddx_default` (the Compose project keeps the name `noaddx`, so its volumes and networks are `noaddx_*`); `make up` stops
 that stack once (volumes stay) and removes it, so `app` can take over its range. The fixed
 addresses `PROXY_IP` and `BACKEND_IP` are unchanged. `TOR_IP` moved to `edge`: an `.env` that
 sets `TOR_IP=172.29.73.11` must change it to `172.29.72.11` (or delete the line) before
@@ -138,7 +142,9 @@ A method outside the list answers 405, as the backend would; an unknown path 404
 the bound 413; each as JSON, `{"success":false,"message":"<sentence>","code":"E_..."}`, the same
 shape as the backend's JSON answers plus the code. The backend's gate still checks everything
 again, and its own answers reach the client unchanged. `/internal/health` lies outside `/api/`,
-so nginx never forwards it; the backend also answers it to loopback peers only.
+so nginx never forwards it; the backend also answers it to loopback peers only, with a status
+line and no body (any other peer gets `404`, like an unknown path): `200` when the database answers `SELECT 1` within 3 s and a retention cycle began
+within 15 minutes, otherwise `503` (`E_HEALTH_UNAVAILABLE` in the backend log).
 
 ## Images
 

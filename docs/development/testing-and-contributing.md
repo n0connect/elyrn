@@ -9,7 +9,7 @@ This guide covers running test suites across Go backend units, database migratio
 ```text
 +-------------------------------------------------------------+
 | 1. Frontend WebCrypto Verification                          |
-|    node --test frontend/tests/*.test.mjs                              |
+|    node --test frontend/tests/*.test.mjs                    |
 |    (Checks byte-for-byte derivation matches Go)             |
 +-------------------------------------------------------------+
 | 2. Backend Unit & Cryptographic Tests                       |
@@ -39,7 +39,7 @@ make test
 2. Builds `test.Dockerfile` for `ENGINE` (OpenSSL by default, with the equivalence suite; `ENGINE=native` for the Go engine).
 3. Executes unit and integration test packages.
 4. Shuts down and cleans up test containers.
-5. Emits output to `test-results/output.log`.
+5. Emits output to `test-results/output-<engine>.log`.
 
 ---
 
@@ -62,7 +62,7 @@ make test-db
 
 # Step 2: Full Suite with Race Condition Detector
 cd backend
-DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=elyrn_test go test -p 1 -race -tags=test ./...
+DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=noaddx_test go test -p 1 -race -tags=test ./...   # add openssl to -tags for that engine; noaddx_test: the stored name kept across the rename
 ```
 
 Every database test brings the database up through `testutil.StartDatabase`: the error-returning `database.Start` (a database that cannot be reached fails that test, it never ends the test binary), with the previous test's pool closed first and its own pool closed when it ends, so one pool is open at a time whatever the number of tests. The integration package runs between two counts of the test database's sessions (`tests/integration/connections_test.go`, from `TestMain`): sessions left open by the tests (a pool, a server, a transaction not released) fail the run, listed by `application_name` (`elyrn-backend` for the backend's own), state and the first word of their statement.
@@ -85,15 +85,28 @@ make test-all
 
 **Requirements:** Node.js 20+ (utilizes native `node:crypto` and built-in test runner, zero npm dependencies).
 
-**Tests Verified:**
+`frontend/tests/` holds 19 test files with 161 tests: nine unit files (`crypto`, `room-crypto`,
+`rooms`, `counters`, `errors`, `utils`, `validation`, `pow-worker`, `robot-door`) and the three
+negative-use files (Option E), plus seven seeded fuzz files (`*.fuzz.test.mjs`, Option D).
+`crypto.test.mjs` alone checks, among others:
 - `auth key matches Go derivation`
 - `identity public key matches Go derivation; private key is not extractable`
 - `strict base64url rejects malformed account numbers`
 - `both peers derive the same conversation key and round-trip a message`
+- `ciphertext length is one of five power-of-two buckets`
+- `opens a message encrypted by the Go implementation (interop)`
 - `AAD binding: wrong message id, sender, conversation, or tampered bytes fail`
 - `invite code carries a fingerprint the redeemer can verify`
 - `safety number and aura are symmetric and deterministic`
 - `payload limit is enforced before encryption`
+
+### Counts
+
+| Suite | Count (13 Nov 2026) | How to count |
+|---|---|---|
+| Go test functions | 330 (114 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
+| Go fuzz targets | 76 | `python3 -I scripts/check-fuzz-targets.py --list \| wc -l` |
+| Frontend tests | 161 in 19 files | `node --test frontend/tests/*.test.mjs` |
 
 ---
 
@@ -227,6 +240,21 @@ Inside the app:
 - App home · press `new invite`, then during the mask or reveal animation log out, or open `join` (closing the invite panel) · `#inviteCode` stays empty with none of `generating`, `masking`, `revealed`, a few seconds later too; the clipboard is unchanged; pressing `new invite` again works.
 - App home · press create room, then during the mask or reveal animation press cancel, or `new room` again (reopening the form), or log out · `#roomCode` stays empty with a clean class list, a few seconds later too; the clipboard is unchanged; after cancel or `new room` the room still appears in the list (its code panel shows the code).
 - Any screen · back, then the browser's forward (bfcache) · the session is checked again (`/me`); a revoked one goes to login with `W_SESSION_ENDED`.
+
+### Option F: Restore Drill
+
+```bash
+make test-restore                 # ENGINE=openssl; ENGINE=native for the other engine
+```
+
+Entirely inside the disposable test stack (`docker-compose.test.yaml`, project `noaddx-test`, its
+database on tmpfs), so no development or production volume is touched: it registers an account
+(`TestRestoreDrill` with `RESTORE_DRILL=seed`), dumps `users` and `key_checks` with the very
+command `make backup-accounts` uses, drops and recreates the test database, restores the dump with
+`psql -v ON_ERROR_STOP=1`, then starts on it (`RESTORE_DRILL=verify`: key check and migration),
+logs in with the seeded account and registers a new one (the restored `users_id_seq` must not hand
+out an existing id). The drill's keys are drawn once per run and passed to the containers by name.
+See [Disaster Recovery](../operations/disaster-recovery.md#backups-accounts-only).
 
 ### Continuous Integration
 

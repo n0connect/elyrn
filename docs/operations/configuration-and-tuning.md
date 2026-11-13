@@ -14,7 +14,7 @@ All settings can be configured via `.env` or injected directly as environment va
 |---|---|---|---|
 | `JWT_SECRET` | string | *Generated* | HMAC-SHA256 signing secret for session tokens (must be >= `JWT_SECRET_MIN_LEN`). |
 | `JWT_SECRET_MIN_LEN` | int | `32` | Minimum length for `JWT_SECRET` (32-1024; cannot be lowered below 32). |
-| `JWT_ISSUER` | string | `noaddx-backend` | `iss` claim checked on every JWT validation. |
+| `JWT_ISSUER` | string | `noaddx-backend` | `iss` claim checked on every JWT validation (the `noaddx` defaults are stored names kept across the rename to elyrn.). |
 | `JWT_AUDIENCE` | string | `noaddx-web` | `aud` claim checked on every JWT validation. |
 | `JWT_EXPIRATION_MINUTES` | int | `15` | Session lifespan (1-1440). Active sessions sliding-refresh past half-life. The token lives only in the HttpOnly cookie. |
 | `MASTER_KEY_ACTIVE` | hex/base64 | *Generated* | Active 256-bit key: exactly 32 bytes as 64 hex characters or base64. Text passphrases are rejected. |
@@ -73,7 +73,7 @@ At startup the backend checks these keys against the database before it serves a
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `ALLOWED_ORIGINS` | list | `http://localhost,http://127.0.0.1` | Exact origins (scheme, host, port) for CORS and the same-origin check on writes. No wildcard or prefix matching. |
+| `ALLOWED_ORIGINS` | list | `http://localhost,http://127.0.0.1` (`.env.example`; `http://localhost` when unset) | Exact origins (scheme, host, port) for CORS and the same-origin check on writes. No wildcard or prefix matching. |
 | `TRUSTED_PROXIES` | list | nginx (`PROXY_IP`) | IPs/CIDRs allowed to supply the client address. Empty in Docker means "nginx only". |
 | `COMPOSE_SUBNET` | CIDR | `172.29.73.0/24` | Range of the internal `app` network (nginx and the backend); change it with `PROXY_IP` and `BACKEND_IP` if it collides with another network. See [Hardening](hardening.md#networks). |
 | `EDGE_SUBNET` | CIDR | `172.29.72.0/24` | Range of the `edge` network (nginx and tor, the published port); change it with `TOR_IP`. |
@@ -88,6 +88,24 @@ At startup the backend checks these keys against the database before it serves a
 | `SEC_HEADER_COOP` / `SEC_HEADER_CORP` / `SEC_HEADER_COEP` | string | `same-origin` / `same-origin` / `require-corp` | API isolation headers; `off` disables one (refused in production). Whitelisted values only (below). |
 | `HSTS_MAX_AGE` | int | *unset* | HSTS `max-age` in seconds on HTTPS API answers in production (0-63072000; a malformed value is refused, it no longer reads as 0). |
 | `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD` | bool | `false` | `true`/`false` (`1`/`0`, `yes`/`no`); anything else is refused. |
+
+### 6. Server, Registration & Rate Limits
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `SERVER_READ_HEADER_TIMEOUT_SEC` | int | `5` | Time to read a request's headers (1-60). |
+| `SERVER_READ_TIMEOUT_SEC` | int | `15` | Time to read a whole request (1-300). |
+| `SERVER_WRITE_TIMEOUT_SEC` | int | `15` | Time to write an answer (1-300); request database deadlines follow it (below). |
+| `SERVER_IDLE_TIMEOUT_SEC` | int | `60` | Keep-alive idle time (1-600). |
+| `SERVER_MAX_HEADER_BYTES` | int | `8192` | Largest request header block (1024-1048576). |
+| `PENDING_TOKEN_TTL_SEC` | int | `300` | How long a phase-1 registration waits for its phase 2 (30-3600). |
+| `PENDING_CLEANUP_INTERVAL_SEC` | int | `60` | How often expired pending registrations are dropped (1-3600). |
+| `PENDING_ID_BYTES` | int | `16` | Random bytes in a pending-registration id (16-64). |
+| `INTERNAL_ID_LENGTH` | int | `24` | Length of the internal user id (16-24; `users.uuid` holds 24). |
+| `RATE_LIMIT_MAX_TOKENS` | int | `20` | Bucket size of the per-client and per-account rate limits (1-10000). |
+| `RATE_LIMIT_REFILL_INTERVAL_SEC` | int | `3` | One token comes back every this many seconds (1-3600). |
+| `RATE_LIMIT_CLEANUP_INTERVAL_SEC` | int | `300` | How often idle buckets are dropped (1-86400). |
+| `RATE_LIMIT_MAX_BUCKETS` | int | `10000` | Most buckets kept at once; past it the limiter fails closed (100-1000000). |
 
 #### Request deadlines follow `SERVER_WRITE_TIMEOUT_SEC`
 
@@ -196,7 +214,7 @@ backend's code runs. Every other startup failure has its own code too (`E_SELFTE
 
 ---
 
-### 6. Argon2id Key Derivation Tuning
+### 7. Argon2id Key Derivation Tuning
 
 Argon2id runs only in registration phase 2: it hashes the auth key into `account_hash`. Login does not run it (the keyed lookup proves the key), so these settings size sign-up capacity only.
 
@@ -207,7 +225,7 @@ Bounds: memory 8192-1048576 KiB (production floor 19456 KiB, the OWASP minimum),
 |---|---|---|---|---|
 | `ARGON2_MEMORY_KIB` | int | `65536` | 64 MiB (`65536`) | 32 MiB (`32768`) |
 | `ARGON2_TIME` | int | `3` | 3 iterations | 2 iterations |
-| `ARGON2_PARALLELISM` | int | `2` | 2 threads | 1 thread |
+| `ARGON2_PARALLELISM` | int | `2` (`.env.example`; `4` when unset) | 2 threads | 1 thread |
 | `ARGON2_SALT_LENGTH` | int | `16` | 16 bytes | 16 bytes |
 | `ARGON2_HASH_LENGTH` | int | `32` | 32 bytes | 32 bytes |
 | `ARGON2_MAX_CONCURRENT` | int | `4` | 4 (256 MiB peak) | 2 (64 MiB peak) |
@@ -322,9 +340,10 @@ Rotation replaces the master key without losing any record. The backend then re-
    docker compose up -d backend
    ```
 
-4. **Wait for the re-wrap to finish.** New records use `key-2026-04` at once. Existing records are opened with the key named by their stored id (nothing is ever trial-decrypted under every key) and re-encrypted under the active key in batches of 100. The log says when it is done:
+4. **Wait for the re-wrap to finish.** New records use `key-2026-04` at once. Existing records are opened with the key named by their stored id (nothing is ever trial-decrypted under every key) and re-encrypted under the active key in batches of 100. A pass interrupted by a database error, or records that do not open, leave `E_REWRAP_INCOMPLETE` in the log and the pass retries by itself with backoff. The log says when it is done:
    ```text
-   Master key rotation: 1234 records re-wrapped; no record uses an old key any more, MASTER_KEY_OLD can be emptied
+   Master key rotation: 1234 records re-wrapped
+   Master key rotation complete: no record uses an old key any more, MASTER_KEY_OLD can be emptied
    ```
 
 5. **Remove the old key.** Empty `MASTER_KEY_OLD` (or drop that entry) and restart. Removing a key that records still need is refused at startup, so this step cannot lose data by mistake; the startup log also counts the old keys that encrypt nothing any more (a count only: key ids stay out of logs; `SELECT DISTINCT master_key_id FROM users` lists the ids still in use).
@@ -339,7 +358,7 @@ The reverse proxy (`nginx-site.conf`, shared by the clearnet and onion listeners
 
 ```nginx
 # Content Security Policy (CSP)
-add_header Content-Security-Policy "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types elyrn-worker;" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; require-trusted-types-for 'script'; trusted-types noaddx-worker;" always;
 
 # Cross-Origin Isolation
 add_header Cross-Origin-Opener-Policy "same-origin" always;
@@ -348,11 +367,11 @@ add_header Cross-Origin-Resource-Policy "same-origin" always;
 ```
 
 ### Trusted Types Policy
-The application registers a single Trusted Types policy in JavaScript (`elyrn-worker`):
+The application registers a single Trusted Types policy in JavaScript (`noaddx-worker`, a name the CSP allows and kept across the rename to elyrn.):
 ```javascript
-window.trustedTypes.createPolicy('elyrn-worker', {
+window.trustedTypes.createPolicy('noaddx-worker', {
     createScriptURL: (url) => {
-        if (url !== 'js/pow-worker.js') throw new TypeError('script URL not whitelisted');
+        if (url !== POW_WORKER_PATH) throw new TypeError('script URL not whitelisted'); // 'js/pow-worker.js'
         return url;
     }
 });

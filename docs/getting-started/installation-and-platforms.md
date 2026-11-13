@@ -7,7 +7,7 @@ This guide provides deep, situation-aware setup instructions across **macOS (App
 ## Hardware & Architecture Overview
 
 `elyrn.` is engineered to be portable and lightweight:
-- **Backend:** Go 1.26+ with one of two byte-for-byte equivalent crypto engines: OpenSSL 3.5 LTS through cgo (default) or the Go standard library (`ENGINE=native`, `CGO_ENABLED=0`); the image builds a stripped, reproducible static binary and runs it as an unprivileged user.
+- **Backend:** Go (the images and CI build with Go 1.27.4; `backend/go.mod` accepts 1.26 or newer) with one of two byte-for-byte equivalent crypto engines: OpenSSL 3.5 LTS through cgo (default, linked against Debian's `libssl3t64`) or the Go standard library (`ENGINE=native`, `CGO_ENABLED=0`, a static binary); the image builds a stripped, reproducible binary and runs it as an unprivileged user (uid 10001).
 - **Frontend:** Vanilla modern JavaScript using the native W3C WebCrypto API (no webpack, no npm bundle dependencies for runtime).
 - **Docker Images:** `golang:1.27.4-trixie` (build), `debian:trixie-slim`, `postgres:15-alpine` and `nginx:1.30-alpine` have official multi-architecture support for both `linux/amd64` and `linux/arm64`.
 
@@ -22,7 +22,7 @@ This guide provides deep, situation-aware setup instructions across **macOS (App
 
 ### Prerequisites
 
-Install Docker Desktop (or OrbStack / Colima) and, for running tests natively, Go 1.26+ and Node.js 20+ (`brew install go node`). The system `openssl` is enough for `make setup`: it calls `openssl rand`, which LibreSSL implements with the platform CSPRNG, and `make certs` (the database TLS certificates) uses only `ecparam`, `req` and `x509`, which LibreSSL and OpenSSL both provide.
+Install Docker Desktop (or OrbStack / Colima) and, for running tests natively or building `elyrn-agent`, Go 1.26 or newer (1.27.4 recommended: it carries the security fixes the images use) and Node.js 20+ (`brew install go node`). The system `openssl` is enough for `make setup`: it calls `openssl rand`, which LibreSSL implements with the platform CSPRNG, and `make certs` (the database TLS certificates) uses only `ecparam`, `req` and `x509`, which LibreSSL and OpenSSL both provide.
 
 Docker builds need nothing else: the OpenSSL engine compiles inside the image against Debian's OpenSSL 3.5 LTS. To run the **OpenSSL engine natively** (`make test-unit ENGINE=openssl`), install OpenSSL >= 3.2 development files and `pkg-config` (`brew install openssl@3 pkg-config`; Debian/Ubuntu: `apt install libssl-dev pkg-config`; on Ubuntu 22.04, whose OpenSSL is 3.0, use Docker or the native engine). The build stops with a clear error on older headers, and the binary refuses to start on an older runtime library.
 
@@ -144,9 +144,9 @@ make check-hardening            # the rendered config keeps every container cont
 
 ## Memory Sizing & VPS Optimization (Argon2id)
 
-`elyrn.` uses memory-hard Argon2id key derivation on the server to protect derived auth keys:
-- **Default configuration:** `ARGON2_MEMORY_KIB=65536` (64 MiB per hash), `ARGON2_PARALLELISM=2` (or `4`).
-- **RAM Impact:** Each concurrent registration (phase 2; login runs no Argon2id) allocates approximately **64-128 MiB of RAM** during the ~200ms calculation.
+`elyrn.` runs memory-hard Argon2id on the server once per account, in registration phase 2, to hash the derived auth key (login proves the key by its keyed lookup and runs no Argon2id):
+- **Default configuration:** `ARGON2_MEMORY_KIB=65536` (64 MiB per hash), `ARGON2_PARALLELISM=2` (`.env.example`; `4` when unset), at most `ARGON2_MAX_CONCURRENT=4` at once.
+- **RAM Impact:** each concurrent registration phase 2 allocates `ARGON2_MEMORY_KIB`; the peak is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` (256 MiB with the defaults), which the backend container's 512 MiB limit (`BACKEND_MEM_LIMIT`) is sized for.
 
 ### Low-RAM Budget VPS Profile (512 MB - 1 GB RAM)
 
@@ -177,7 +177,7 @@ If you prefer running the Go server and tests natively on your host machine:
 
 ### 1. Go Toolchain
 ```bash
-# Verify Go version >= 1.26
+# Verify Go version >= 1.26 (1.27.4 recommended)
 go version
 ```
 Dependencies are managed via Go modules (`backend/go.mod`). Run:
@@ -186,11 +186,11 @@ cd backend
 go mod download
 ```
 
-### 2. Node.js (For WebCrypto Client Derivation Tests)
+### 2. Node.js (For the Frontend Tests)
 Node.js 20+ has native support for `node:crypto` with WebCrypto X25519 and `node --test`:
 ```bash
 node -v # Must be >= 20.0.0
-node --test frontend/tests/*.test.mjs
+node --test frontend/tests/*.test.mjs     # make test-crypto
 ```
 No `package.json` or `npm install` is required; it executes against Node's built-in test runner.
 

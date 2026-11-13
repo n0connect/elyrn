@@ -93,7 +93,7 @@ const cryptoKey = await window.crypto.subtle.importKey(
     ["deriveKey", "deriveBits"]
 );
 ```
-**Security Property:** `extractable: false` ensures that once imported, the browser sandbox prevents any JavaScript code (including malicious extensions or injected scripts) from exporting the raw private key bytes.
+**Security Property:** `extractable: false` means that once imported, no script on the page can export the raw private key bytes. It can still *use* the key while it runs, and the account number itself passes through the page when it is typed: a page that runs hostile code (a modified client, a malicious extension) is not protected by this. See [Verifying the Client](verifying-the-client.md).
 
 ---
 
@@ -161,7 +161,7 @@ code = "elyrn#" || base64url( S (32 random bytes) || max_members (1) || expires_
 (codes made before the rename carry "noaddx#" and are still accepted)
 
 room id  = UUIDv4 bits over HKDF(S, salt "noaddx.v1", info "noaddx/room/id",     16)
-lookup   =                  HKDF(S, salt "noaddx.v1", info "noaddx/room/lookup", 32)   → server stores HMAC(pepper, lookup)
+lookup   =                  HKDF(S, salt "noaddx.v1", info "noaddx/room/lookup", 32)   → server stores HMAC(pepper subkey "noaddx/room-lookup", lookup)
 card key =                  HKDF(S, salt "noaddx.v1", info "noaddx/room/card",   32)   → never leaves members' devices
 ```
 
@@ -211,9 +211,9 @@ To prevent registration floods and Denial-of-Service attacks against server-side
 ### Challenge Structure
 - **Challenge:** 16 random bytes (hex-encoded string, 32 chars).
 - **Salt:** the challenge's authentication tag (hex-encoded string, 32 chars), see below.
-- **Difficulty:** Target number of leading zero bits (default: `20`, clamped between `18` and `24`).
+- **Difficulty:** Target number of leading zero bits (`POW_DIFFICULTY`, default `20`; startup refuses a value outside `18`-`24`).
 - **Timestamp:** issue time, Unix seconds.
-- **TTL:** 300 seconds (5 minutes). Single-use only.
+- **TTL:** `POW_CHALLENGE_TTL_SEC`, default 300 seconds (5 minutes). Single-use only.
 
 The browser runs no challenge harder than the server's maximum (24 bits): a harder one is refused before the worker starts, and the worker refuses it too. A proof of work still running after 5 minutes (the challenge lifetime) is abandoned, and logging out or leaving registration stops it; the worker is terminated either way.
 
@@ -241,7 +241,7 @@ issued before it no longer verify (403), and the client asks for a fresh one on 
 
 ### Solution Verification
 The client increments an integer `nonce` starting at `0`:
-`hash = SHA-256(challenge || str(nonce) || salt)`
+`hash = SHA-256(challenge || str(nonce) || salt)` (the three as text: hex, decimal, hex)
 The solution is valid if and only if `hash` contains at least `Difficulty` leading zero bits.
 
 ### Two-Phase Registration Security Flow
@@ -260,16 +260,35 @@ The solution is valid if and only if `hash` contains at least `Difficulty` leadi
 
 ## Visual Identity Verification (Aura & Safety Numbers)
 
-Because users have no usernames, `elyrn.` provides two symmetric, deterministic verification mechanisms:
+Because users have no usernames, `elyrn.` shows display values derived from public keys
+(`frontend/js/crypto.js`, `frontend/js/room-crypto.js`, twin `backend/internal/e2e/display.go`):
 
-1. **Aura (`frontend/js/utils.js`):**
-   - A friendly adjective-noun combination (e.g., *"Amber Fox"*, *"Quiet Orbit"*) + a symmetric 5x5 pixel SVG glyph.
-   - Derived deterministically from `HKDF-SHA256(peerPublicKey, salt="noaddx.v1", info="noaddx/aura")`.
-2. **Safety Number:**
-   - A 12-digit number derived from sorted public keys:
-     `fingerprint = SHA-256(min(key_A, key_B) || max(key_A, key_B))`
-   - Displayed in groups of 4 (`XXXX XXXX XXXX`).
-   - Symmetrical: Both Alice and Bob see the exact same 12 digits, enabling out-of-band verbal or visual verification.
+1. **Aura:** `d = SHA-256("noaddx/aura" || public key)`.
+   - Name: adjective `d[0] mod 64` and noun `d[1] mod 64`, e.g. *silent-ember* (12 bits).
+   - Code: `hex(d[2] d[3])`, four hex digits (16 bits).
+   - Glyph: a 5x5 grid mirrored around its middle column, from the bits of `d[4..]` (15 bits).
+   - In a room the aura is that of the member's room key, so the same account has another aura in every room. Every room message shows the sender's glyph, name and code (43 bits to imitate), and two keys under one name are tagged as such.
+   - A room's own aura is the aura of `SHA-256("noaddx/room-aura" || room id)`.
+2. **Safety number (one-to-one):** `SHA-256(first key || second key)`, the two raw keys ordered by
+   their base64url text, read as six groups of five decimal digits (each group: five digest bytes
+   as a big-endian number, mod 100000). Both sides see the same 30 digits; compare them on another
+   channel, then **mark as verified**.
+3. **Room safety number:** the same six groups over `SHA-256("noaddx/room/safety/v1" || every
+   member key, sorted by bytes)`. Equal digits mean equal member lists.
+
+---
+
+## What the Design Does Not Provide
+
+- **No forward secrecy, by design.** Every key derives again from the account number (identity,
+  conversation keys, room member keys) or from a room code (room id, lookup, card key), so any
+  device can recreate an identity from the number alone. Room messages use a fresh message key and
+  a fresh ephemeral key each, but the wrap also needs the recipient's static member key, which the
+  account number recreates. Whoever holds an account number opens every message for that account
+  that is still stored or was recorded. A ratchet would need a kept, underivable secret, per-device
+  state and uploaded keys; the reasoning is in the [threat model](threat-model.md#conditions-of-the-design).
+- **No protection against a client that is not genuine.** A server that serves modified code can
+  read the account number as it is typed ([Verifying the Client](verifying-the-client.md)).
 
 ---
 

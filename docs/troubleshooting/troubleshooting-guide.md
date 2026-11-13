@@ -13,12 +13,12 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | `TypeError: Cannot read properties of undefined (reading 'subtle')` | Accessing via non-secure HTTP on IP address (e.g. `192.168.x.x`). | Use `http://localhost` or configure HTTPS/TLS. |
 | `bash: \r: invalid command` | Git on Windows converted script line endings to CRLF. | `dos2unix Makefile` |
 | `bind: address already in use (port 80 or 5432)` | Port occupied by another local service (Apache, local Postgres). | `sudo lsof -i :80` or remap ports in `docker-compose.yaml`. |
-| `failed to connect to host=localhost:5432` inside container | Container tries connecting to itself instead of Postgres service. | Set `DOCKER_DB_HOST=postgres` in `.env`. |
+| Backend log: `E_DB_UNREACHABLE ... [connection refused]` | The backend cannot reach PostgreSQL (not running, or `DOCKER_DB_HOST` names another host). | `docker compose ps`; keep `DOCKER_DB_HOST=postgres` in `.env` (section 5). |
 | Backend container exits with code `137` | Linux Out-Of-Memory (OOM) Killer killed backend during Argon2id. | Reduce `ARGON2_MEMORY_KIB=32768` and enable host swap. |
 | Session lost immediately upon browser reload | Private/Incognito mode blocked IndexedDB storage. | Normal window or save AccountNumber to log in again. |
-| Backend restarts in a loop with `Key check failed` | `.env` does not belong to this database (regenerated, or an old master key removed too early). | Restore the original `.env`; see section 9. |
+| Backend restarts in a loop with `E_KEY_CHECK` | `.env` does not belong to this database (regenerated, or an old master key removed too early). | Restore the original `.env`; see section 9. |
 | `bind source path does not exist: .../certs/postgres` (or `certs/ca`) | The stack was started without `make certs` (plain `docker compose up`). | `make certs`, or start with `make up`, which runs it. |
-| Backend log: `x509: certificate signed by unknown authority` or `certificate is not valid for any names` | `certs/` was replaced but a container still holds the old material, or `DOCKER_DB_HOST` names a host the certificate does not list. | `make up` (recreates what must reload); keep `DOCKER_DB_HOST=postgres`. |
+| Backend log: `E_DB_UNREACHABLE ... [TLS: the database certificate does not verify against PGSSLROOTCERT; ...]` (or `has expired`) | `certs/` was replaced but a container still holds the old material, a certificate expired, or `DOCKER_DB_HOST` names a host the certificate does not list. | `make up` (renews and recreates what must reload); keep `DOCKER_DB_HOST=postgres`. |
 | `pg_hba.conf rejects connection ... no encryption` | A client connected to PostgreSQL over TCP without TLS; the bundled database refuses that. | Connect with TLS: `sslmode=verify-full sslrootcert=certs/ca/ca.crt` ([Database TLS](../operations/configuration-and-tuning.md#database-tls-make-certs)). |
 | `make onion` stops with `requires APP_ENV=production` | The onion service publishes the instance; development mode is refused. | Set `APP_ENV=production` in `.env` ([Production Mode](../operations/configuration-and-tuning.md#production-mode)). |
 | `pool overlaps` after adding `BACKEND_IP` or changing `COMPOSE_SUBNET` | `PROXY_IP` and `BACKEND_IP` must lie inside `COMPOSE_SUBNET`, `TOR_IP` inside `EDGE_SUBNET`. | Move each range with its addresses in `.env`. |
@@ -49,7 +49,7 @@ Rate limits are keyed by the client address. nginx reaches the backend from a fi
 ## 2. WebCrypto "crypto.subtle is undefined" (Secure Context)
 
 ### Symptom
-Clicking **"Create Identity"** or **"Login"** displays no reaction or logs a JavaScript error in the browser developer console:
+The main menu shows *"this browser cannot run elyrn. securely (needs https and WebCrypto X25519) — update your browser"*, or **new identity** / **login** does nothing and the developer console shows:
 ```text
 TypeError: Cannot read properties of undefined (reading 'subtle')
 ```
@@ -125,10 +125,11 @@ Another web server (Nginx, Apache, IIS) or database server (local PostgreSQL) is
 ## 5. Docker Backend Database Connection Failure
 
 ### Symptom
-The `elyrn-backend` container restarts repeatedly. Logs show:
+The `elyrn-backend` container restarts repeatedly. Its log shows one coded line (the driver's own text, which names the user, database and host, never reaches the log):
 ```text
-failed to connect to `host=localhost user=postgres database=elyrn`: dial tcp 127.0.0.1:5432: connect: connection refused
+[STARTUP] E_DB_UNREACHABLE: the database did not accept a connection within the startup wait; ... [connection refused]
 ```
+Other details in the same place: `the database host name does not resolve`, `timed out`, `SQLSTATE 28P01` (wrong password), `SQLSTATE 3D000` (no such database), or a `TLS: ...` sentence (see the checklist above).
 
 ### Cause
 In Docker Compose networking, `localhost` inside the `backend` container refers to the container itself, not the `postgres` container.
@@ -170,7 +171,7 @@ sudo swapon /swapfile
 
 ---
 
-## 7. Reloading Browser Causes "Session Ended - Log In Again"
+## 7. Reloading the Browser Says "session ended — log in again"
 
 ### Symptom
 After reloading or opening a new tab, the user is unexpectedly returned to the Login screen.
@@ -194,20 +195,21 @@ When storage fails, the page says so once: *"this browser is not keeping anythin
 |---|---|---|
 | `make onion-address` says *Not published yet* | tor is still bootstrapping into the Tor network (about a minute on first start). | Wait, then retry; `docker logs elyrn-tor` must show `Bootstrapped 100%`. |
 | Tor Browser shows the page, but **new identity** / **login** does nothing | JavaScript is off ("Safest" security level) or Tor Browser is older than 15 (no X25519 in WebCrypto). | Security level **Standard**; update Tor Browser. |
-| `nginx: [emerg] invalid parameter "${TOR_IP}"` | The frontend image was started without `TOR_IP` (outside compose). | Set `TOR_IP` (compose defaults it to `172.29.73.11`); nginx refuses to start rather than open the onion port to anyone. |
+| `nginx: [emerg] invalid parameter "${TOR_IP}"` | The frontend image was started without `TOR_IP` (outside compose). | Set `TOR_IP` (compose defaults it to `172.29.72.11`); nginx refuses to start rather than open the onion port to anyone. |
 | Every onion request answers `403` | The connection does not come from the tor container: `TOR_IP` differs from the tor container's address. | Keep `TOR_IP` and the tor service's `ipv4_address` equal (both come from `.env`). |
 
 ---
 
-## 9. `Key check failed` at Startup
+## 9. `E_KEY_CHECK` at Startup
 
 ### Symptom
-The backend never becomes ready and restarts in a loop. Its log names the problem:
+The backend never becomes ready and restarts in a loop. Its log names the variable to restore (never a key or a key id):
 ```text
-Key check failed: records are encrypted under master key "key-2026-01", which is not configured: restore it as MASTER_KEY_ACTIVE or in MASTER_KEY_OLD
-Key check failed: the key configured as master key "key-2026-01" does not open the records stored under that id
-Key check failed: ACCOUNT_LOOKUP_PEPPER is not the pepper this database was created with: restore the original (it can never change, every account is keyed by it)
+[STARTUP] E_KEY_CHECK: the keys in .env do not open this database ... [variable MASTER_KEY_OLD] [records are encrypted under a master key id that is not configured: restore that key as MASTER_KEY_ACTIVE or in MASTER_KEY_OLD (the ids in use: SELECT DISTINCT master_key_id FROM users)]
+[STARTUP] E_KEY_CHECK: the keys in .env do not open this database ... [variable MASTER_KEY_OLD] [a configured master key does not open the records stored under its id]
+[STARTUP] E_KEY_CHECK: the keys in .env do not open this database ... [variable ACCOUNT_LOOKUP_PEPPER] [is not the pepper this database was created with: restore the original (it can never change, every account is keyed by it)]
 ```
+Every other refused start has its own code too (`E_CONFIG_INVALID`, `E_SECOND_INSTANCE`, `E_SCHEMA_NEWER`, ...); [Disaster Recovery](../operations/disaster-recovery.md#startup-refusals) lists them.
 
 ### Cause
 The `.env` does not belong to the database in `postgres_data`: it was regenerated (`rm .env && make setup`), copied from another instance, or an old master key was dropped from `MASTER_KEY_OLD` while records still use it. Starting anyway would answer every user with errors, so the backend refuses.
@@ -239,6 +241,31 @@ Someone joined or left between fetching the member list and sending (`412`). The
 
 ### After an upgrade the page asks for the account number again
 Sessions saved before rooms existed do not hold the rooms key; logging in once more derives and keeps it.
+
+---
+
+## 11. Sign-in, Sending and Outages
+
+Every sentence the browser shows comes from one registry, `frontend/js/errors.js`; the server's
+own text is never shown.
+
+| The page says | What happened | What to do |
+|---|---|---|
+| *"that is an invite or a room code — log in first, then use join"* | An `elyrn:` invite or `elyrn#` room code was pasted into the login field. | Log in with the account number, then paste the code under **join**. |
+| *"that looks like an account number — never send it. nothing was sent"* | The message (or one word of it, fullwidth look-alikes included) reads as an account number. | Remove it. An account number is the only key to an identity. |
+| *"that looks like an account number — never share it. ask for an invite instead"* | An account number was pasted into **join**. | Ask for an invite or a room code. |
+| *"the server said the message id is already in use, twice — nothing was sent, press send again"* | The server answered `409 Id taken` for the message id and again for the one fresh id the browser drew. | Press send again. If it repeats, the server is misbehaving. |
+| *"the server refused the message as a duplicate — press send again"* | A `409` on a first attempt (no earlier answer was lost), which is never taken as stored. | Press send again. |
+| *"message not sent — press send again"* | No answer, or the server failed (`5xx`; a database outage answers `503`). | Wait a moment and press send again: a retry reuses the message id, so it never arrives twice. |
+| *"no answer from the server — check your connection and try again"* / *"cannot reach the server — …"* | The request timed out, or never reached the server. | Check the connection; the page has a **retry** where loading failed. |
+| *"the server does not accept this request — reload the page and try again"* | nginx refused the request itself (`E_EDGE_NOT_FOUND`, `E_EDGE_METHOD_NOT_ALLOWED`): usually a page older than the server. | Reload the page. |
+| *"service unavailable — try again in a moment"* | nginx could not reach the backend (`503 E_BACKEND_UNAVAILABLE`). | Wait; the operator checks `docker compose ps` and the backend log. |
+| *"your account may already exist and this number is the only way into it — save it now …"* | **← back to main menu** (or Escape) was pressed after the account was requested. | Save the number, then press back again to leave. |
+
+Every screen before login (login, new identity, the robot side) has a way back: its
+**← back to main menu** button (**← back to the human door** on the robot entrance), the brand
+title, or Escape. Leaving registration stops its proof of work and clears the account number from
+the screen and, when the page put it there, from the clipboard.
 
 ---
 

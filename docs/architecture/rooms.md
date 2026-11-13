@@ -20,7 +20,7 @@ This document is the design of record: what is stored, what is computed where, a
 5. **The creator's limits hold.** The member limit and the lifetime are carried in the code itself; clients check them against what the server reports and refuse a room that breaks them.
 6. **Same engine, same rules.** The server adds no new primitive: rooms use X25519, HKDF-SHA256, AES-256-GCM and SHA-256 only (RULES.md §1.4). The browser and the Go client (`internal/e2e`) implement the protocol byte for byte, pinned by interop vectors.
 
-Non-goals: moderation (kicking a member), editing a room's limits after creation, server-side search, and forward secrecy beyond what the one-to-one protocol offers (see *Limitations*).
+Non-goals: moderation (kicking a member), editing a room's limits after creation, server-side search, and forward secrecy, which the design does not have by decision (see *Limitations* and the [threat model](../security/threat-model.md#conditions-of-the-design)).
 
 ---
 
@@ -37,11 +37,11 @@ code = "elyrn#" || base64url( S (32) || max_members (1) || expires_hour (4, big-
 
 - `S` is 32 bytes from the creator's platform CSPRNG (`crypto.getRandomValues`). It is the room's only secret.
 - `max_members` is 2 to 32. `expires_hour` is the room's deletion time in hours since the Unix epoch.
-- The code is 57 characters. Anyone holding it holds everything needed to join, so it is handled like an invite: shown once on creation, copyable again from inside the room by its members.
+- The code is 56 characters (57 with the legacy `noaddx#` prefix). Anyone holding it holds everything needed to join, so it is handled like an invite: shown once on creation, copyable again from inside the room by its members.
 
 ### Values derived from S
 
-All with HKDF-SHA256, salt `"noaddx.v1"`:
+All with HKDF-SHA256, salt `"noaddx.v1"` (`noaddx` is the protocol namespace kept from the project's former name; every label below keeps it):
 
 | Value | Info | Length | Where it goes |
 |---|---|---|---|
@@ -168,7 +168,7 @@ A client accepts a message only if every check passes, in this order: the size i
 | Operation | Rule |
 |---|---|
 | Create | Costs a proof of work (as invites do). The client sends the derived id, `L`, the limit, the hour-aligned expiry (1 hour to `ROOM_MAX_TTL_HOURS` ahead), its card and its vault. |
-| Join | The room must exist, be unexpired, have a free seat, `HMAC(L)` must match in constant time, and the `max_members` and `expires_at` the client read from its code must equal the stored room's; otherwise `404`, without saying which. The limits are checked before any seat is taken or vault replaced: the room id and `L` derive from `S` alone, so a code whose limit bytes were edited would otherwise pass and store a vault that can never verify, hiding the room from that account. A full room answers `409`. Joining again with the same account and the same code refreshes the vault and is harmless. The member can read messages sent after it joined (`joined_seq`), and paging back (`?before=seq`) stops there too; leaving and joining again starts from the new join. |
+| Join | The room must exist, be unexpired, have a free seat, `HMAC(L)` must match in constant time, and the `max_members` and `expires_at` the client read from its code must equal the stored room's; otherwise `404`, without saying which. The limits are checked before any seat is taken or vault replaced: the room id and `L` derive from `S` alone, so a code whose limit bytes were edited would otherwise pass and store a vault that can never verify, hiding the room from that account. A full room answers `409`. Joining again with the same account and the same code refreshes the vault and is harmless; the browser and the agent refuse to send a join for a room they are in when the pasted code carries other limits (`E_ROOM_CODE_INVALID`, `E_AGENT_ROOM_CODE`). The member can read messages sent after it joined (`joined_seq`), and paging back (`?before=seq`) stops there too; leaving and joining again starts from the new join. |
 | Send | As in one-to-one conversations, plus the structure check and the roster digest check (`412`). |
 | Leave | Any member except the owner leaves: their membership goes, their messages stay readable to the others. |
 | Burn | The owner burns the room for everyone, as in one-to-one conversations. |
@@ -194,7 +194,7 @@ Because the invite code arrives authenticated by the requester's room key, the s
 ## Limitations
 
 - **The code is the trust anchor.** Anyone who obtains the code can join while a seat is free and read what is sent from then on. Members see every join in the member list and can compare the room's safety number on another channel; that comparison also exposes a malicious server that shows different members different rosters, which only matters if the server also holds the code.
-- **No forward secrecy at rest.** As with one-to-one conversations, whoever later obtains a member's AccountNumber can open the messages still stored for that member (until the room expires or `MESSAGE_TTL_DAYS` passes). The fresh ephemeral key protects a sender only against the leak of their room key, not of the recipient's.
+- **No forward secrecy (a condition of the design).** As with one-to-one conversations, whoever later obtains a member's AccountNumber can open the messages still stored for that member (until the room expires or `MESSAGE_TTL_DAYS` passes). The fresh ephemeral key protects a sender only against the leak of their room key, not of the recipient's.
 - **Names are short labels, not identities.** An aura name carries 12 bits, and a member key is derived from an account secret and the room id, so a holder of the code can grind account secrets offline (about 4,096 tries, no server contact) until their key is named like a member's. The client therefore shows the glyph, name and code on every message, tags members and senders whose names equal another key's ("same name as another member") and warns once per session. A determined holder of the code can still grind a full visual match (glyph, name and code: 2^43 X25519 derivations); the room safety number covers every member key and exposes it.
 - **Metadata the server sees.** Member count, join and leave times, message sizes and timing, and who sent each message (as a per-room pseudonym). Over the onion service the server does not see addresses.
 - **Lifetime is enforced by the server.** A compromised server can keep data past expiry; honest clients stop using a room at the hour its code names.

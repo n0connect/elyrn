@@ -53,7 +53,7 @@ This is the design of record. Decisions are dated and final unless the owner rev
 ```text
 elyrn-agent mcp   [--server URL]        MCP server on stdio (what MCP clients launch)
 elyrn-agent init  --server URL          create the identity now (otherwise on first use)
-elyrn-agent whoami                      public key and aura name; never the AccountNumber
+elyrn-agent whoami                      aura name and code, public key, server; never the AccountNumber
 ```
 
 `backend/cmd/agent` is the entry; `make agent` builds `bin/elyrn-agent` for the host.
@@ -138,18 +138,21 @@ no network request is made by any of it.
 
 ## Rename: noaddx. becomes elyrn.
 
-Everything a person reads or types changes: the brand in the UI and the status pages, the
+Everything a person reads or types changes: the brand in the UI and the 404 page, the
 documentation, the Go module, binaries, container and image names, Makefile output, release tag
 prefixes, and the prefixes of codes the app **emits** (`elyrn:` invites, `elyrn#` rooms).
 
 What is stored or on the wire does not change, so no identity, room, session or stored record
 breaks: the HKDF salt and info labels (`noaddx.v1`, `noaddx/...`), the AAD magics, the
-IndexedDB database name, the development cookie name, the default database name. The app keeps
+IndexedDB database name, the development cookie name (`noaddx_session`), the Trusted Types policy
+name (`noaddx-worker`), the JWT issuer and audience defaults, the default database name, the
+Compose project name (so the volumes `noaddx_postgres_data` and `noaddx_tor_data` keep their data)
+and the onion key directory (`/var/lib/tor/noaddx`). The app keeps
 **accepting** `noaddx:` and `noaddx#` codes. These names are the protocol's namespace now, not
 the product's, and the cryptography document says so.
 
-The GitHub repository has been renamed to `n0connect/elyrn`. The local folder and the branch
-names are renamed only on the owner's word.
+The GitHub repository has been renamed to `n0connect/elyrn` and the development branch is
+`elyrn-dev`. The local folder is renamed only on the owner's word.
 
 ## Limits
 

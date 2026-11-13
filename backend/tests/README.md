@@ -1,216 +1,79 @@
 # Test Suite
 
-> **Yalnizca gercek sistem.** Hicbir seyin yerine gecen kod, veri ya da akis yoktur. Testler gercek
-> HTTP rotalarini, gercek PostgreSQL'i, gercek kriptoyu (gercek ciphertext) ve her calistirmada
-> CSPRNG'den uretilen secret'lari kullanir. Gecersiz girdiler, gercek bir ciktinin bozulmasiyla
-> elde edilir. Sabit girdiler yalnizca yayinlanmis RFC vektorleri ve Go-JS uyum vektorleridir.
+> **Only the real system.** No code, data or flow stands in for another. Tests use the real HTTP
+> routes, a real PostgreSQL, real cryptography (real ciphertext) and secrets drawn from the CSPRNG
+> on every run. Invalid inputs are made by corrupting a real output. Fixed inputs are only
+> published RFC vectors and the Go-JS interop vectors.
 
-## Dizin Yapisi
+## Layout
 
 ```
 backend/tests/
-|-- auth/                      # Authentication tests (22 test)
-|-- database/                  # Migration, schema and session-bound tests (11 test)
-|-- encryption/                # Encryption tests (11 test)
-|-- identity/                  # HKDF / X25519 RFC vectors + derivations + tag separation (5 test)
-|-- integration/               # End-to-end flows, real E2E ciphertext, rooms, outages, key check, re-wrap (45 test)
-|-- middleware/                # Middleware tests (21 test)
-|-- testutil/                  # Test utilities
-|   |-- db.go                  # Database setup helpers
-|   |-- db_helper.go           # Database env setup
-|   |-- env.go                 # Environment setup (secrets drawn from the CSPRNG per run)
-|   `-- values.go              # Real generators: AccountNumber, auth key, ids
-`-- utils/                     # Utils, SafeMutex, supervised goroutines, logger (9 test)
+|-- auth/                # Auth key, sessions, pending registrations, Argon2id hash format (24 tests, 4 fuzz)
+|-- database/            # Migration, schema version, instance lock, startup validation, connection bounds (20 tests, 1 fuzz)
+|-- encryption/          # Stored-record encryption, key ids, AAD (12 tests, 2 fuzz)
+|-- identity/            # HKDF / X25519 RFC vectors, derivations, tag separation (5 tests, 2 fuzz)
+|-- integration/         # End-to-end flows over the real route table (114 tests)
+|-- middleware/          # JWT, rate limits, trusted proxy, CORS, security headers, recover (25 tests, 3 fuzz)
+|-- testutil/            # Shared helpers (below)
+`-- utils/               # Validation, SafeMutex, supervised goroutines, logger (12 tests, 3 fuzz)
 ```
 
-Paket ici testler: `internal/pow` (13, gercek cozum/gercek sure dolumu, bosta kalan istemcinin unutulmasi), `internal/realtime` (3, SSE hub), `internal/contract` (12, girdi sozlesmesi: her endpoint'in kanonik istegi kabul, her turetilmis mutasyon kayitli cevapla ret, yol/sorgu/metot beyaz listesi, uretilmis belge esitligi), `internal/e2e` (22, Go istemci protokolu + tarayici ciphertext'i + bes padding boyutu + oda protokolu ve tarayici oda vektorleri).
-Frontend testleri: `frontend/tests/` (crypto.test.mjs 10, room-crypto.test.mjs 14, validation.test.mjs 3, pow-worker.test.mjs 3) -> `node --test frontend/tests/*.test.mjs`
-Kripto motoru: `internal/cryptoengine` (10, bilinen-cevap vektorleri, secili motorda), `internal/cryptoengine/equivalence` (9, iki motoru ayni binary'de karsilastirir; `-tags openssl` ile).
-Fuzz hedefleri: `internal/contract` (her desen/dogrulayici cifti icin bir hedef: kabul ⇒ kanonik yeniden kodlama esitligi), `internal/e2e`, `internal/pow`, `tests/auth`, `tests/utils` (`go test -tags test -run '^$' -fuzz '^FuzzX$' -fuzztime 30s <paket>`).
+Counts are test functions (`^func Test`, `TestMain` excluded) and fuzz targets, as of 13 Nov 2026.
+Across the whole backend there are 330 test functions and 76 fuzz targets; the fuzz list, the
+frontend tests and how to run everything are in
+[docs/development/testing-and-contributing.md](../../docs/development/testing-and-contributing.md).
 
-## Test Calistirma Sirasi
+Inside `internal/` (no database): `agent` 10, `apperr` 13, `contract` 12, `cryptoengine` 10
+(known answers on the compiled engine), `cryptoengine/equivalence` 9 (both engines in one binary,
+`-tags 'test openssl'`), `database` 2, `e2e` 25, `mcp` 10, `pow` 19, `realtime` 6, `utils` 2.
 
-### ONEMLI: Migration Testleri Once Calistirilmalidir
+### Integration (`tests/integration/`)
 
-Migration testleri **backend ayaga kalkmadan once** calistirilmalidir:
+| File | What it covers |
+|---|---|
+| `flows_test.go` (17) | registration with PoW, login by the derived key, invites, messages, burn, sessions, SSE, input whitelist, IDOR |
+| `rooms_test.go` (17) | joining by code (`404` without it, other limits refused), seats, late joiners, `412` on a stale roster, notes, leave and burn, expiry |
+| `resilience_test.go` (14) | database outages answer `503` (never "invalid credentials", never a logout), stalled and slow requests keep their `503`, a failed sign-up keeps its number, lowered caps and TTLs, clock jumps, expired rows never served, burn racing sends, no driver text in the log |
+| `agent_test.go` (13), `agent_send_test.go` (3), `mcp_test.go` (3) | the real `elyrn-agent` and its MCP server against the real server; two agents and a browser-style user in one room |
+| `negative_*_test.go` (31) | negative use generated from the route table: refusals without a session, "not yours" and "never existed" byte-equal, order and repetition, limits, cross-protocol confusion, the agent |
+| `keys_test.go` (5) | startup key check, pepper commitment, master key re-wrapping |
+| `session_test.go` (4), `account_test.go` (2), `lifecycle_test.go` (2), `paging_test.go` (2) | the token only in the cookie, revocation, CSRF, identity deletion, the loopback-only health endpoint, closed keys refuse instead of sealing, `?before=` paging |
+| `restore_test.go` (1) | `TestRestoreDrill`, driven by `make test-restore` (seed, then verify) |
+
+`TestMain` (`helpers_test.go`) fails the package when PostgreSQL is unreachable, so nothing is
+reported as passed without running. It runs the tests between two counts of the database's
+sessions (`connections_test.go`): a pool, server or transaction left open fails the run.
+
+## Running
 
 ```bash
-# 1. Migration testleri (database hazirligi)
-cd backend
-go test -tags=test ./tests/database -v
-
-# 2. Testler basariliysa backend'i baslat
-go run ./cmd/server
+make test             # everything, in Docker, against a disposable tmpfs PostgreSQL (ENGINE=openssl|native)
+make test-unit        # no database: ./internal/... and tests/{auth,encryption,identity,middleware,utils}
+make test-db          # tests/database and tests/integration against a local PostgreSQL (TEST_DB_* overrides)
+make test-restore     # the restore drill, in the disposable test stack
 ```
 
-### Tum Testler
+By hand, from `backend/` (add `openssl` to `-tags` for that engine):
 
 ```bash
-# Migration testleri (oncelikli)
-go test -tags=test ./tests/database -v
-
-# Diger testler
-go test -p 1 -tags=test ./tests/... -v
+DB_HOST=127.0.0.1 DB_PORT=5432 go test -p 1 -count=1 -tags test ./tests/...    # -p 1: the packages share one database
+go test -tags test ./tests/identity -v                                          # one package
 ```
 
-### Kategori Bazli
+The database tests default to `DB_NAME=noaddx_test`, `DB_USER=postgres`,
+`DB_PASSWORD=postgres` and `DB_SSL_MODE=disable` (`testutil/db_helper.go`). Never point them at
+the bundled database: it holds live data and accepts TLS connections only.
 
-```bash
-# Migration tests (database hazirligi)
-go test -tags=test ./tests/database -v
+## Test infrastructure (`tests/testutil/`)
 
-# Authentication tests
-go test -tags=test ./tests/auth -v
+| File | Provides |
+|---|---|
+| `env.go` | `SetupTestEnv` / `TeardownTestEnv`: every variable the server reads, secrets drawn per run |
+| `db.go` | `StartDatabase` (the real `database.Start`; closes the previous test's pool first and its own at the end, so one pool is open at a time), `InitializeTestDatabase`, `CleanupTestData` |
+| `db_helper.go`, `docker.go` | database variables for host and container runs |
+| `values.go` | real generators: account number, auth key, internal ids, record ids, pending identities |
+| `answers.go` | `RegisteredAnswer`, `IsAnswer`, `IsWireAnswer`: compare an answer with its registered `apperr` code |
+| `stall.go` | `StartStallingProxy`: a TCP proxy that stalls the database on demand |
 
-# Encryption tests
-go test -tags=test ./tests/encryption -v
-
-# Middleware tests
-go test -tags=test ./tests/middleware -v
-
-# Integration tests
-go test -tags=test ./tests/integration -v
-
-# Identity derivation tests (no DB)
-go test -tags=test ./tests/identity -v
-
-# Utils tests
-go test -tags=test ./tests/utils -v
-```
-
-## Test Istatistikleri
-
-| Kategori | Test Sayisi | Durum |
-|---|---|---|
-| **Database Migration** | **11** | Gecti |
-| Authentication | 22 | Gecti |
-| Encryption | 11 | Gecti |
-| Middleware | 21 | Gecti |
-| Identity | 5 | Gecti |
-| Integration (elyrn flows) | 45 | Gecti |
-| Utils | 22 | Gecti |
-| **TOPLAM (tests/)** | **137** | Gecti |
-
-## Migration Testleri
-
-### Amac
-
-Migration testleri backend baslamadan once:
-1. [x] Database baglantisini test eder
-2. [x] Migration'larin basariyla calistigini dogrular
-3. [x] Database schema'sinin dogru olusturuldugunu test eder
-4. [x] Index'lerin ve constraint'lerin dogru ayarlandigini dogrular
-5. [x] **Database'in backend baslamadan once hazir oldugunu garantiler**
-
-### Testler
-
-- `TestDatabaseMigration`: Migration'larin calistigini test eder
-- `TestUserTableSchema`: User tablosu schema'sini test eder
-- `TestChatTableSchema`: Mesajlasma tablolarini ve yasak kolonlari (user_uuid, created_at) test eder
-- `TestUserTableIndexes`: Index'leri test eder
-- `TestDatabaseConstraints`: Constraint'leri test eder
-- `TestDatabaseConnection`: Baglantiyi test eder
-- `TestDatabaseMasterKey`: Master key'i test eder
-
-### Detayli Bilgi
-
-Bkz: `tests/database/README.md`
-
-## Test Kategorileri
-
-### 1. Unit Tests
-
-**Lokasyon:** `tests/auth/`, `tests/encryption/`, `tests/utils/`, `tests/identity/`
-
-**Ozellikler:**
-- Hizli calisir
-- Database gerektirmez (cogu)
-- Izole edilmis testler
-
-### 2. Migration Tests
-
-**Lokasyon:** `tests/database/`
-
-**Ozellikler:**
-- Database gerektirir
-- Backend baslamadan once calistirilmalidir
-- Database'in hazir oldugunu garantiler
-
-### 3. Middleware Tests
-
-**Lokasyon:** `tests/middleware/`
-
-**Testler:**
-- JWT authentication
-- Rate limiting (IPv6 /64 gruplama; Tor devreleri ayri anahtar alir)
-- Guvenilir proxy (X-Forwarded-For sagdan okunur)
-- CORS policy
-- Security headers
-
-### 4. Integration Tests
-
-**Lokasyon:** `tests/integration/`
-
-**Testler:** gercek route tablosu (`internal/server`) uzerinden
-- Kayit (PoW dahil) -> turetilmis anahtarla giris; ham AccountNumber kabul edilmez
-- PoW atlatma regresyonlari (difficulty=0, trailing JSON)
-- Davet -> eslesme -> mesaj; tek kullanimlik davet, kendi davetini kullanamama
-- Uye olmayan erisimi (IDOR), girdi beyaz listesi, burn, oturum iptali, davet limiti
-- SSE: mesajda durtme, logout'ta akisin kapanmasi
-- DB'de sosyal graf ve sekli sizmamasi (konusma basina takma ad, padding'li sifreli liste, konusma basina seq)
-- Odalar: kodla katilma (kod olmadan 404), koltuk siniri, gec katilanin yalnizca sonraki mesajlari gormesi, eski uye listesine 412, yapi beyaz listesi, ayrilma/yakma, sure dolumu ve temizlik, hesap silmede sahip olunan odanin yakilmasi, SSE durtmesi, arkadaslik notunun yalnizca alicisina ulasmasi
-- Saklama suresi (gun hassasiyetli silinme, purge), dolu kullanicida davetin geri alinmasi, burn sonrasi liste temizligi
-- Davet basina PoW (eksik govde 415, eksik cozum 412, zayif/tekrar cozum 403; reddedilen istek davet olusturmaz)
-- Kimlik silme: hesap numarasi yeniden kanitlanir, yanlis anahtar islemi geri alir (davetler kalir), iki taraf icin konusmalar silinir, karsi taraf SSE ile haberdar olur
-- CSRF: capraz-koken yazmalar reddedilir; reddedilen istek PoW'u tuketmez
-
-**Not:** PostgreSQL erisilemezse paket FAIL verir (TestMain) - hicbir test calismadan "gecti" denmez. Lokal ornek:
-`DB_HOST=127.0.0.1 DB_PORT=5432 go test -p 1 -tags=test ./tests/... -v` (`-p 1`: DB paketleri ayni veritabanini paylasir)
-
-## Test Infrastructure
-
-### Test Environment Setup
-
-`tests/testutil/env.go`:
-- `SetupTestEnv()`: Test environment variables
-- `TeardownTestEnv()`: Cleanup
-
-### Database Setup
-
-`tests/testutil/db.go`:
-- `InitializeTestDatabase()`: Global database init
-
-`tests/testutil/db_helper.go`:
-- `SetupTestDatabaseEnv()`: Database environment variables
-
-## Notlar
-
-### Database Bagimliligi
-
-Bazi testler database baglantisi gerektirir:
-- Migration tests: Database gerektirir
-- Integration tests: Database gerektirir
-- JWT middleware test: Database gerektirir
-
-### Environment Variables
-
-Testler icin gerekli environment variables:
-- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSL_MODE`
-- `JWT_SECRET`, `JWT_SECRET_MIN_LEN`, `JWT_ISSUER`, `JWT_AUDIENCE`, `JWT_EXPIRATION_MINUTES`
-- `MASTER_KEY_ACTIVE`, `MASTER_KEY_ACTIVE_ID`, `MASTER_KEY_OLD`, `ACCOUNT_LOOKUP_PEPPER`
-- `ALLOWED_ORIGINS`, `BACKEND_PORT`, `APP_ENV`, `LOG_LEVEL`
-- `MAX_REQUEST_BODY_BYTES`, `MAX_JSON_DEPTH`, `POW_DIFFICULTY`
-- `INVITE_TTL_SEC`, `MAX_ACTIVE_INVITES`, `MAX_CONVERSATIONS_PER_USER`, `MAX_MESSAGE_BYTES`, `MESSAGE_PAGE_LIMIT`
-- `ARGON2_MEMORY_KIB`, `ARGON2_TIME`, `ARGON2_PARALLELISM`, `ARGON2_SALT_LENGTH`, `ARGON2_HASH_LENGTH`
-- `PENDING_TOKEN_TTL_SEC`, `PENDING_CLEANUP_INTERVAL_SEC`, `PENDING_ID_BYTES`, `INTERNAL_ID_LENGTH`
-- `RATE_LIMIT_MAX_TOKENS`, `RATE_LIMIT_REFILL_INTERVAL_SEC`, `RATE_LIMIT_CLEANUP_INTERVAL_SEC`, `RATE_LIMIT_MAX_BUCKETS`
-- `SERVER_READ_HEADER_TIMEOUT_SEC`, `SERVER_READ_TIMEOUT_SEC`, `SERVER_WRITE_TIMEOUT_SEC`, `SERVER_IDLE_TIMEOUT_SEC`, `SERVER_MAX_HEADER_BYTES`
-
-## Dokumantasyon
-
-- `tests/README.md`: Bu dosya
-- `tests/database/README.md`: Migration testleri detaylari
-
----
-
-**Son Guncelleme:** Ekim 2026
+Database-level details: [tests/database/README.md](database/README.md).
