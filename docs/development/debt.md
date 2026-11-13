@@ -6,14 +6,14 @@ written. Ids are stable.
 
 ## State (13 Nov 2026, evening)
 
-- `main` and `elyrn-dev` are on GitHub at 41669b0 with a green CI run (both engines with the race
-  detector and every fuzz target, equivalence, frontend, images, govulncheck, gitleaks): the first
-  verification on Linux. Local `elyrn-dev` is ahead of it and **not pushed**.
-- **Local head, every exit code read:** frontend 161/161; complete Go suite on both engines (the
+- `main` and `elyrn-dev` are on GitHub at the same commit with a green CI run (both engines with
+  the race detector and every fuzz target, equivalence, frontend, images, govulncheck, gitleaks).
+  Nothing is unpushed. Every document was checked against the code on 13 Nov (0dd8fac).
+- **Last full local verification, every exit code read:** frontend 161/161; complete Go suite on both engines (the
   integration package now ends with a connection guard: open sessions return to the baseline);
   engine equivalence; `make check-hardening`; gitleaks; govulncheck; staticcheck on both tag sets;
   gofmt; `go mod tidy -diff`, all at eb9b17e. Race detector on both engines at eb9b17e. After it
-  only the frontend changed (e2643e4): frontend tests rerun, 161/161.
+  only the frontend, documents and the Makefile changed: frontend tests rerun, 162/162; CI ran the rest.
 - **Fuzz campaign at eb9b17e:** all 76 Go targets, 45 s each on the native engine and 15 s each on
   the OpenSSL engine, no failure; the seven browser fuzz files at 20 times their iteration count.
 - **`make test-restore`:** passed on both engines (dump, drop, restore, key check, the restored
