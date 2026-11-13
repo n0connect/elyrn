@@ -26,9 +26,9 @@ GO_TAGS_native :=
 CGO_openssl := 1
 CGO_native := 0
 
-# Release tags: elyrn-<engine>-vX.Y.Z on main; elyrn-<engine>-dev follow noaddx-dev
-# The branch, the onion key directory and the database names are kept as "noaddx" across the rename to elyrn.
-DEV_BRANCH := noaddx-dev
+# Release tags: elyrn-<engine>-vX.Y.Z on main; elyrn-<engine>-dev follow elyrn-dev
+# The onion key directory and the database names (not the branch any more) keep "noaddx" across the rename to elyrn.
+DEV_BRANCH := elyrn-dev
 RELEASE_BRANCH := main
 COMPOSE_ENV := ENGINE=$(ENGINE)
 # APP_ENV as Compose sees it (the shell's value wins over .env), lower case without quotes.

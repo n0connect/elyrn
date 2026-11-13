@@ -27,7 +27,7 @@ written. Ids are stable.
   clock-jump and job-abandon exits (no honest test, no drill); production-mode browser login after
   these changes; friend requests, the earlier-messages button, lookalike and replay warnings,
   storage warnings and two tabs in a real browser (unit and integration tests only).
-- Rooms (a3c812f) are on `origin/noaddx-dev`, verified there on both engines, not merged to `main`.
+- Rooms (a3c812f) were on `origin/noaddx-dev` (renamed `elyrn-dev` on 13 Nov), verified there on both engines, not merged to `main`.
 
 ## Open findings
 
