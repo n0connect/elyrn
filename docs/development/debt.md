@@ -6,20 +6,27 @@ written. Ids are stable.
 
 ## State (13 Nov 2026)
 
-- Branch `elyrn` (local, from `noaddx-dev` a3c812f), nothing pushed. Full verification passed three
-  times on 12 Nov, last at dc8b15f: frontend 59/59, complete Go suite on both engines, engine
-  equivalence, `make check-hardening`, gofmt, vet and staticcheck on both tag sets; race detector on
-  both engines at f26b14d. First run found 53 failures (stale PoW test helper after S-03, MCP test
-  setup, doc not in the test image, two real MCP bugs: arguments used before validation, `room_read`
-  ignoring `before`); all fixed (5bef96f..1456cd7).
-- Live tour (12 Nov, partial): robot entrance, agent identity/create/join/send/read/paging/wait over
-  MCP against the running stack, browser register/join/send, hostile join codes. It found S-10.
-  Not toured yet: hostile message inputs (re-run), earlier-messages button, pairing by invite,
-  friend requests, delete identity, logout, lookalike and replay warnings in the browser.
-- Situation-handling audit (12 Nov, two read-only auditors, by reading code): 17 server/deploy,
-  17 browser, 8 agent findings below. All but D-09 are written and compiled (60fca80, 0d72498,
-  5bd461f, cffb279 and the frontend wave 1 commit); **no test has run on any of them** and the
-  running stack still has the backend from before them.
+- Branch `elyrn` (local, from `noaddx-dev` a3c812f), nothing pushed, not merged.
+- **Full verification at a3c4007, every exit code read:** frontend 111/111 (seven fuzz files
+  included), complete Go suite on both engines, engine equivalence, `make check-hardening`
+  (hardening, nginx edge answers, fuzz list), gofmt, vet and staticcheck on both tag sets. Race
+  detector on both engines at 33d4cbb (not repeated after the last five commits).
+- **Fuzz (stage 3):** 76 Go targets and 7 browser fuzz files, each asserting invariants. Every Go
+  target ran 20 s on the native engine; none ran on the OpenSSL engine and no long campaign ran.
+  Writing and running them found four product defects (address scrubber, two server origins in the
+  agent, an infinite value at the robot door, a status returned beside an error), all fixed.
+- **Live, on the rebuilt development stack (OrbStack, macOS):** in-place upgrade of the existing
+  database (13 users and 4 conversations before and after, schema stamped 0 to 1); nginx edge
+  answers; health endpoint unreachable from outside; second instance refused; ordered shutdown,
+  exit 0; backend stopped behind nginx answers 503 `E_BACKEND_UNAVAILABLE`; database paused 17 s:
+  the agent reports `E_AGENT_SERVER_BUSY` in 12 s, the backend is not restarted, service resumes.
+  Tour: two doors on both paths, register, invite pairing, spent invite, hostile message texts
+  (empty, control, bidi, HTML: no injection), live delivery, draft per conversation, logout,
+  delete identity, rooms with two agents, agent paging and replays over MCP.
+- **Not verified:** Linux hosts and CI; `make onion`; `make test-restore` (written, never run);
+  clock-jump and job-abandon exits (no honest test, no drill); production-mode browser login after
+  these changes; friend requests, the earlier-messages button, lookalike and replay warnings,
+  storage warnings and two tabs in a real browser (unit and integration tests only).
 - Rooms (a3c812f) are on `origin/noaddx-dev`, verified there on both engines, not merged to `main`.
 
 ## Open findings
@@ -50,23 +57,23 @@ Found by reading code, not reproduced unless the state says so. Severity in brac
 
 | Id | Finding | Fix | State |
 |---|---|---|---|
-| D-01 | [high] Retention trusts the wall clock: a forward jump purges every message, invite, note and room; a backward jump caps `expires_on` early so messages die early once the clock is right | compare wall and monotonic gaps per cycle, persist the last run, pause with `E_CLOCK_JUMP` | written, compiled only (60fca80) |
-| D-02 | [high] The supervised retention job is abandoned after 5 panics while the process stays healthy; `ListMessages` does not filter on expiry, so expired ciphertext is still served; one failing purge step starves the rest | reads never serve expired rows; an abandoned critical job exits the process (`E_JOB_ABANDONED`); purge steps independent | written, compiled only (60fca80) |
-| D-03 | [high] No query has a context or statement timeout; an exhausted pool hangs requests without limit | `statement_timeout`, request context with a deadline into the repositories | written, compiled only (60fca80) |
-| D-04 | [medium] A database outage answers 500 `E_INTERNAL` everywhere except login | classify driver errors once (`store.ErrUnavailable`) → 503 with one registered code, session gate included | written, compiled only (60fca80) |
-| D-05 | [medium] Burn, room expiry or account deletion racing a send leaves orphan ciphertext until its TTL | lock the conversation row first in every delete path | written, compiled only (60fca80) |
-| D-10 | [medium] A handler panic has no recovery and no code; net/http logs the peer address through stdlib `log` | `Recover` middleware (`E_PANIC`), `ErrorLog` through the log module | written, compiled only (60fca80) |
-| D-06 | [medium] `AutoMigrate` on every boot: unversioned, not atomic, unguarded against a second instance or a newer schema | schema version, advisory lock, one transaction, `E_SCHEMA_NEWER` | written, compiled only (cffb279) |
-| D-07 | [medium] No log rotation on any service; free unauthenticated requests each write WARN lines; nginx `error_log crit` hides upstream failures | compose `logging` limits (checked by `make check-hardening`), per-code log rate limit, nginx `error` | written, compiled only (cffb279) |
-| D-08 | [medium] Startup failures are free-text `log.Fatal`; the pgx connect error names user, database and host; `HSTS_*`, `SEC_HEADER_*`, origins format, `PGSSLROOTCERT`, `TRUSTED_PROXIES` are not validated at start; `BACKEND_PORT` is configurable but 8080 is hardcoded in the healthcheck and nginx; no bounded wait for the database | startup codes with one exit path naming the variable only, validate all at start, bounded connect retry, pin or template the port | written, compiled only (cffb279) |
+| D-01 | [high] Retention trusts the wall clock: a forward jump purges every message, invite, note and room; a backward jump caps `expires_on` early so messages die early once the clock is right | compare wall and monotonic gaps per cycle, persist the last run, pause with `E_CLOCK_JUMP` | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-02 | [high] The supervised retention job is abandoned after 5 panics while the process stays healthy; `ListMessages` does not filter on expiry, so expired ciphertext is still served; one failing purge step starves the rest | reads never serve expired rows; an abandoned critical job exits the process (`E_JOB_ABANDONED`); purge steps independent | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-03 | [high] No query has a context or statement timeout; an exhausted pool hangs requests without limit | `statement_timeout`, request context with a deadline into the repositories | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-04 | [medium] A database outage answers 500 `E_INTERNAL` everywhere except login | classify driver errors once (`store.ErrUnavailable`) → 503 with one registered code, session gate included | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-05 | [medium] Burn, room expiry or account deletion racing a send leaves orphan ciphertext until its TTL | lock the conversation row first in every delete path | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-10 | [medium] A handler panic has no recovery and no code; net/http logs the peer address through stdlib `log` | `Recover` middleware (`E_PANIC`), `ErrorLog` through the log module | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-06 | [medium] `AutoMigrate` on every boot: unversioned, not atomic, unguarded against a second instance or a newer schema | schema version, advisory lock, one transaction, `E_SCHEMA_NEWER` | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-07 | [medium] No log rotation on any service; free unauthenticated requests each write WARN lines; nginx `error_log crit` hides upstream failures | compose `logging` limits (checked by `make check-hardening`), per-code log rate limit, nginx `error` | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-08 | [medium] Startup failures are free-text `log.Fatal`; the pgx connect error names user, database and host; `HSTS_*`, `SEC_HEADER_*`, origins format, `PGSSLROOTCERT`, `TRUSTED_PROXIES` are not validated at start; `BACKEND_PORT` is configurable but 8080 is hardcoded in the healthcheck and nginx; no bounded wait for the database | startup codes with one exit path naming the variable only, validate all at start, bounded connect retry, pin or template the port | verified by the suite at a3c4007 (see State for what was also seen live) |
 | D-09 | [medium] The backend connects as the PostgreSQL bootstrap superuser | owner role for migrations, DML-only runtime role | open: not done on purpose. A real split needs a one-shot migrator service and a new runtime-password secret that existing `.env` files lack, so an in-place upgrade would need a manual step; design recorded in the report of cffb279 (Makefile adds `DB_APP_PASSWORD` idempotently, a `migrate` service creates role `elyrn_app` with DML only, the backend keeps only the app credentials) |
-| D-11 | [medium] nginx `proxy_intercept_errors` replaces every registered JSON error body with an HTML page; backend down is a 502 HTML page | no intercept on `/api/`; JSON `E_BACKEND_UNAVAILABLE` for 502/504 | written, compiled only (cffb279) |
-| D-12 | [low-medium] Shutdown zeroizes keys while the rewrap goroutine or late handlers may still encrypt; compose stop timeout equals the grace period; the database is never closed | wait for supervised goroutines, refuse encryption once closing, zeroize last, `stop_grace_period`, close the pool | written, compiled only (cffb279) |
-| D-13 | [low-medium] A second backend instance starts (PoW secret and spent set, pending store, hub and limiters are per process) | advisory lock at start, `E_SECOND_INSTANCE`, documented | written, compiled only (cffb279) |
-| D-14 | [low-medium] Database TLS certificate expiry is silent; the healthcheck never touches the database | healthcheck runs `SELECT 1` with a timeout; `make certs` warns early | written, compiled only (cffb279) |
-| D-15 | [low] Spent PoW eviction and JWT times follow the wall clock | covered by the D-01 detector | written, compiled only (cffb279) |
-| D-16 | [low] No restore test; `tor_data` onion key and full-volume restore undocumented; tor healthcheck only tests a file | `make test-restore`, document exclusions, real tor check | written, compiled only (cffb279) |
-| D-17 | [low] Rewrap runs one pass per boot and stops silently on a database error; a database with users but no members pins any pepper | retry until no old-key rows, `E_REWRAP_INCOMPLETE` | written, compiled only (cffb279) |
+| D-11 | [medium] nginx `proxy_intercept_errors` replaces every registered JSON error body with an HTML page; backend down is a 502 HTML page | no intercept on `/api/`; JSON `E_BACKEND_UNAVAILABLE` for 502/504 | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-12 | [low-medium] Shutdown zeroizes keys while the rewrap goroutine or late handlers may still encrypt; compose stop timeout equals the grace period; the database is never closed | wait for supervised goroutines, refuse encryption once closing, zeroize last, `stop_grace_period`, close the pool | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-13 | [low-medium] A second backend instance starts (PoW secret and spent set, pending store, hub and limiters are per process) | advisory lock at start, `E_SECOND_INSTANCE`, documented | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-14 | [low-medium] Database TLS certificate expiry is silent; the healthcheck never touches the database | healthcheck runs `SELECT 1` with a timeout; `make certs` warns early | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-15 | [low] Spent PoW eviction and JWT times follow the wall clock | covered by the D-01 detector | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-16 | [low] No restore test; `tor_data` onion key and full-volume restore undocumented; tor healthcheck only tests a file | `make test-restore`, document exclusions, real tor check | verified by the suite at a3c4007 (see State for what was also seen live) |
+| D-17 | [low] Rewrap runs one pass per boot and stops silently on a database error; a database with users but no members pins any pepper | retry until no old-key rows, `E_REWRAP_INCOMPLETE` | verified by the suite at a3c4007 (see State for what was also seen live) |
 
 Doc drift to fix with them: `disaster-recovery.md` (retention on a full disk), `configuration-and-tuning.md` (`DB_HOST`, `DB_NAME` defaults).
 
@@ -74,23 +81,23 @@ Doc drift to fix with them: `disaster-recovery.md` (retention on a full disk), `
 
 | Id | Finding | Fix | State |
 |---|---|---|---|
-| C-01 | [high] No request times out: a hung POST disables send for good, a hung GET blocks the conversation's sync chain | one abort timeout in the request function, `E_REQUEST_TIMEOUT` | written, compiled only (frontend wave 1) |
-| C-02 | [high] Registration clears the account number from screen, clipboard and memory before `/me` succeeds; a failure then shows the menu silently | clear only after entering; `E_ACCOUNT_CREATED_NOT_ENTERED` | written, compiled only (frontend wave 1) |
-| C-03 | [high, security] Any 401 (and `/me` 0/5xx at load) wipes the whole IndexedDB, replay counters included: a hostile server answers 401 once and replays undetected (S-05 bypass); offline at load logs the device out | `wipeIdentity` for server-driven paths keeps counters; `wipeAll` only for the user's logout or delete; `E_SERVER_UNREACHABLE` with retry | written, compiled only (frontend wave 1) |
-| C-04 | [high] One composer for all conversations: a draft for A is sent to B; a send for A clears text typed for B | in-memory draft per conversation | written, compiled only (frontend wave 1) |
-| C-05 | [medium-high] Browser PoW accepts difficulty 32 and 2^31 hashes, no timeout, no cancel, locks held | cap at the server maximum 24, wall-clock timeout, terminate on stop, `E_POW_TIMEOUT` | written, compiled only (frontend wave 1) |
-| C-06 | [medium] Login and register phase 1 leave the page on ordinary errors: a wrong number wipes the keystore and shows the session-expired page | `apiCall` with inline codes | written, compiled only (frontend wave 1) |
-| C-07 | [medium] No global error handler; a failed sync shows "say hello" over a conversation that did not load | one handler (`E_UNEXPECTED`), sync failure shown with retry | written, compiled only (frontend wave 1) |
-| C-08 | [medium] Two tabs of one account reuse counters; peers hide a message as a replay | Web Lock around counter allocation, fresh read, write-ahead | written, compiled only (5bd461f) |
-| C-09 | [medium] Overlapping list refreshes can drop a just-joined conversation (false `W_CONVERSATION_BURNED`) | single-flight refresh with a generation | written, compiled only (5bd461f) |
-| C-10 | [medium] A room hidden by `E_ROOM_UNVERIFIED` is not named and cannot be left; the seat stays held | list it as unverified with a leave action | written, compiled only (5bd461f) |
-| C-11 | [medium-low] Re-entrancy: Enter bypasses the disabled login button; join, accept, logout unguarded; send awaits the roster before disabling | one busy flag per action before the first await | written, compiled only (5bd461f) |
-| C-12 | [low-medium] Storage failures (private mode, quota, downgrade, blocked upgrade) are log-only | `W_STORAGE_UNAVAILABLE` shown once | written, compiled only (5bd461f) |
-| C-13 | [low] Misleading codes: roster 5xx as `E_ROSTER_UNVERIFIED`, limits out of range as `E_IDENTITY_MISMATCH`, challenge 429 as `E_ROOM_NOT_CREATED`, free-text `unsupportedNotice` | the right code each | written, compiled only (5bd461f) |
-| C-14 | [low] Delete identity with a lost answer reports not deleted | probe `/me` on 0/5xx | written, compiled only (5bd461f) |
-| C-15 | [low] A first-attempt 409 on send counts as stored | accept 409 only after a lost answer, as the agent does | written, compiled only (5bd461f) |
-| C-16 | [low] A fast client clock gives a false expired room with no hint | name the clock in the sentence | written, compiled only (5bd461f) |
-| C-17 | [low] A new room code is auto-copied and left in the clipboard | best-effort clear as for the account number | written, compiled only (5bd461f) |
+| C-01 | [high] No request times out: a hung POST disables send for good, a hung GET blocks the conversation's sync chain | one abort timeout in the request function, `E_REQUEST_TIMEOUT` | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-02 | [high] Registration clears the account number from screen, clipboard and memory before `/me` succeeds; a failure then shows the menu silently | clear only after entering; `E_ACCOUNT_CREATED_NOT_ENTERED` | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-03 | [high, security] Any 401 (and `/me` 0/5xx at load) wipes the whole IndexedDB, replay counters included: a hostile server answers 401 once and replays undetected (S-05 bypass); offline at load logs the device out | `wipeIdentity` for server-driven paths keeps counters; `wipeAll` only for the user's logout or delete; `E_SERVER_UNREACHABLE` with retry | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-04 | [high] One composer for all conversations: a draft for A is sent to B; a send for A clears text typed for B | in-memory draft per conversation | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-05 | [medium-high] Browser PoW accepts difficulty 32 and 2^31 hashes, no timeout, no cancel, locks held | cap at the server maximum 24, wall-clock timeout, terminate on stop, `E_POW_TIMEOUT` | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-06 | [medium] Login and register phase 1 leave the page on ordinary errors: a wrong number wipes the keystore and shows the session-expired page | `apiCall` with inline codes | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-07 | [medium] No global error handler; a failed sync shows "say hello" over a conversation that did not load | one handler (`E_UNEXPECTED`), sync failure shown with retry | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-08 | [medium] Two tabs of one account reuse counters; peers hide a message as a replay | Web Lock around counter allocation, fresh read, write-ahead | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-09 | [medium] Overlapping list refreshes can drop a just-joined conversation (false `W_CONVERSATION_BURNED`) | single-flight refresh with a generation | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-10 | [medium] A room hidden by `E_ROOM_UNVERIFIED` is not named and cannot be left; the seat stays held | list it as unverified with a leave action | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-11 | [medium-low] Re-entrancy: Enter bypasses the disabled login button; join, accept, logout unguarded; send awaits the roster before disabling | one busy flag per action before the first await | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-12 | [low-medium] Storage failures (private mode, quota, downgrade, blocked upgrade) are log-only | `W_STORAGE_UNAVAILABLE` shown once | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-13 | [low] Misleading codes: roster 5xx as `E_ROSTER_UNVERIFIED`, limits out of range as `E_IDENTITY_MISMATCH`, challenge 429 as `E_ROOM_NOT_CREATED`, free-text `unsupportedNotice` | the right code each | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-14 | [low] Delete identity with a lost answer reports not deleted | probe `/me` on 0/5xx | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-15 | [low] A first-attempt 409 on send counts as stored | accept 409 only after a lost answer, as the agent does | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-16 | [low] A fast client clock gives a false expired room with no hint | name the clock in the sentence | verified by the suite at a3c4007 (see State for what was also seen live) |
+| C-17 | [low] A new room code is auto-copied and left in the clipboard | best-effort clear as for the account number | verified by the suite at a3c4007 (see State for what was also seen live) |
 
 Undetermined: back-forward cache after logout, blocked IndexedDB upgrade, an unbounded JSON body from a hostile server.
 
@@ -98,24 +105,38 @@ Undetermined: back-forward cache after logout, blocked IndexedDB upgrade, an unb
 
 | Id | Finding | Fix | State |
 |---|---|---|---|
-| A-01 | [high] Message counters live in memory and two processes may share one identity: counters are reused, browser peers hide the messages as replays while the agent reports `stored: true` | exclusive lock file (`E_AGENT_IDENTITY_IN_USE`), atomic per-room counter state raised before each POST | written, compiled only (0d72498) |
-| A-02 | [high] A failed registration confirm leaves an identity file that can never log in (`E_AGENT_IDENTITY_UNKNOWN` forever) | keep the pending token and retry confirm | written, compiled only (0d72498) |
-| A-03 | [high] A failed `/me` check leaves the session set: the mismatch is fail-open on the next call and `room_create` panics on nil limits | drop the session on any check error, guard limits | written, compiled only (0d72498) |
-| A-04 | [medium-high] The agent detects no replay or reordering; a re-served message reaches the model as new | mirror the browser's counter judgement | written, compiled only (0d72498) |
-| A-05 | [medium-low] `room_wait` re-opens a dying stream four times without backoff and reports a timeout early | backoff, read fallback, `CodeNetwork` if no stream held | written, compiled only (0d72498) |
-| A-06 | [low-medium] `room_create` with a lost answer orphans the room and its code | settle by listing rooms | written, compiled only (0d72498) |
-| A-07 | [low] Signal shutdown does not wait for the call in flight (map write after close, temp link may remain) | cancel, then wait with a bound | written, compiled only (0d72498) |
-| A-08 | [low] `E_AGENT_IDENTITY_FILE` suggests moving the only copy of the account away; TLS failure reads as unreachable | clearer sentences, a TLS code | written, compiled only (0d72498) |
+| A-01 | [high] Message counters live in memory and two processes may share one identity: counters are reused, browser peers hide the messages as replays while the agent reports `stored: true` | exclusive lock file (`E_AGENT_IDENTITY_IN_USE`), atomic per-room counter state raised before each POST | verified by the suite at a3c4007 (see State for what was also seen live) |
+| A-02 | [high] A failed registration confirm leaves an identity file that can never log in (`E_AGENT_IDENTITY_UNKNOWN` forever) | keep the pending token and retry confirm | verified by the suite at a3c4007 (see State for what was also seen live) |
+| A-03 | [high] A failed `/me` check leaves the session set: the mismatch is fail-open on the next call and `room_create` panics on nil limits | drop the session on any check error, guard limits | verified by the suite at a3c4007 (see State for what was also seen live) |
+| A-04 | [medium-high] The agent detects no replay or reordering; a re-served message reaches the model as new | mirror the browser's counter judgement | verified by the suite at a3c4007 (see State for what was also seen live) |
+| A-05 | [medium-low] `room_wait` re-opens a dying stream four times without backoff and reports a timeout early | backoff, read fallback, `CodeNetwork` if no stream held | verified by the suite at a3c4007 (see State for what was also seen live) |
+| A-06 | [low-medium] `room_create` with a lost answer orphans the room and its code | settle by listing rooms | verified by the suite at a3c4007 (see State for what was also seen live) |
+| A-07 | [low] Signal shutdown does not wait for the call in flight (map write after close, temp link may remain) | cancel, then wait with a bound | verified by the suite at a3c4007 (see State for what was also seen live) |
+| A-08 | [low] `E_AGENT_IDENTITY_FILE` suggests moving the only copy of the account away; TLS failure reads as unreachable | clearer sentences, a TLS code | verified by the suite at a3c4007 (see State for what was also seen live) |
 
 ### Found after the audit
 
 | Id | Finding | Fix | State |
 |---|---|---|---|
-| A-09 | [high, security] The agent prunes a room's counter record when one listing omits the room: a hostile server hides the room once and replays undetected | prune only on the room's own expiry or the agent's own leave | being written |
-| A-10 | [medium] History pages in the agent skip the browser's ceiling rule | mirror `counters.js` | being written |
-| C-18 | [medium] The browser ignores the edge codes nginx now answers (`E_BACKEND_UNAVAILABLE` and four more) | map `data.code` to registered codes; unknown codes fall back to the status | being written |
+| A-09 | [high, security] The agent pruned a room's counter record when one listing omitted the room: a hostile server hides the room once and replays undetected | prune only on the room's own expiry or the agent's own leave | verified by the suite at a3c4007 (8008614) |
+| A-10 | [medium] History pages in the agent skip the browser's ceiling rule | mirror `counters.js` | verified by the suite at a3c4007 (8008614) |
+| C-18 | [medium] The browser ignores the edge codes nginx now answers (`E_BACKEND_UNAVAILABLE` and four more) | map `data.code` to registered codes; unknown codes fall back to the status | verified by the suite at a3c4007 (9b0546c) |
 | C-19 | [medium] Found in the live tour: the nonce, the agent command and the open room's code sat in boxes an animation rule kept at opacity 0 (never visible, before the two doors too) | boxes carry the `show` class; robot-side colours | written, seen fixed in a real browser (e6d0b89) |
-| D-18 | [low] `nginx-site.conf` was changed without `nginx -t`; `docker-compose.test.yaml` has no log limits; `HSTS_*` and `SEC_HEADER_*` are not passed through compose; the retention heartbeat marks a cycle begun, not finished | check each in the final verification, fix or justify | open |
+| D-18 | [low] `nginx-site.conf` was changed without `nginx -t` (since run: passes, and the config serves live); `docker-compose.test.yaml` has no log limits; `HSTS_*` and `SEC_HEADER_*` are not passed through compose; the retention heartbeat marks a cycle begun, not finished | check each in the final verification, fix or justify | open |
+
+### Found by fuzz, drills and the tour (13 Nov)
+
+| Id | Finding | Fix | State |
+|---|---|---|---|
+| L-01 | [high] A stopped backend answered 504 with the 503 code: an `error_page` to a named location keeps the trigger's status | every edge `error_page` states `=NNN`; check-hardening enforces it | verified live (a7de107) |
+| L-02 | [high] A database paused 20 s cost the single-instance lock: the watcher's own deadline closed the lock session, the server exited and lost its in-memory state | no deadline on the lock ping; lost only when the connection is closed; `E_INSTANCE_LOCK_UNREACHABLE` once per outage | verified by the suite and live (6e6b21a) |
+| L-03 | [medium] A request stalled on the database lost its 503: statement deadline equal to the HTTP write timeout | request deadlines follow `SERVER_WRITE_TIMEOUT_SEC` minus a margin; background work keeps its limits | verified by the suite (a3c4007). Open: the bound is per statement, not per request |
+| L-04 | [medium] The agent reported an outage as a wrong-shaped answer | any 5xx is a passing failure | verified by the suite and live (6e6b21a) |
+| L-05 | [low] The agent warned `E_AGENT_STATE_REBUILT` on every start of an identity that never sent | counter file written with the identity | verified by the suite and live |
+| L-06 | [medium] JWT signatures could be re-spelled (unused bits, inserted line ends) and still verify | strict decoding, exact three base64url segments | verified by the suite (c18f3c6) |
+| L-07 | [low] Agent and browser trimmed message text differently (U+0085, U+FEFF) | one explicit trim set, pinned on both sides | verified by the suite (c18f3c6) |
+| L-08 | [low] Open: the registration screen shows no way back (no cancel button visible, Escape does nothing); `favicon.ico` answers 404 on every load; startup logs the active master-key id although ids were meant to stay out of logs | decide and fix | open |
+| L-09 | [low] Open: `frontend.sha256` is stale since the rename; `docker-compose.test.yaml` has no log limits; `HSTS_*` and `SEC_HEADER_*` are not passed through compose; the retention heartbeat marks a cycle begun, not finished | `make manifest` at release; fix or justify the rest | open |
 
 Feature (13 Nov): two doors. The main menu is the white human side; `robot` is a black door that
 judges whoever presses it in the page (pointer trail, or a SHA-256 question), walks a human back and
