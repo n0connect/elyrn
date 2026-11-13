@@ -9,7 +9,7 @@ This guide provides deep, situation-aware setup instructions across **macOS (App
 `elyrn.` is engineered to be portable and lightweight:
 - **Backend:** Go 1.26+ with one of two byte-for-byte equivalent crypto engines: OpenSSL 3.5 LTS through cgo (default) or the Go standard library (`ENGINE=native`, `CGO_ENABLED=0`); the image builds a stripped, reproducible static binary and runs it as an unprivileged user.
 - **Frontend:** Vanilla modern JavaScript using the native W3C WebCrypto API (no webpack, no npm bundle dependencies for runtime).
-- **Docker Images:** `golang:1.27.3-bookworm` (build), `debian:bookworm-slim`, `postgres:15-alpine` and `nginx:1.30-alpine` have official multi-architecture support for both `linux/amd64` and `linux/arm64`.
+- **Docker Images:** `golang:1.27.4-trixie` (build), `debian:trixie-slim`, `postgres:15-alpine` and `nginx:1.30-alpine` have official multi-architecture support for both `linux/amd64` and `linux/arm64`.
 
 | Architecture | Platform Examples | Build Support | Performance Notes |
 |---|---|---|---|

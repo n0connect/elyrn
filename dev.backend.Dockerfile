@@ -1,10 +1,10 @@
 # Backend image for either crypto engine (byte-for-byte equivalent, see docs/security/cryptography.md):
 #   ENGINE=openssl  libcrypto 3.5 LTS from Debian trixie through cgo (default)
 #   ENGINE=native   Go standard library crypto, static binary, CGO disabled
-# Go 1.27.3+ carries the crypto/x509 fix (GO-2026-6809).
+# Go 1.27.4+ carries the crypto/x509 fix (GO-2026-6809) and the net/http MaxBytesReader fix (GO-2026-6859).
 ARG ENGINE=openssl
 
-FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS builder
+FROM golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS builder
 ARG ENGINE
 
 # OpenSSL headers come from Debian's signed packages (no source download to verify by hand)

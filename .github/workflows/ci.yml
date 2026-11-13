@@ -10,14 +10,14 @@ on:
 permissions:
   contents: read
 
-# Go 1.27.3 everywhere (carries the crypto/x509 fix GO-2026-6809); the backend jobs run in
-# golang:1.27.3-trixie because Debian trixie ships OpenSSL 3.5 LTS (Ubuntu 24.04 has 3.0)
+# Go 1.27.4 everywhere (carries the crypto/x509 fix GO-2026-6809 and the net/http fix GO-2026-6859); the backend jobs run in
+# golang:1.27.4-trixie because Debian trixie ships OpenSSL 3.5 LTS (Ubuntu 24.04 has 3.0)
 jobs:
   backend:
     name: backend (${{ matrix.engine }})
     runs-on: ubuntu-24.04
     # Debian trixie carries OpenSSL 3.5 LTS; Ubuntu 24.04 still ships 3.0, below the engine's floor
-    container: golang:1.27.3-trixie
+    container: golang:1.27.4-trixie
     strategy:
       fail-fast: false
       matrix:
@@ -156,7 +156,7 @@ jobs:
   equivalence:
     name: crypto engines are byte-for-byte equivalent
     runs-on: ubuntu-24.04
-    container: golang:1.27.3-trixie
+    container: golang:1.27.4-trixie
     defaults:
       run:
         working-directory: backend
@@ -186,7 +186,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: backend/go.sum
       - name: govulncheck (reachable vulnerabilities only)
         working-directory: backend

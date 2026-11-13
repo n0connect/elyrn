@@ -7,6 +7,8 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Security
 
+- **Go 1.27.4.** Builds use Go 1.27.4 (GO-2026-6859, net/http HTTP/1 server crash in the
+  MaxBytesReader header race).
 - **nginx mirrors the input contract.** `/api/` was one prefix proxied whole, with a 1 MiB body
   limit. nginx now admits only the contract's routes (exact paths, canonical UUIDv4 segments),
   their methods and a body bound per route group at the smallest round size above the

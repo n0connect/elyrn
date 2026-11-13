@@ -149,7 +149,7 @@ resolve). Versions are unchanged; to move one, change the tag and digest togethe
 | Image | Used by |
 |---|---|
 | `postgres:15-alpine@sha256:a8e04259…` | `docker-compose.yaml`, `docker-compose.test.yaml` |
-| `golang:1.27.3-trixie@sha256:af1bfc26…` | `dev.backend.Dockerfile` (build stage), `test.Dockerfile` |
+| `golang:1.27.4-trixie@sha256:b54b2639…` | `dev.backend.Dockerfile` (build stage), `test.Dockerfile` |
 | `debian:trixie-slim@sha256:a72b4433…` | `dev.backend.Dockerfile` (runtime), `tor.Dockerfile` |
 | `nginx:1.30-alpine@sha256:583b7f2f…` | `dev.frontend.Dockerfile` |
 
