@@ -27,9 +27,16 @@ written. Ids are stable.
 - **Seen in a real browser on the rebuilt stack:** the ways back from login and registration,
   Escape, a left registration and a closed room panel leaving nothing behind, wrong pastes into
   every field, an account number refused as a message, six Enter presses sending once, favicon.
-- **14 Nov, uncommitted on `elyrn-dev`:** the changes recorded under *Found 14 Nov* below and
-  the documents that describe them. Written, compiled, not yet verified; a full verification run
-  is in progress and nothing of it is pushed until it passes.
+- **14 Nov, committed and pushed (`ba687d9`, `9f80e60`, `0c2b4c1`; `main` = `elyrn-dev`):** the
+  changes recorded under *Found 14 Nov* below and the documents that describe them. Verified
+  once on the whole tree: frontend 173 of 173, the containerized suite on both engines, engine
+  equivalence, `make check-hardening`, gitleaks, govulncheck, staticcheck on both tag sets,
+  gofmt; CI green on both commits' runs. The run found one defect in the round's own code
+  (`Counters.retention` listed whole records, not ids, for rooms expired long ago, so the
+  browser's prune would have failed); fixed before the commit. Tried in a real browser behind
+  the Cloudflare quick tunnel: messages arrive without leaving the tab (0.7 to 5 s), the
+  session cookie lives 30 days, a reload with the session answer delayed 3 s never shows the
+  main menu.
 - **Not verified:** `make onion` end to end; production-mode browser login after these changes;
   clock-jump and job-abandon exits (no honest test, no drill); friend requests, two tabs, storage
   warnings and the id-taken redraw in a real browser (tests only).
@@ -153,16 +160,16 @@ Undetermined: back-forward cache after logout, blocked IndexedDB upgrade, an unb
 
 | Id | Finding | Fix | State |
 |---|---|---|---|
-| C-20 | [high, security] The browser twin of A-09: a conversation left out of one listing, or a burn or leave answered `404`, removed its counter record, so a hostile server could hide a conversation once and replay it undetected | a record is dropped only on the user's own burn or leave answered `204`, or a day after the room's own expiry (the room is then never shown); at most `MAX_RECORDS` (1024), least recently used first, `W_COUNTER_RECORDS_EVICTED` once per page load (`counters.js`, `keystore.js`, `chat.js`) | written, compiled, not yet verified |
-| C-21 | [medium-high] Found behind a Cloudflare quick tunnel: the browser had no fallback when the event stream cannot be held (a proxy buffers it or keeps dropping it), so new messages appeared only on a tab switch, and after 8 failed reconnects updates stopped | the server sends a named `ping` event right after the preamble and every 25 s; a watchdog in `chat.js` polls about every 5 s while the tab is visible and the stream showed no event (5 s for a new stream, 60 s after one), decided by `streamNeedsPolling` in `utils.js`; `W_LIVE_STREAM_SILENT`, `W_LIVE_STREAM_GAVE_UP` | written, compiled, not yet verified |
-| C-22 | [medium] Open: the owner was logged out at once by a reload. Not reproduced in Chromium on localhost nor behind the tunnel; the browser used is unknown | suspect: a private window that cannot store a `CryptoKey` in IndexedDB | open |
-| D-19 | [medium] Behind the operator's own TLS proxy, nginx saw every request from that proxy: all users shared one rate-limit bucket (`429` for everyone on a busy instance) and the backend never saw HTTPS | `EDGE_TRUSTED_PROXIES`: `nginx-edge-proxies.sh` renders realip and a geo list at nginx start (a malformed list stops nginx); `X-Forwarded-For` and `X-Forwarded-Proto` are taken only from a listed peer (`$forwarded_proto`); `check-hardening.py` checks both | written, compiled, not yet verified |
-| D-20 | [low] `HSTS_*` never reached the backend in the Compose stack; `SEC_HEADER_*` could only disagree with nginx's fixed cross-origin headers | compose passes `HSTS_MAX_AGE`, `HSTS_INCLUDE_SUBDOMAINS`, `HSTS_PRELOAD` (off by default); `SEC_HEADER_*` removed, the backend's three headers fixed and hidden by nginx on `/api/` | written, compiled, not yet verified |
-| D-21 | [low] An invite's or a room note's stored expiry was creation time plus TTL to the second, so it told the second the row was made | expiry rounded up to the next whole hour (`expiryAfter`, `service.go`, `rooms.go`, `expiry_test.go`); rows stored earlier keep their exact expiry | written, compiled, not yet verified |
-| D-22 | [low] A login lookup the server could not compute (pepper, crypto engine) answered `401 Invalid credentials`, telling the user their only key was worthless | `E_LOGIN_LOOKUP_FAILED` is `500`; computed from the key alone before any account is read, so it tells no account from another | written, compiled, not yet verified |
-| D-23 | [low] `make shell-db` used fixed names (`postgres`, `noaddx`); `make agent` with the OpenSSL engine did not check for the OpenSSL headers before building; no target built an agent for another system | `shell-db` uses the container's `POSTGRES_USER` and `POSTGRES_DB`; `agent` checks OpenSSL >= 3.2 through `pkg-config` first; `agent-cross GOOS= GOARCH=` builds a static native-engine binary | written, compiled, not yet verified |
-| D-24 | [medium] Sessions ended after 15 minutes by default (`JWT_EXPIRATION_MINUTES` allowed 1 to 1440) | default 43200 minutes (30 days), range 1 minute to 365 days, sliding refresh after half the lifetime unchanged (D-2026-11-14-a) | written, compiled, not yet verified |
-| A-11 | [low] The agent answered a known room pasted with other limits with `E_AGENT_ROOM_CODE`, whose sentence says the code is malformed | its own code `E_AGENT_ROOM_CODE_ALTERED` and sentence (`roomentry.go`) | written, compiled, not yet verified |
+| C-20 | [high, security] The browser twin of A-09: a conversation left out of one listing, or a burn or leave answered `404`, removed its counter record, so a hostile server could hide a conversation once and replay it undetected | a record is dropped only on the user's own burn or leave answered `204`, or a day after the room's own expiry (the room is then never shown); at most `MAX_RECORDS` (1024), least recently used first, `W_COUNTER_RECORDS_EVICTED` once per page load (`counters.js`, `keystore.js`, `chat.js`) | verified 14 Nov (`ba687d9`) |
+| C-21 | [medium-high] Found behind a Cloudflare quick tunnel: the browser had no fallback when the event stream cannot be held (a proxy buffers it or keeps dropping it), so new messages appeared only on a tab switch, and after 8 failed reconnects updates stopped | the server sends a named `ping` event right after the preamble and every 25 s; a watchdog in `chat.js` polls about every 5 s while the tab is visible and the stream showed no event (5 s for a new stream, 60 s after one), decided by `streamNeedsPolling` in `utils.js`; `W_LIVE_STREAM_SILENT`, `W_LIVE_STREAM_GAVE_UP` | verified 14 Nov (`ba687d9`) |
+| C-22 | [medium] The owner saw the login screen after a reload. Cause found once he described it exactly: the session was not lost; `#mainMenu` was the one view painted by markup, so it showed until `/me` answered, and behind a slow link that read as a logout followed by a login | the page opens on a start view holding the brand line only; the main menu appears only when there is no stored identity, the session is refused, or the server cannot be reached (`leaveStartView`, `ui.js`; `boot`, `app.js`); without scripting the stylesheet shows the menu | verified 14 Nov (`0c2b4c1`), in a real browser behind the tunnel |
+| D-19 | [medium] Behind the operator's own TLS proxy, nginx saw every request from that proxy: all users shared one rate-limit bucket (`429` for everyone on a busy instance) and the backend never saw HTTPS | `EDGE_TRUSTED_PROXIES`: `nginx-edge-proxies.sh` renders realip and a geo list at nginx start (a malformed list stops nginx); `X-Forwarded-For` and `X-Forwarded-Proto` are taken only from a listed peer (`$forwarded_proto`); `check-hardening.py` checks both | verified 14 Nov (`ba687d9`) |
+| D-20 | [low] `HSTS_*` never reached the backend in the Compose stack; `SEC_HEADER_*` could only disagree with nginx's fixed cross-origin headers | compose passes `HSTS_MAX_AGE`, `HSTS_INCLUDE_SUBDOMAINS`, `HSTS_PRELOAD` (off by default); `SEC_HEADER_*` removed, the backend's three headers fixed and hidden by nginx on `/api/` | verified 14 Nov (`ba687d9`) |
+| D-21 | [low] An invite's or a room note's stored expiry was creation time plus TTL to the second, so it told the second the row was made | expiry rounded up to the next whole hour (`expiryAfter`, `service.go`, `rooms.go`, `expiry_test.go`); rows stored earlier keep their exact expiry | verified 14 Nov (`ba687d9`) |
+| D-22 | [low] A login lookup the server could not compute (pepper, crypto engine) answered `401 Invalid credentials`, telling the user their only key was worthless | `E_LOGIN_LOOKUP_FAILED` is `500`; computed from the key alone before any account is read, so it tells no account from another | verified 14 Nov (`ba687d9`) |
+| D-23 | [low] `make shell-db` used fixed names (`postgres`, `noaddx`); `make agent` with the OpenSSL engine did not check for the OpenSSL headers before building; no target built an agent for another system | `shell-db` uses the container's `POSTGRES_USER` and `POSTGRES_DB`; `agent` checks OpenSSL >= 3.2 through `pkg-config` first; `agent-cross GOOS= GOARCH=` builds a static native-engine binary | verified 14 Nov (`ba687d9`) |
+| D-24 | [medium] Sessions ended after 15 minutes by default (`JWT_EXPIRATION_MINUTES` allowed 1 to 1440) | default 43200 minutes (30 days), range 1 minute to 365 days, sliding refresh after half the lifetime unchanged (D-2026-11-14-a) | verified 14 Nov (`ba687d9`) |
+| A-11 | [low] The agent answered a known room pasted with other limits with `E_AGENT_ROOM_CODE`, whose sentence says the code is malformed | its own code `E_AGENT_ROOM_CODE_ALTERED` and sentence (`roomentry.go`) | verified 14 Nov (`ba687d9`) |
 
 Feature (13 Nov): two doors. The main menu is the white human side; `robot` is a black door that
 judges whoever presses it in the page (pointer trail, or a SHA-256 question), walks a human back and
@@ -179,9 +186,9 @@ maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 
 1. Stage 1 (Q-01..Q-04, S-01..S-05, S-09, F-01), the negative-use suites and the fuzz campaign
    are committed and were run at eb9b17e (State).
-2. Now: one full verification of the 14 Nov working tree (*Found 14 Nov*); fix its fallout; only
-   then commit and push.
-3. Then: the items still open above (S-07 decision, D-09, D-18 remainder, C-22) and what State
+2. Done 14 Nov: one full verification of the 14 Nov tree, its fallout fixed, committed and
+   pushed (State).
+3. Then: the items still open above (S-07 decision, D-09, D-18 remainder) and what State
    lists as not verified.
 
 ## Decisions
