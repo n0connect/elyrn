@@ -9,7 +9,7 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | Error Symptom | Root Cause | Quick Solution |
 |---|---|---|
 | `Pool overlaps with other one on this address space` | Another Docker network already uses `172.29.73.0/24`. | Pick a free range: set `COMPOSE_SUBNET` and `PROXY_IP` in `.env`. |
-| Everyone gets `429` on login or registration | The backend does not trust the proxy in front of it, so all users share its address. | Set `TRUSTED_PROXIES` to that proxy's address (see section 1). |
+| Everyone gets `429` on login or registration | Behind your own reverse proxy, nginx sees every request come from that proxy, so all users share its address. | List your proxy's address in `EDGE_TRUSTED_PROXIES`; see section 1. |
 | `TypeError: Cannot read properties of undefined (reading 'subtle')` | Accessing via non-secure HTTP on IP address (e.g. `192.168.x.x`). | Use `http://localhost` or configure HTTPS/TLS. |
 | `bash: \r: invalid command` | Git on Windows converted script line endings to CRLF. | `dos2unix Makefile` |
 | `bind: address already in use (port 80 or 5432)` | Port occupied by another local service (Apache, local Postgres). | `sudo lsof -i :80` or remap ports in `docker-compose.yaml`. |
@@ -23,7 +23,7 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | `make onion` stops with `requires APP_ENV=production` | The onion service publishes the instance; development mode is refused. | Set `APP_ENV=production` in `.env` ([Production Mode](../operations/configuration-and-tuning.md#production-mode)). |
 | `pool overlaps` after adding `BACKEND_IP` or changing `COMPOSE_SUBNET` | `PROXY_IP` and `BACKEND_IP` must lie inside `COMPOSE_SUBNET`, `TOR_IP` inside `EDGE_SUBNET`. | Move each range with its addresses in `.env`. |
 | `make onion`: `Invalid address 172.29.73.11` for tor | `.env` still sets the pre-split `TOR_IP`; tor now lives on `edge`. | `TOR_IP=172.29.72.11` (or delete the line). |
-| `curl localhost:8080` or `psql -p $DB_HOST_PORT` refused | Production layout: only nginx is published. | Use `http://localhost/api/...`, `make shell-db`; or run development (`APP_ENV=development`). See [Hardening](../operations/hardening.md#layouts). |
+| `curl localhost:8080` or `psql -p $DB_HOST_PORT` refused | Production layout: only nginx is published. | Use `http://localhost/api/...`, or `make shell-db` (psql inside the database container as `DB_USER` on `DB_NAME`); or run development (`APP_ENV=development`). See [Hardening](../operations/hardening.md#layouts). |
 | Backend killed with code `137` after raising Argon2id settings | `BACKEND_MEM_LIMIT` no longer holds `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. | Raise `BACKEND_MEM_LIMIT` (and `BACKEND_GOMEMLIMIT`); `make check-hardening` names the size. |
 
 ---
@@ -34,7 +34,7 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 `make up` fails with `Pool overlaps with other one on this address space`, or, behind your own reverse proxy, every user receives `429 Too Many Requests` after a handful of logins.
 
 ### Cause
-Rate limits are keyed by the client address. nginx reaches the backend from a fixed address on the compose network (`PROXY_IP`, default `172.29.73.10` in `COMPOSE_SUBNET` `172.29.73.0/24`), and the backend accepts `X-Forwarded-For`/`X-Real-IP` only from that address (`TRUSTED_PROXIES`). If the range is taken by another Docker network, compose cannot create it; if another proxy sits in front and is not trusted, every request appears to come from that proxy and all users share one rate-limit bucket.
+Rate limits are keyed by the client address. nginx reaches the backend from a fixed address on the compose network (`PROXY_IP`, default `172.29.73.10` in `COMPOSE_SUBNET` `172.29.73.0/24`), and the backend accepts `X-Forwarded-For`/`X-Real-IP` only from that address (`TRUSTED_PROXIES`). nginx sets both headers itself, to the client address as nginx sees it, and replaces whatever the request carried (`nginx-api-proxy.conf`). If the range is taken by another Docker network, compose cannot create it; if another proxy sits in front of nginx, nginx's client is that proxy unless nginx is told to trust it, and all users share one rate-limit bucket.
 
 ### Fix
 1. **Range collision:** choose a free private range in `.env`, keeping the proxy address inside it:
@@ -42,7 +42,7 @@ Rate limits are keyed by the client address. nginx reaches the backend from a fi
    COMPOSE_SUBNET=172.31.200.0/24
    PROXY_IP=172.31.200.10
    ```
-2. **Your own reverse proxy in front of nginx:** list its address (or CIDR) in `TRUSTED_PROXIES`, together with nginx's: `TRUSTED_PROXIES=172.29.73.10,10.0.0.5`. The backend reads `X-Forwarded-For` from the right and takes the first address that is not a trusted proxy.
+2. **Your own reverse proxy in front of nginx:** adding it to the backend's `TRUSTED_PROXIES` does not help: the backend trusts nginx alone, and nginx overwrites `X-Forwarded-For`. Set `EDGE_TRUSTED_PROXIES` in `.env` to your proxy's address as nginx sees it (a proxy on the same host: the gateway of `EDGE_SUBNET`, `172.29.72.1` by default) and run `make up`: nginx then takes the client address and protocol from that proxy alone. See [Deployment](../operations/deployment.md#4-tls-in-front-of-the-stack).
 
 ---
 

@@ -6,7 +6,7 @@ This document provides a comprehensive reference for all configuration parameter
 
 ## Environment Variables Reference
 
-All settings can be configured via `.env` or injected directly as environment variables into the container runtime. Every value is checked at startup against a whitelist or an inclusive range; the backend refuses to start on anything outside it (nothing is silently clamped or truncated).
+In the Compose stack the backend receives exactly the variables listed under `backend.environment` in `docker-compose.yaml`, each taken from `.env` (or the shell); a variable missing from that list never reaches the container, whatever `.env` says. Three are pinned there and not taken from `.env` at all: `DB_SSL_MODE` (`verify-full`), `PGSSLROOTCERT` (`/etc/elyrn/db-ca/ca.crt`) and `BACKEND_PORT` (`8080`); the database host comes from `DOCKER_DB_HOST`, not `DB_HOST`. A backend run outside Compose reads every variable below from its environment. `EDGE_TRUSTED_PROXIES` goes to nginx, not to the backend. Every value is checked at startup against a whitelist or an inclusive range; the backend refuses to start on anything outside it (nothing is silently clamped or truncated).
 
 ### 1. Cryptography & Security Secrets
 
@@ -16,7 +16,7 @@ All settings can be configured via `.env` or injected directly as environment va
 | `JWT_SECRET_MIN_LEN` | int | `32` | Minimum length for `JWT_SECRET` (32-1024; cannot be lowered below 32). |
 | `JWT_ISSUER` | string | `noaddx-backend` | `iss` claim checked on every JWT validation (the `noaddx` defaults are stored names kept across the rename to elyrn.). |
 | `JWT_AUDIENCE` | string | `noaddx-web` | `aud` claim checked on every JWT validation. |
-| `JWT_EXPIRATION_MINUTES` | int | `15` | Session lifespan (1-1440). Active sessions sliding-refresh past half-life. The token lives only in the HttpOnly cookie. |
+| `JWT_EXPIRATION_MINUTES` | int | `43200` | Session lifespan in minutes (1-525600, i.e. up to 365 days; default 30 days). A session used past half its lifetime is re-issued, so one used at least once every half-lifetime (15 days by default) never ends; logout and account deletion end it at once. The token lives only in the HttpOnly cookie. |
 | `MASTER_KEY_ACTIVE` | hex/base64 | *Generated* | Active 256-bit key: exactly 32 bytes as 64 hex characters or base64. Text passphrases are rejected. |
 | `MASTER_KEY_ACTIVE_ID` | string | *Generated* | Key id stored next to every record (`[A-Za-z0-9._-]`, 1-32 chars, e.g. `key-2026-01`). |
 | `MASTER_KEY_OLD` | string | *Empty* | Previous keys as `id1:key1,id2:key2`. Any malformed entry, repeated id or reuse of the active key stops startup. Records still under an old key are re-wrapped to the active key in the background; see the [rotation runbook](#master-key-rotation-runbook). |
@@ -55,7 +55,7 @@ At startup the backend checks these keys against the database before it serves a
 | `MAX_CONVERSATIONS_PER_USER` | int | `256` | Maximum conversations allowed per account (1-4096). Lowering it only stops new conversations; accounts already above it keep, burn and delete theirs. |
 | `MAX_MESSAGE_BYTES` | int | `8192` | Upper bound for one E2E ciphertext in a one-to-one conversation. Messages come in five padded sizes (284 to 4124 bytes), so values above 4124 change nothing; a lower value drops the larger sizes. Room messages are bounded by their structure instead (`ROOM_MAX_MEMBERS`). |
 | `MESSAGE_PAGE_LIMIT` | int | `200` | Maximum messages returned per fetch page (1-1000). |
-| `MESSAGE_TTL_DAYS` | int | `7` | Days to retain ciphertext before day-granular deletion (1-365). Lowering it also shortens what is stored: the retention run (every five minutes) caps every stored message at the new limit, counted from that run. Raising it never extends stored messages. |
+| `MESSAGE_TTL_DAYS` | int | `7` | Days to retain ciphertext before day-granular deletion (1-365): a message stored on UTC day D is kept until day D + `MESSAGE_TTL_DAYS` ends, so between `MESSAGE_TTL_DAYS` and `MESSAGE_TTL_DAYS` + 1 days. Lowering it also shortens what is stored: the retention run (every five minutes) caps every stored message at the new limit, counted from that run. Raising it never extends stored messages. |
 | `ROOM_MAX_MEMBERS` | int | `16` | Largest room a member may create (2-32). A room message carries one 48-byte wrap per member, so this also bounds its size (5810 bytes at 32); the server refuses to start if such a message would not fit in `MAX_REQUEST_BODY_BYTES`. Lowering it affects new rooms only. |
 | `ROOM_MAX_TTL_HOURS` | int | `168` | Longest room lifetime, in hours (1-720). The browser offers 1 hour, 1 day and 7 days within it. A room is deleted, with everything in it, at the hour its code names. |
 | `POW_DIFFICULTY` | int | `20` | Proof-of-work target leading zero bits (18-24). |
@@ -85,9 +85,9 @@ At startup the backend checks these keys against the database before it serves a
 | `DB_HOST_PORT` | int | `5432` | Loopback port PostgreSQL is published on, in development only (`docker-compose.dev.yaml`). The backend's 8080 likewise. |
 | `BACKEND_MEM_LIMIT` | size | `512m` | The backend container's memory (no swap). Keep it at least `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` + 128 MiB; `make check-hardening` checks it. |
 | `BACKEND_GOMEMLIMIT` | size | `448MiB` | Go runtime soft limit; keep it about 64 MiB under `BACKEND_MEM_LIMIT`. |
-| `SEC_HEADER_COOP` / `SEC_HEADER_CORP` / `SEC_HEADER_COEP` | string | `same-origin` / `same-origin` / `require-corp` | API isolation headers; `off` disables one (refused in production). Whitelisted values only (below). |
-| `HSTS_MAX_AGE` | int | *unset* | HSTS `max-age` in seconds on HTTPS API answers in production (0-63072000; a malformed value is refused, it no longer reads as 0). |
-| `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD` | bool | `false` | `true`/`false` (`1`/`0`, `yes`/`no`); anything else is refused. |
+| `EDGE_TRUSTED_PROXIES` | list | *empty* | Read by nginx, not the backend: your own TLS reverse proxies in front of nginx (comma-separated IPs/CIDRs, prefix 1 or more). Only a request whose TCP peer is listed may name the client (`X-Forwarded-For`) and the protocol (`X-Forwarded-Proto`, `http` or `https`). A proxy on the same host is seen from the gateway of `EDGE_SUBNET` (`172.29.72.1` by default): list exactly that address. A malformed list stops nginx at start. See [Deployment](deployment.md#4-tls-in-front-of-the-stack). |
+| `HSTS_MAX_AGE` | int | `0` (off) | HSTS `max-age` in seconds on HTTPS API answers in production (0-63072000; a malformed value is refused, it no longer reads as 0). |
+| `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD` | bool | `false` | `true`/`false` (`1`/`0`, `yes`/`no`); anything else is refused. `docker-compose.yaml` passes all three `HSTS_*` variables from `.env` to the backend. The cross-origin headers of API answers are fixed (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`, as nginx sends them), not settings; the `SEC_HEADER_*` variables of earlier releases are ignored. |
 
 ### 6. Server, Registration & Rate Limits
 
@@ -160,7 +160,7 @@ variable's **name** and its rule, never its value, and the process exits with st
 | `JWT_SECRET_MIN_LEN` | 32-1024 |
 | `JWT_SECRET` | at least `JWT_SECRET_MIN_LEN` characters |
 | `JWT_ISSUER`, `JWT_AUDIENCE` | non-empty |
-| `JWT_EXPIRATION_MINUTES` | 1-1440 |
+| `JWT_EXPIRATION_MINUTES` | 1-525600 |
 | `MASTER_KEY_ACTIVE` | 32 bytes, hex or base64 |
 | `MASTER_KEY_ACTIVE_ID` | `[A-Za-z0-9._-]{1,32}` |
 | `MASTER_KEY_OLD` | `id:key` entries, ids as above, no repeat, not the active id or key |
@@ -203,9 +203,6 @@ variable's **name** and its rule, never its value, and the process exits with st
 | `TRUSTED_PROXIES` | comma-separated IP addresses or CIDR ranges (may be empty); a bad entry is reported by its position |
 | `HSTS_MAX_AGE` | when set: 0-63072000 |
 | `HSTS_INCLUDE_SUBDOMAINS`, `HSTS_PRELOAD` | when set: `true`, `false`, `1`, `0`, `yes`, `no` |
-| `SEC_HEADER_COOP` | `same-origin`, `same-origin-allow-popups`, `unsafe-none`, or `off` (not in production) |
-| `SEC_HEADER_CORP` | `same-origin`, `same-site`, `cross-origin`, or `off` (not in production) |
-| `SEC_HEADER_COEP` | `require-corp`, `credentialless`, `unsafe-none`, or `off` (not in production) |
 
 `GOMEMLIMIT` is read by the Go runtime itself, which refuses a malformed value before the
 backend's code runs. Every other startup failure has its own code too (`E_SELFTEST`,
@@ -243,7 +240,7 @@ Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT`
 | Session cookie | `noaddx_session`, no `Secure` | `__Host-Session`, `Secure`, `HttpOnly`, `SameSite=Strict` |
 | Startup checks | ranges and whitelists | the same, plus `DB_SSL_MODE` `verify-ca`/`verify-full`, `DB_PASSWORD` >= 16 characters, `LOG_LEVEL` not `debug`, `ARGON2_MEMORY_KIB` >= 19456 |
 | Published ports | nginx, backend (8080) and PostgreSQL (`DB_HOST_PORT`) on loopback | nginx only ([Hardening](hardening.md#layouts)) |
-| HSTS | never | on API responses that arrived over HTTPS (`X-Forwarded-Proto: https` from a trusted proxy) |
+| HSTS | never | on API responses that arrived over HTTPS (`X-Forwarded-Proto: https` from nginx, which takes `https` from your own proxy only when it is listed in `EDGE_TRUSTED_PROXIES`), when `HSTS_MAX_AGE` is above 0 |
 | Startup log | `Starting elyrn. backend (development)` | `Starting elyrn. backend (production)` and `Production mode validation passed` |
 
 The Compose stack satisfies every production check as generated by `make setup` (the backend

@@ -86,8 +86,8 @@ also serialise their migrations on a second, transaction-level lock.
 Back up `.env` offline, **apart from** any copy of the database: together they reveal the
 social graph.
 
-Never back up messages, conversations or rooms. Messages expire after `MESSAGE_TTL_DAYS`, rooms
-at the hour their code names, and a burned conversation must stay gone; restoring a full dump
+Never back up messages, conversations or rooms. Messages expire by UTC day, `MESSAGE_TTL_DAYS`
+to `MESSAGE_TTL_DAYS` + 1 days after they were sent, rooms at the hour their code names, and a burned conversation must stay gone; restoring a full dump
 would bring them back. What is worth keeping is the accounts, so that users keep their
 identities after a lost disk:
 
@@ -140,7 +140,7 @@ retention mark is older than the clock, which is fine). It also rewinds two coun
 
 - `users.session_epoch`: logging out bumps it to revoke every session. A rollback restores the
   older value, so a session token issued before a logout that happened after the snapshot is
-  valid again until it expires (`JWT_EXPIRATION_MINUTES`, 15 by default). Replace `JWT_SECRET`
+  valid again until it expires (`JWT_EXPIRATION_MINUTES`, 30 days by default). Replace `JWT_SECRET`
   after such a rollback to end every session at once.
 - `users_id_seq` and each conversation's `last_seq`: they rewind with their tables, consistently,
   so ids are never reused within the restored data; clients that held newer message numbers see
@@ -175,7 +175,7 @@ Prefer the accounts backup; roll back a full volume only to undo damage to the v
 ### Sessions and the clock
 
 Session tokens carry `iat`, `nbf` and `exp` from the wall clock and are checked against it, so a
-clock jump affects sessions only, never data: a clock set **forward** past `exp` (15 minutes by
+clock jump affects sessions only, never data: a clock set **forward** past `exp` (30 days by
 default) ends every session (users log in again); a clock set **back** makes newly issued tokens
 look issued in the past, and tokens issued while the clock was ahead are refused as not yet
 valid (`nbf`) until the clock catches up, so those users log in again. Nothing is stored by

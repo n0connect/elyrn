@@ -22,7 +22,7 @@ This guide provides deep, situation-aware setup instructions across **macOS (App
 
 ### Prerequisites
 
-Install Docker Desktop (or OrbStack / Colima) and, for running tests natively or building `elyrn-agent`, Go 1.26 or newer (1.27.4 recommended: it carries the security fixes the images use) and Node.js 20+ (`brew install go node`). The system `openssl` is enough for `make setup`: it calls `openssl rand`, which LibreSSL implements with the platform CSPRNG, and `make certs` (the database TLS certificates) uses only `ecparam`, `req` and `x509`, which LibreSSL and OpenSSL both provide.
+Install Docker Desktop (or OrbStack / Colima), recent enough to run Docker Engine 28 or newer with Compose v2 (see the Linux section for why; `docker version` shows the Engine), and, for running tests natively or building `elyrn-agent`, Go 1.26 or newer (1.27.4 recommended: it carries the security fixes the images use) and Node.js 20+ (`brew install go node`). The system `openssl` is enough for `make setup`: it calls `openssl rand`, which LibreSSL implements with the platform CSPRNG, and `make certs` (the database TLS certificates) uses only `ecparam`, `req` and `x509`, which LibreSSL and OpenSSL both provide.
 
 Docker builds need nothing else: the OpenSSL engine compiles inside the image against Debian's OpenSSL 3.5 LTS. To run the **OpenSSL engine natively** (`make test-unit ENGINE=openssl`), install OpenSSL >= 3.2 development files and `pkg-config` (`brew install openssl@3 pkg-config`; Debian/Ubuntu: `apt install libssl-dev pkg-config`; on Ubuntu 22.04, whose OpenSSL is 3.0, use Docker or the native engine). The build stops with a clear error on older headers, and the binary refuses to start on an older runtime library.
 
@@ -34,6 +34,14 @@ Docker builds need nothing else: the OpenSSL engine compiles inside the image ag
 
 ## Linux Installation (Debian, Ubuntu, RHEL, Fedora, Arch)
 
+The stack needs **Docker Engine 28 or newer** and **Docker Compose v2** (`docker compose`): the
+internal networks set `com.docker.network.bridge.gateway_mode_ipv4=isolated`
+([Hardening](../operations/hardening.md#networks)), and the compose files and Makefile use the
+top-level `name:` key, `docker compose config --format json` and `up --wait`, which the old v1
+`docker-compose` does not understand. Distribution packages (`docker.io` on Debian and Ubuntu)
+often lag behind; check with `docker version` and `docker compose version`, and install from
+Docker's own repository when the Engine is older than 28.
+
 ### 1. Ubuntu / Debian
 
 ```bash
@@ -41,10 +49,13 @@ Docker builds need nothing else: the OpenSSL engine compiles inside the image ag
 sudo apt-get update
 
 # Install prerequisites
-sudo apt-get install -y openssl curl git ca-certificates
+sudo apt-get install -y openssl curl git ca-certificates make
 
-# Install Docker Engine & Docker Compose Plugin
-sudo apt-get install -y docker.io docker-compose-v2
+# Install Docker Engine and the Compose plugin from Docker's repository
+# (https://docs.docker.com/engine/install/), then check the versions:
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+docker version --format '{{.Server.Version}}'   # 28 or newer
+docker compose version                          # v2
 ```
 
 ### 2. Fedora / Red Hat / Rocky Linux

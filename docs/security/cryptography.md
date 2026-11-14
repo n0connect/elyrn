@@ -215,7 +215,7 @@ To prevent registration floods and Denial-of-Service attacks against server-side
 - **Timestamp:** issue time, Unix seconds.
 - **TTL:** `POW_CHALLENGE_TTL_SEC`, default 300 seconds (5 minutes). Single-use only.
 
-The browser runs no challenge harder than the server's maximum (24 bits): a harder one is refused before the worker starts, and the worker refuses it too. A proof of work still running after 5 minutes (the challenge lifetime) is abandoned, and logging out or leaving registration stops it; the worker is terminated either way.
+The browser runs no challenge harder than the server's maximum (24 bits): a harder one is refused before the worker starts, and the worker refuses it too. A proof of work still running after 5 minutes is abandoned (`E_POW_TIMEOUT`; `POW_TIMEOUT_MS` in `frontend/js/auth.js`, a fixed constant equal to the default `POW_CHALLENGE_TTL_SEC` of 300 seconds: an instance with another challenge lifetime does not change it), and logging out or leaving registration stops it; the worker is terminated either way.
 
 ### Stateless Issuing
 Issuing a challenge stores nothing on the server, so the free, unauthenticated challenge endpoint

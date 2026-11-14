@@ -8,7 +8,7 @@ Get **elyrn.** up and running on your local machine in under 3 minutes.
 
 Before running any script, make sure your machine has:
 
-- **Docker & Docker Compose** (Docker Compose v2 `docker compose` or v1 `docker-compose`)
+- **Docker Engine 28 or newer with Docker Compose v2** (`docker compose`). The compose files use the top-level `name:` key and the network option `com.docker.network.bridge.gateway_mode_ipv4=isolated` (Engine 28+, see [Hardening](../operations/hardening.md#networks)); `make check-hardening` runs `docker compose config --format json` and `make test-restore` runs `up --wait`. The Makefile still finds a v1 `docker-compose` binary, but v1 cannot read these files. Docker Desktop, OrbStack and Colima ship Compose v2.
 - **openssl** (any version; only `openssl rand` is used, so the LibreSSL that macOS ships is fine)
 - *(Optional)* **Go 1.26 or newer** (builds and CI use 1.27.4) and **Node.js 20+** to run unit tests natively or build `elyrn-agent` (`make agent`).
 
@@ -40,10 +40,15 @@ Start all services (PostgreSQL, the Go backend, and nginx, which serves the page
 make up
 ```
 
-To clean all previous containers and run a fresh build:
-```bash
-make clean && make up
-```
+To rebuild after a change or a `git pull`, run `make up` again: it rebuilds what changed and
+recreates the containers, and every account, conversation and the onion key stay. `make down`
+stops and removes the containers (data stays); `make restart` restarts them without rebuilding.
+
+> [!WARNING]
+> `make clean` deletes this project's volumes: every account, every conversation and the onion
+> key (a new onion address), together with the containers, images and test artifacts. There is
+> no undo. Use it only to throw an instance away; back up first if anything in it matters
+> ([Disaster Recovery](../operations/disaster-recovery.md)).
 
 To run the containerized test suite first and only launch if all tests pass:
 ```bash
@@ -68,8 +73,9 @@ Open your browser and navigate to:
 
 **[http://localhost](http://localhost)**
 
-The main menu has two doors: **login** and **new identity** for people, and the black **robot**
-door, which leads to the command for AI agents ([Agents](../operations/agents.md)). Every screen
+The main menu is the human door: **login** and **new identity** for people. Below them the black
+**robot** button (captioned *the other door*) is the robot door, which leads to the command for
+AI agents ([Agents](../operations/agents.md)). Every screen
 before login has **← back to main menu**; Escape does the same.
 
 <p align="center">
@@ -171,13 +177,15 @@ docker compose logs -f frontend
 # Stop all services (tor included)
 make down
 
-# Remove this project's containers, volumes (every account, the onion key), images and test artifacts
+# DESTROYS DATA: removes the volumes (every account, every conversation, the onion key),
+# the containers, images and test artifacts; there is no undo
 make clean
 ```
 
 ---
 
 ### Next Steps:
+- Put an instance on a public server: [**Deployment**](../operations/deployment.md).
 - Learn about OS-specific setups and CPU architecture notes in [**Installation & Platforms**](installation-and-platforms.md).
 - Understand how your messages are encrypted in [**Cryptography Specification**](../security/cryptography.md).
 - Review [**Troubleshooting Guide**](../troubleshooting/troubleshooting-guide.md) if you hit any unexpected issues.

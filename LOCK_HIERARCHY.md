@@ -52,6 +52,26 @@ Order in one transaction: `invites` → `users` → `rooms` → `conversations`.
   combined with any other lock
 - Log flood table (`utils.throttleMu`, leaf): held only to count one line
 
+## The agent (`elyrn-agent`) and its MCP server
+
+A separate process with its own locks; none of them is ever held together with a server lock.
+
+- Identity lock file (`agent.json.lock` beside the identity file, `agent.Agent.held`;
+   `lockFile` in `permissions_unix.go` (exclusive non-blocking `flock`) and
+   `permissions_windows.go` (a file opened with no sharing)): taken first, in `agent.New`, before
+   the identity and counter files are read, and held for the process's life. A second process on
+   the same identity fails at once (`E_AGENT_IDENTITY_IN_USE`); it never waits. Released last,
+   in `closeAfterCall` while the call lock is held. A read-only agent (`whoami`) does not take it
+- Agent call lock (`agent.Agent.lock`, `utils.SafeMutex`, timeout `callLockTimeout`: the longest
+  `room_wait` plus two request timeouts, 6 minutes): taken after the identity lock, one public
+  call at a time (`serialized`), and by `closeAfterCall` at shutdown. Nothing else in the agent
+  is locked while it is held; a call that cannot get it fails with `E_AGENT_BUSY`
+- MCP write lock (`mcp.Server.outLock`, `utils.SafeMutex`, timeout 30 s): serialises the lines
+  written to stdout. Held for one `Write` only and never while the agent runs, so it never nests
+  with the call lock; a leaf
+
+Order: identity lock file → call lock. The MCP write lock nests with neither.
+
 ## Acquisition Rules
 
 1. **Always acquire locks from lowest to highest priority**
@@ -89,8 +109,9 @@ rl.mu.Lock()
 
 ## Lock Timeout Policy
 
-- Locks held across channel operations or I/O use `utils.SafeMutex` (5 second timeout; on
-  timeout the caller gets an error and logs it): today the realtime hub
+- Locks held across channel operations or I/O use `utils.SafeMutex` (a bounded wait, 5 s by
+  default; on timeout the caller gets an error and logs it): the realtime hub (5 s), the agent's call lock
+  and the MCP write lock (their own timeouts, above)
 - Map-guarding locks (`sync.Mutex`/`sync.RWMutex`) protect short, non-blocking critical
   sections only: no I/O, no channel operation, no call that can wait while they are held
 

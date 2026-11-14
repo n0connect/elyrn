@@ -85,7 +85,7 @@ make test-all
 
 **Requirements:** Node.js 20+ (utilizes native `node:crypto` and built-in test runner, zero npm dependencies).
 
-`frontend/tests/` holds 19 test files with 161 tests: nine unit files (`crypto`, `room-crypto`,
+`frontend/tests/` holds 19 test files with 162 tests: nine unit files (`crypto`, `room-crypto`,
 `rooms`, `counters`, `errors`, `utils`, `validation`, `pow-worker`, `robot-door`) and the three
 negative-use files (Option E), plus seven seeded fuzz files (`*.fuzz.test.mjs`, Option D).
 `crypto.test.mjs` alone checks, among others:
@@ -106,7 +106,7 @@ negative-use files (Option E), plus seven seeded fuzz files (`*.fuzz.test.mjs`, 
 |---|---|---|
 | Go test functions | 330 (114 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
 | Go fuzz targets | 76 | `python3 -I scripts/check-fuzz-targets.py --list \| wc -l` |
-| Frontend tests | 161 in 19 files | `node --test frontend/tests/*.test.mjs` |
+| Frontend tests | 162 in 19 files | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
 
 ---
 
@@ -237,8 +237,8 @@ Inside the app:
 - Room · a member list missing yourself or marking another card `mine` (proxy) · `E_ROSTER_UNVERIFIED`; sending is refused.
 - Room · a friend request whose text is a room code or an account number · accept gives `E_FRIEND_REQUEST_MALFORMED` and the note is dismissed.
 - Any screen · log out while an invite or a room is being created · the panels close; no code is revealed or copied afterwards.
-- App home · press `new invite`, then during the mask or reveal animation log out, or open `join` (closing the invite panel) · `#inviteCode` stays empty with none of `generating`, `masking`, `revealed`, a few seconds later too; the clipboard is unchanged; pressing `new invite` again works.
-- App home · press create room, then during the mask or reveal animation press cancel, or `new room` again (reopening the form), or log out · `#roomCode` stays empty with a clean class list, a few seconds later too; the clipboard is unchanged; after cancel or `new room` the room still appears in the list (its code panel shows the code).
+- App home · press `+ invite`, then during the mask or reveal animation log out, or open `join` (closing the invite panel) · `#inviteCode` stays empty with none of `generating`, `masking`, `revealed`, a few seconds later too; the clipboard is unchanged; pressing `+ invite` again works.
+- App home · press `+ room`, then `open room`, then during the mask or reveal animation press `cancel`, or `+ room` again (reopening the form), or log out · `#roomCode` stays empty with a clean class list, a few seconds later too; the clipboard is unchanged; after `cancel` or `+ room` the room still appears in the list (its `code` button shows the code).
 - Any screen · back, then the browser's forward (bfcache) · the session is checked again (`/me`); a revoked one goes to login with `W_SESSION_ENDED`.
 
 ### Option F: Restore Drill
@@ -276,13 +276,14 @@ All code modifications must strictly comply with project policies:
 - Sensitive key material in memory must be zeroized upon deallocation (`cryptoengine.Zeroize`).
 
 ### 2. Lock Ordering & Concurrency (`LOCK_HIERARCHY.md`)
-To prevent deadlocks, all mutex acquisitions must strictly proceed from lowest to highest priority:
+To prevent deadlocks, locks are acquired from lowest to highest priority. [LOCK_HIERARCHY.md](../../LOCK_HIERARCHY.md) lists every lock with its level; in short:
 
-- **Priority Level 1 (Application State):** Rate limiter maps, PoW challenge maps, `realtime.Hub.mu` (leaf lock), `pendingStore.mu` (leaf lock).
-- **Priority Level 2 (Per-Resource Locks):** `TokenBucket.mu`.
-- **Priority Level 3 (Highest):** Database transaction locks (GORM), `masterKeyOnce`.
+- **Priority Level 1 (Application State):** the rate limiter map, the PoW per-client limiters and spent set, `realtime.Hub.mu` (leaf), `pendingStore.mu` (leaf).
+- **Priority Level 2 (Per-Resource Locks):** `TokenBucket.mu` and the per-client PoW limiters.
+- **Priority Level 3 (Highest):** database row locks in one order per transaction (`invites` → `users` → `rooms` → `conversations`), the advisory locks, `masterKeyOnce` and the master key use lock.
+- **The agent:** the identity lock file before the call lock; the MCP write lock nests with neither.
 
-**Rule:** Never acquire a lower-priority lock while holding a higher-priority lock!
+**Rule:** never acquire a lower-priority lock while holding a higher-priority lock. A new lock is listed in `LOCK_HIERARCHY.md` with its level.
 
 ### 3. Input Triple Validation (`RULES.md Section 5.1`)
 Every external client input must pass:

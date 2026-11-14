@@ -44,6 +44,7 @@ Two conditions of the design, stated once: every key is derived again from the a
 - **[REST API Reference](docs/api/rest-api.md)** — Every `/api/v2/*` endpoint with its JSON, error codes and Server-Sent Events
 - **[Input Contract](docs/api/input-contract.md)** — The generated whitelist of every method, query, body bound and field
 - **[Configuration & Tuning](docs/operations/configuration-and-tuning.md)** — Every environment variable, master key rotation with re-wrapping, Argon2id memory tuning
+- **[Deployment](docs/operations/deployment.md)** — Putting an instance on a public server: `.env` for production, TLS in front, upgrades, backups, what to monitor
 - **[Onion Service (Tor)](docs/operations/onion-service.md)** — `make onion`, per-circuit abuse control, onion key custody
 - **[Disaster Recovery](docs/operations/disaster-recovery.md)** — What each failure does, startup refusals, accounts-only backups and the restore drill
 - **[Container Hardening](docs/operations/hardening.md)** — Capabilities, read-only roots, split networks, nginx's `/api/` whitelist, `make check-hardening`
@@ -59,14 +60,14 @@ Two conditions of the design, stated once: every key is derived again from the a
 - **Client-Side E2E Encryption:** messages are encrypted in the browser with WebCrypto (X25519 + HKDF-SHA256 + AES-256-GCM) and padded to one of five sizes (256 to 4096 bytes); the server accepts no other size.
 - **Graph Unlinkability:** every participant has a distinct HMAC tag per conversation, so a full database dump without the server's keys (`.env`) cannot tell whether one user is in two conversations.
 - **Rooms:** code-based group conversations for people and agents who do not know each other. The creator picks how many people a room holds and how long it lives; only holders of its 256-bit code can join, and the server never sees the code. Each message is encrypted for exactly the members the sender sees and authenticates the sender; members appear under a different key and name in every room. A member can send another a friend request that only they can open. See [Rooms](docs/architecture/rooms.md).
-- **Two Doors:** the main menu is the white door for people (login, new identity); `robot` is the black door that leads to the command for agents. The door's check is theatre: it gates nothing and sends nothing.
+- **Two Doors:** the main menu is the human door (login, new identity); `robot`, captioned *the other door*, is the black robot door that leads to the command for agents. The door's check is theatre: it gates nothing and sends nothing.
 - **Robot Entrance:** AI agents (Claude or any MCP client, on any machine) join rooms through `elyrn-agent` as ordinary accounts, with the same proofs of work and the same end-to-end encryption; the server cannot tell them from people. See [Robot Entrance](#robot-entrance).
-- **Replay Detection:** every message carries an encrypted per-sender counter. Each device (browser or agent) remembers, per conversation, the highest counters it saw, so a message the server withholds, replays or reorders is flagged, also across reloads and restarts.
-- **Erasable by Design:** messages expire after `MESSAGE_TTL_DAYS` (default 7), **burn** erases a conversation for both sides, and **delete** erases a whole identity, re-proven by its account number.
+- **Replay Detection:** every message carries an encrypted per-sender counter. Each device (browser or agent) remembers, per conversation, the highest counters it saw, so a message the server withholds, replays or reorders is flagged, also across reloads and restarts. A device drops a record only on its own burn or leave, once a room's own expiry is more than a day past, or beyond 1024 records (a browser drops the least recently used first, an agent the rooms that expire soonest); a server that leaves a conversation out of a listing does not reset it. The limits are listed in the [threat model](docs/security/threat-model.md#known-limitations).
+- **Erasable by Design:** messages expire by UTC day, `MESSAGE_TTL_DAYS` (default 7) to `MESSAGE_TTL_DAYS` + 1 days after they were sent; **burn** erases a conversation for both sides, and **delete** erases a whole identity, re-proven by its account number.
 - **Anonymous Transport:** `make onion` publishes the app as a Tor onion service. Rate limits, proofs of work (registration, every invite and every room) and connection caps apply per Tor circuit.
 - **Verifiable Client:** each release signs the hashes of every frontend file; `make verify-frontend` checks what an instance serves.
 - **One Input Contract:** every route admits exactly what one table declares (methods, query, content type, body bound, each field by an anchored pattern), and nginx mirrors it as a default-deny whitelist; [the contract](docs/api/input-contract.md) is generated from the table.
-- **Hardened Containers:** every service drops all capabilities it does not need, runs read-only as an unprivileged user with bounded resources, on split networks where the backend and the database have no internet; the backend talks to PostgreSQL over TLS 1.3 with the certificate verified. `make check-hardening` keeps it so.
+- **Hardened Containers:** every service drops all capabilities it does not need, runs read-only as an unprivileged user with bounded resources, on split networks; in production (`APP_ENV=production`) only nginx is published and the backend and the database have no internet (the development layout also publishes both on loopback and gives them a host-reachable network). The backend talks to PostgreSQL over TLS 1.3 with the certificate verified. `make check-hardening` keeps it so.
 - **Zero Telemetry:** no access logs, no stored IP addresses, master keys zeroized on shutdown.
 - **Fails Safe:** the backend refuses to start with keys that cannot open its database, a newer schema or a second instance on the same database; a database outage answers `503` on every route (never "invalid credentials", never a logout); it completes master key rotation by re-wrapping every old record and keeps an account number valid through outages; retried sends and signups never duplicate. See [Disaster Recovery](docs/operations/disaster-recovery.md).
 - **Two Equivalent Crypto Engines:** the backend builds against OpenSSL (default) or the Go standard library (`ENGINE=native`), proven byte-for-byte equivalent by a differential suite and a startup self-test.
@@ -159,16 +160,16 @@ The message ID is a client-generated UUIDv4 bound into the AAD. A ciphertext can
 
 | Table | Columns Stored | Readable Without Master Key / Pepper? |
 |---|---|---|
-| `users` | `uuid`, `account_lookup`, `account_hash`, `public_key`, `session_epoch`, `encrypted_key`, `master_key_id`, `conv_index_enc` | **Public key only**. Account number cannot be derived. No creation or update timestamps exist. |
-| `invites` | `lookup` (HMAC), `creator_tag` (HMAC), `creator_ref_enc` (AES-GCM), `master_key_id`, `expires_at` | **Expiry, and how many open invites one unnamed creator holds**. Token and creator reference are unreadable. |
+| `users` | `id` (serial), `uuid`, `account_lookup`, `account_hash`, `public_key`, `session_epoch`, `encrypted_key`, `master_key_id`, `conv_index_enc` | **The public key, the order in which accounts registered (serial `id`) and how often each logged out (`session_epoch`)**. Account number cannot be derived. No creation or update timestamps exist. |
+| `invites` | `lookup` (HMAC), `creator_tag` (HMAC), `creator_ref_enc` (AES-GCM), `master_key_id`, `expires_at` | **Expiry, rounded up to the whole hour (and so the creation hour), and how many open invites one unnamed creator holds**. Token and creator reference are unreadable. |
 | `conversations` | `id` (UUIDv4), `last_seq` | That a conversation exists and how many messages it has had; participants remain anonymous. |
 | `conversation_members` | `conversation_id`, `member_tag` (HMAC per conversation), `member_ref_enc` (AES-GCM), `master_key_id`, `peer_key_enc` (AES-GCM), `read_seq`, `card`, `vault`, `joined_seq` (rooms) | **Read and join sequence numbers only**. Member tags are unique per conversation; cards and vaults are sealed by keys the server never sees. |
 | `rooms` | `id`, `lookup` (HMAC), `max_members`, `expires_at` (hour), `owner_tag` | That a room exists, its seat limit and its deletion hour. Not the code, not the members. |
-| `room_notes` | `sender_tag`, `recipient_tag`, `blob` (sealed), `expires_at` | That one member sent another a friend request in that room. |
-| `messages` | `conversation_id`, `seq` (per-conversation atomic counter), `id` (UUIDv4), `sender_tag`, `ciphertext`, `expires_on` (UTC day) | **Nothing about content**. Every ciphertext has one of five padded sizes; ordering is scoped to the conversation. |
+| `room_notes` | `sender_tag`, `recipient_tag`, `blob` (sealed), `expires_at` | That one member sent another a friend request in that room, and in which hour (its expiry is rounded up to the whole hour). |
+| `messages` | `conversation_id`, `seq` (per-conversation atomic counter), `id` (UUIDv4), `sender_tag`, `ciphertext`, `expires_on` (UTC day) | **Nothing about content**; the UTC day each message was sent. Every ciphertext has one of five padded sizes; ordering is scoped to the conversation. |
 | `key_checks` | `pepper`, `pepper-floor`, `schema-version`, `retention-clock` | A commitment to the pepper, the schema version and the last retention pass. |
 
-With `.env` (master key and pepper) the operator can link accounts to their conversations; see the [threat model](docs/security/threat-model.md).
+With `.env` (master key and pepper) the operator can link accounts to their conversations; see the [threat model](docs/security/threat-model.md). The backend connects to PostgreSQL as its bootstrap superuser, so a compromised backend holds every right in the database (open by decision, D-09; see [Hardening](docs/operations/hardening.md#known-limits)).
 
 ### Memory Zeroization on Shutdown
 Upon receiving `SIGINT` or `SIGTERM`, the server ends SSE streams, gives in-flight requests 10 s and background jobs 5 s more, closes the database and its single-instance lock, and only then overwrites the master keys with zeros (`encryption.Close`); a request that arrives after that is refused with `503` instead of sealing anything under a zeroized key.
@@ -184,17 +185,18 @@ The project uses a standard `Makefile` for container management and test automat
 make setup        # Generate .env with fresh cryptographic keys, then make certs
 make certs        # Create or renew the database TLS certificates in certs/ (never touches .env or data)
 make build        # Build Docker service images (ENGINE=openssl by default, or ENGINE=native)
-make up           # Start all services in the background (same ENGINE choice)
+make up           # Build what changed and start all services in the background (same ENGINE choice); data stays
 make onion        # Like up, and publish the app as a Tor onion service (opt-in)
 make onion-address # Print the .onion address
 make down         # Stop and remove containers (tor included)
 make restart      # Restart containers
 make logs         # Tail live container logs
 make ps           # Check container status
-make clean        # Remove this project's containers, volumes (onion key included), images and test artifacts
+make clean        # DESTROYS DATA: removes containers, images, test artifacts and the volumes: every account,
+                  # every conversation and the onion key. To rebuild without losing data: make up
 make check-hardening  # Fail unless the rendered compose config keeps every container control
 make shell-backend    # A shell inside the backend container
-make shell-db         # psql inside the database container
+make shell-db         # psql inside the database container, as the configured DB_USER on DB_NAME
 
 # Run test suites
 make test         # Complete Go suite (incl. database + integration) for ENGINE against a disposable PostgreSQL
@@ -222,7 +224,9 @@ make verify-frontend URL=https://host # check an instance serves exactly those b
 make backup-accounts                  # accounts only (never messages) to backups/, apart from .env
 
 # Agents
-make agent                            # bin/elyrn-agent for this machine (see docs/operations/agents.md)
+make agent                            # bin/elyrn-agent for this machine (see docs/operations/agents.md); ENGINE=openssl needs OpenSSL >= 3.2 headers
+make agent ENGINE=native              # the same without cgo or OpenSSL
+make agent-cross GOOS=linux GOARCH=arm64  # a static native-engine agent for another system: bin/elyrn-agent-linux-arm64
 ```
 
 ---

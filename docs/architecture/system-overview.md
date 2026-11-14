@@ -14,11 +14,16 @@
 |  - IndexedDB Keystore: non-extractable CryptoKey storage               |
 |  - Web Worker: Proof of Work (PoW) SHA-256 hashcash solver             |
 +-----------------------------------+------------------------------------+
-                                    | HTTPS (same-origin), or over Tor (make onion):
-                                    | Tor -> tor container -> :8081 (one PROXY id per circuit)
+                                    | Same origin, plain HTTP to 127.0.0.1:HTTP_PORT:
+                                    | locally http://localhost; publicly, HTTPS ends at
+                                    | the operator's own TLS proxy in front of the stack.
+                                    | Or over Tor (make onion): Tor -> tor container
+                                    | -> :8081 (one PROXY id per circuit)
                                     v
 +------------------------------------------------------------------------+
 |                       NGINX (Reverse Proxy)                            |
+|  - Plain HTTP only: :8080 inside, 127.0.0.1:HTTP_PORT on the host;     |
+|    TLS is terminated in front of the stack, never here                 |
 |  - Static SPA file server (/usr/share/nginx/html)                      |
 |  - Zero Telemetry: access logs disabled, error logs restricted to crit |
 |  - Strict CSP + Trusted Types policy ('noaddx-worker')                 |
@@ -203,7 +208,7 @@ AAD = "NADM" (4 bytes)
 1. **Per-Conversation Member Tags:** In `conversation_members`, `member_tag` is an HMAC of `userUUID || convID` under the pepper subkey `noaddx/conversation-tag`. A user has completely different, unlinkable tags across their conversations.
 2. **Per-Conversation Sequence Numbers:** `messages.seq` is generated atomically via `tx.NextSeq(conversationID)`. It is **not** a global counter.
 3. **No User Timestamps:** The `users` table contains zero `created_at` or `updated_at` columns.
-4. **Day-Granular Retention (`ExpiresOn`):** Messages store `ExpiresOn` (UTC date truncated to 00:00:00). No fine-grained send timestamps are kept in the database.
+4. **Day-Granular Retention (`ExpiresOn`):** Messages store `ExpiresOn` (UTC date truncated to 00:00:00): the day of storage plus `MESSAGE_TTL_DAYS`. A message is served and kept while `expires_on` is today or later, so it lives more than `MESSAGE_TTL_DAYS` and at most `MESSAGE_TTL_DAYS` + 1 days. No fine-grained send timestamps are kept in the database.
 
 ---
 
@@ -212,7 +217,7 @@ AAD = "NADM" (4 bytes)
 Ciphertexts do not live forever. The backend launches a supervised background goroutine:
 - **Interval:** Runs immediately on startup, then every **5 minutes** (rooms expire on the hour and should not linger).
 - **Clock check:** a cycle in which the wall clock moved differently from the time that passed, or is behind the last pass (`retention-clock` in `key_checks`), deletes nothing and logs `E_CLOCK_JUMP`; reads never serve an expired message either way.
-- **Configuration:** `MESSAGE_TTL_DAYS` (default: 7 days, maximum: 365 days).
+- **Configuration:** `MESSAGE_TTL_DAYS` (default: 7 days, maximum: 365 days). A message stored on UTC day D gets `expires_on = D + MESSAGE_TTL_DAYS` and is deleted once that day has ended, so it lives between `MESSAGE_TTL_DAYS` and `MESSAGE_TTL_DAYS` + 1 days.
 - **Purge Operation:** Caps every stored `expires_on` at `today_utc + MESSAGE_TTL_DAYS` (so a lowered setting also shortens what is stored), then deletes all messages where `expires_on < today_utc`, all unredeemed invites and room notes where `expires_at <= now_utc`, and every room past its `expires_at` with all its members, messages and notes. An expired room already stops answering at that instant; the purge only removes its rows.
 - **Client Visibility:** `GET /api/v2/me` returns `message_ttl_days` so the client UI can inform the user of room ephemerality.
 
@@ -238,12 +243,14 @@ data: {"c": "f47ac10b-58cc-4372-a567-0e02b2c3d479"}
 event: conv
 data: {}
 
-: ping
+event: ping
+data: {}
 ```
 
 - When a message arrives, the server emits a lightweight poke containing only the `conversation_id`.
 - The client receives the poke and refetches the message list via authorized `GET /api/v2/conversations/{id}/messages`.
 - **Advantage:** Exactly one authorized code path evaluates access control and message decryption.
+- `ping` is the heartbeat: once right after the `: ready` preamble, then every 25 seconds. It is a named event so the browser can observe it: a new stream that shows nothing within 5 seconds, or a proven one silent for 60 seconds (a proxy buffering or holding it), makes the visible tab poll the same refetch path about every 5 seconds until an event arrives again.
 
 ---
 

@@ -27,6 +27,9 @@ written. Ids are stable.
 - **Seen in a real browser on the rebuilt stack:** the ways back from login and registration,
   Escape, a left registration and a closed room panel leaving nothing behind, wrong pastes into
   every field, an account number refused as a message, six Enter presses sending once, favicon.
+- **14 Nov, uncommitted on `elyrn-dev`:** the changes recorded under *Found 14 Nov* below and
+  the documents that describe them. Written, compiled, not yet verified; a full verification run
+  is in progress and nothing of it is pushed until it passes.
 - **Not verified:** `make onion` end to end; production-mode browser login after these changes;
   clock-jump and job-abandon exits (no honest test, no drill); friend requests, two tabs, storage
   warnings and the id-taken redraw in a real browser (tests only).
@@ -35,21 +38,21 @@ written. Ids are stable.
 
 | Id | Class | Finding | Fix | State |
 |---|---|---|---|---|
-| S-01 | security | Room messages name the sender by a 12-bit aura name; a code holder grinds a lookalike offline in ~4,096 tries | glyph + name + code on every message, warning on equal names | being written |
-| S-02 | availability | Every login runs Argon2id in 4 global slots with no proof of work; busy slots answer 503 to everyone | verify login by the keyed lookup in constant time, no Argon2id | written, unverified |
-| S-03 | availability | One global pool of 50,000 outstanding PoW challenges, filled by free requests | stateless signed challenges; store only used ones | written, unverified |
-| S-04 | availability | One global cap of 4,096 event streams | per-party share: 16 streams per network (`middleware.ClientKey`) beside 4 per account | written, unverified |
-| S-05 | integrity | After a reload the client forgets seen ids and counters: a malicious server can replay or reorder | persist last counters per conversation and sender in IndexedDB | written, unverified |
+| S-01 | security | Room messages name the sender by a 12-bit aura name; a code holder grinds a lookalike offline in ~4,096 tries | glyph + name + code on every message, warning on equal names | committed (ba751e3, 44a1b39); in the tree of the full verification at eb9b17e (State) |
+| S-02 | availability | Every login runs Argon2id in 4 global slots with no proof of work; busy slots answer 503 to everyone | verify login by the keyed lookup in constant time, no Argon2id | committed (1c8f95a, 7938ecc); in the tree of the full verification at eb9b17e (State) |
+| S-03 | availability | One global pool of 50,000 outstanding PoW challenges, filled by free requests | stateless signed challenges; store only used ones | committed (bd0e0c9, 743a409); in the tree of the full verification at eb9b17e (State) |
+| S-04 | availability | One global cap of 4,096 event streams | per-party share: 16 streams per network (`middleware.ClientKey`) beside 4 per account | committed (f5efb72); in the tree of the full verification at eb9b17e (State) |
+| S-05 | integrity | After a reload the client forgets seen ids and counters: a malicious server can replay or reorder | persist last counters per conversation and sender in IndexedDB | committed (2817a33, 649dfdc); in the tree of the full verification at eb9b17e (State). When a record may be dropped: C-20 |
 | S-06 | deployment | Compose cannot run `APP_ENV=production` (bundled PostgreSQL has no TLS), so onion instances run in development mode | TLS between backend and bundled PostgreSQL (`make certs`, `verify-full`, TLS-only `pg_hba.conf`); `make onion` requires production | written, verified on the dev stack (12 Nov): both backend connections TLSv1.3 `TLS_AES_256_GCM_SHA384` (`pg_stat_ssl`), plain TCP from another container refused by `pg_hba.conf`, `make certs` idempotent, `APP_ENV=production make up` starts (`Production mode validation passed`), `/` 200 and `/api/v2/me` 401 through nginx, `__Host-Session; Secure` cookie. Unverified: a browser login in production mode (Chromium on `http://localhost`, Tor Browser on an onion), `make onion` end to end, certificate renewal near expiry, Linux hosts |
 | S-08 | deployment | Containers ran with default capabilities, writable roots, no resource limits, one shared network, and the backend and database published on loopback in every mode | drop all capabilities (postgres: five, each proven), read-only roots with named tmpfs, users 10001/101/70/100, memory, pids, CPU, nofile and shm limits, `init` where PID 1 reaps nothing, split `edge`/`app`/`data` networks (internal ones isolated), development-only ports, nginx limits, digest pins, `make check-hardening` | written, verified on the dev stack (OrbStack, 12 Nov): `docker inspect` and `/proc/1/status` per container, root writes fail, tmpfs `noexec`, backend and database unreachable from the host and from `edge` (also by IP), no egress from the backend, nginx reaches the backend from `PROXY_IP`, `/` 200, `/api/v2/me` 401, production-mode browser login, `users` 9 before and after, `make check-hardening` and 19 mutations of it; nginx `/api/` whitelist: `nginx -t`, 50 curl probes (each group's methods reach the backend, other methods 405, unknown paths 404, one byte over each bound 413). Unverified: Linux Docker Engine, `make onion` with tor running (config only: `--verify-config` under the restrictions), CI |
 | S-07 | data | Since S-02 the stored Argon2id hash (`users.account_hash`) is read by nothing | drop: a migration removes the column and phase 2 stops hashing (no Argon2id, no slots, lighter phase 2). Keep: the column stays as a second, pepper-independent record of the key, costing one Argon2id per sign-up | open, decision needed |
-| S-09 | security | Input checks were scattered (per-handler method/query/format checks, `utils.Validate*`, `parsePageCursor`, a content-type middleware, one 1 MiB body cap for all) and lax in places: duplicate and case-folded JSON keys taken, a register body with unknown fields or trailing data still served phase 1, queries ignored on the auth routes, bodies ignored on GET/DELETE/logout, `Content-Type` parameters ignored | one table (`internal/contract`): per endpoint methods, query, exact content type, body bound derived from its fields, every field with an anchored pattern and validator; one gate before every handler; `docs/api/input-contract.md` generated from it; nginx mirror pending (other agent) | written, unverified |
-| S-10 | integrity | A room code is `S` plus its limits, but join checked only the id and lookup (both from `S`): a code with edited limit bytes still joined, so a member who pasted one had the verified vault replaced by one that never verifies (`E_ROOM_UNVERIFIED`, room hidden for good), and a non-member took a seat under a vault that never verifies | join carries `max_members` and `expires_at` (create's fields and bounds); the server refuses other limits exactly like a wrong lookup (`404 E_NOT_FOUND` path) before any seat or vault change; browser and agent refuse a known room pasted with other limits (`E_ROOM_CODE_INVALID`, `E_AGENT_ROOM_CODE`) and send nothing | verified 12 Nov (31882b2, a12ea80, dc8b15f): three integration tests on both engines; live on the rebuilt stack a non-member agent with +1 seat and +1 hour codes got `E_AGENT_ROOM_NOT_FOUND` and took no seat, a member agent got `E_AGENT_ROOM_CODE` and kept the room. Unverified: the browser-side refusal in a real browser |
-| Q-01 | stage 1 | No error module: 78 free-text `http.Error` in the backend, 52 free-text `showError/showWarning` in the browser, no codes | one error home per program (backend, browser, agent), registered codes, one sentence each | browser, backend: written, unverified; agent: open |
-| Q-02 | stage 1 | Browser: 8 direct `console` calls, 6 swallowing `catch`; backend: 8 `panic`, 2 dropped errors | decide each one: fix or justify in a comment | browser, backend: written, unverified |
-| Q-03 | stage 1 | `room-crypto.js`: four functions with 7 to 9 parameters; `Rooms` module 191 lines; `setupEventListeners` 112 | named argument objects, split by purpose | written, unverified |
-| Q-04 | stage 1 | Unnamed numbers: pow-worker 22, ui 17, utils 17, crypto 16, validation.go 14 (scanner counts, unread) | name the tunables, justify the rest | browser: written, unverified; backend (validation, pow, auth, cryptoengine): written, unverified; backend chat/store/realtime/agent/handlers: open |
-| F-01 | function | Only the latest `MESSAGE_PAGE_LIMIT` messages are reachable; no paging backwards | `?before=seq` page, same whitelist as `after`; browser "earlier messages", agent `ReadBefore` (MCP `before` argument still to add) | written, unverified |
+| S-09 | security | Input checks were scattered (per-handler method/query/format checks, `utils.Validate*`, `parsePageCursor`, a content-type middleware, one 1 MiB body cap for all) and lax in places: duplicate and case-folded JSON keys taken, a register body with unknown fields or trailing data still served phase 1, queries ignored on the auth routes, bodies ignored on GET/DELETE/logout, `Content-Type` parameters ignored | one table (`internal/contract`): per endpoint methods, query, exact content type, body bound derived from its fields, every field with an anchored pattern and validator; one gate before every handler; `docs/api/input-contract.md` generated from it; nginx `/api/` mirrors it as a default-deny whitelist | committed (ed5d87f..029a542; nginx mirror e3da3e5, probed live as recorded under S-08); in the tree of the full verification at eb9b17e (State) |
+| S-10 | integrity | A room code is `S` plus its limits, but join checked only the id and lookup (both from `S`): a code with edited limit bytes still joined, so a member who pasted one had the verified vault replaced by one that never verifies (`E_ROOM_UNVERIFIED`, room hidden for good), and a non-member took a seat under a vault that never verifies | join carries `max_members` and `expires_at` (create's fields and bounds); the server refuses other limits exactly like a wrong lookup (`404 E_NOT_FOUND` path) before any seat or vault change; browser and agent refuse a known room pasted with other limits (`E_ROOM_CODE_INVALID`, `E_AGENT_ROOM_CODE`; the agent's code is `E_AGENT_ROOM_CODE_ALTERED` since A-11) and send nothing | verified 12 Nov (31882b2, a12ea80, dc8b15f): three integration tests on both engines; live on the rebuilt stack a non-member agent with +1 seat and +1 hour codes got `E_AGENT_ROOM_NOT_FOUND` and took no seat, a member agent got `E_AGENT_ROOM_CODE` and kept the room. Unverified: the browser-side refusal in a real browser |
+| Q-01 | stage 1 | No error module: 78 free-text `http.Error` in the backend, 52 free-text `showError/showWarning` in the browser, no codes | one error home per program (backend, browser, agent), registered codes, one sentence each | committed: browser 9ab953d, backend 8cab927, agent with the agent itself (registry in `backend/internal/agent/errors.go` since c1e7ae6); in the tree of the full verification at eb9b17e (State) |
+| Q-02 | stage 1 | Browser: 8 direct `console` calls, 6 swallowing `catch`; backend: 8 `panic`, 2 dropped errors | decide each one: fix or justify in a comment | committed (54e38c3, f461429); in the tree of the full verification at eb9b17e (State) |
+| Q-03 | stage 1 | `room-crypto.js`: four functions with 7 to 9 parameters; `Rooms` module 191 lines; `setupEventListeners` 112 | named argument objects, split by purpose | committed (363b90e, 87dd961, 630050b); in the tree of the full verification at eb9b17e (State) |
+| Q-04 | stage 1 | Unnamed numbers: pow-worker 22, ui 17, utils 17, crypto 16, validation.go 14 (scanner counts, unread) | name the tunables, justify the rest | committed: browser 00fbe7b; backend 2b12a3c (validation, pow, auth, cryptoengine), 6253e17 (store, chat), f878896 (handlers, middleware, server), 7bcf825 (agent, mcp); in the tree of the full verification at eb9b17e (State). No Q-04 commit names `realtime`: unchecked |
+| F-01 | function | Only the latest `MESSAGE_PAGE_LIMIT` messages are reachable; no paging backwards | `?before=seq` page, same whitelist as `after`; browser "earlier messages", agent `ReadBefore`, MCP `room_read` `before` | committed (5825789, e111fd5, fe690de, 5bef96f); in the tree of the full verification at eb9b17e (State) |
 
 ## Situation handling (audit of 12 Nov 2026)
 
@@ -77,7 +80,7 @@ Found by reading code, not reproduced unless the state says so. Severity in brac
 | D-16 | [low] No restore test; `tor_data` onion key and full-volume restore undocumented; tor healthcheck only tests a file | `make test-restore` (run on both engines, 13 Nov), exclusions documented; the tor healthcheck still only tests the hostname file (tor offers no cheap local reachability check): documented limit, open | verified except the tor check |
 | D-17 | [low] Rewrap runs one pass per boot and stops silently on a database error; a database with users but no members pins any pepper | retry until no old-key rows, `E_REWRAP_INCOMPLETE` | verified by the suite at a3c4007 (see State for what was also seen live) |
 
-Doc drift to fix with them: `disaster-recovery.md` (retention on a full disk), `configuration-and-tuning.md` (`DB_HOST`, `DB_NAME` defaults).
+The doc drift found with them (`disaster-recovery.md` on a full disk, the `DB_HOST` and `DB_NAME` defaults in `configuration-and-tuning.md`) is fixed: both now match the code.
 
 ### Browser
 
@@ -124,7 +127,7 @@ Undetermined: back-forward cache after logout, blocked IndexedDB upgrade, an unb
 | A-10 | [medium] History pages in the agent skip the browser's ceiling rule | mirror `counters.js` | verified by the suite at a3c4007 (8008614) |
 | C-18 | [medium] The browser ignores the edge codes nginx now answers (`E_BACKEND_UNAVAILABLE` and four more) | map `data.code` to registered codes; unknown codes fall back to the status | verified by the suite at a3c4007 (9b0546c) |
 | C-19 | [medium] Found in the live tour: the nonce, the agent command and the open room's code sat in boxes an animation rule kept at opacity 0 (never visible, before the two doors too) | boxes carry the `show` class; robot-side colours | written, seen fixed in a real browser (e6d0b89) |
-| D-18 | [low] `nginx-site.conf` was changed without `nginx -t` (since run: passes, and the config serves live); `docker-compose.test.yaml` has no log limits; `HSTS_*` and `SEC_HEADER_*` are not passed through compose; the retention heartbeat marks a cycle begun, not finished | check each in the final verification, fix or justify | open |
+| D-18 | [low] `nginx-site.conf` was changed without `nginx -t`; `docker-compose.test.yaml` has no log limits; `HSTS_*` and `SEC_HEADER_*` are not passed through compose; the retention heartbeat marks a cycle begun, not finished; `frontend.sha256` (ignored by git, written by `make manifest`) is stale since the rename | check each, fix or justify; `make manifest` at release | `nginx -t`: run, passes, the config serves live. HSTS and `SEC_HEADER_*`: D-20. Open: test-stack log limits, the retention heartbeat, `frontend.sha256` |
 
 ### Found by fuzz, drills and the tour (13 Nov)
 
@@ -144,13 +147,29 @@ Undetermined: back-forward cache after logout, blocked IndexedDB upgrade, an unb
 | N-04 | [medium] Driver error text (database user, name, host) reached the log from repository loggers; panic values were logged as-is | one reducer for every repository log line; panics by type, stack without argument words | verified by the suite (eb9b17e) |
 | N-05 | [medium] The integration package opened one database pool per test and closed none (about 130 against a limit of 100); a helper then exited the test binary | one pool at a time, no exiting path reachable from tests, a connection guard in `TestMain` | verified by the suite (eb9b17e) |
 | N-06 | [low] The agent created an account (two proofs of work) before parsing a join code; it echoed a cursor past the room's end | parse first; cursor capped at the real end | verified by the suite |
-| L-09 | [low] Open: `frontend.sha256` is stale since the rename; `docker-compose.test.yaml` has no log limits; `HSTS_*` and `SEC_HEADER_*` are not passed through compose; the retention heartbeat marks a cycle begun, not finished | `make manifest` at release; fix or justify the rest | open |
+| L-09 | [low] Duplicate of D-18 | - | merged into D-18 |
+
+### Found 14 Nov
+
+| Id | Finding | Fix | State |
+|---|---|---|---|
+| C-20 | [high, security] The browser twin of A-09: a conversation left out of one listing, or a burn or leave answered `404`, removed its counter record, so a hostile server could hide a conversation once and replay it undetected | a record is dropped only on the user's own burn or leave answered `204`, or a day after the room's own expiry (the room is then never shown); at most `MAX_RECORDS` (1024), least recently used first, `W_COUNTER_RECORDS_EVICTED` once per page load (`counters.js`, `keystore.js`, `chat.js`) | written, compiled, not yet verified |
+| C-21 | [medium-high] Found behind a Cloudflare quick tunnel: the browser had no fallback when the event stream cannot be held (a proxy buffers it or keeps dropping it), so new messages appeared only on a tab switch, and after 8 failed reconnects updates stopped | the server sends a named `ping` event right after the preamble and every 25 s; a watchdog in `chat.js` polls about every 5 s while the tab is visible and the stream showed no event (5 s for a new stream, 60 s after one), decided by `streamNeedsPolling` in `utils.js`; `W_LIVE_STREAM_SILENT`, `W_LIVE_STREAM_GAVE_UP` | written, compiled, not yet verified |
+| C-22 | [medium] Open: the owner was logged out at once by a reload. Not reproduced in Chromium on localhost nor behind the tunnel; the browser used is unknown | suspect: a private window that cannot store a `CryptoKey` in IndexedDB | open |
+| D-19 | [medium] Behind the operator's own TLS proxy, nginx saw every request from that proxy: all users shared one rate-limit bucket (`429` for everyone on a busy instance) and the backend never saw HTTPS | `EDGE_TRUSTED_PROXIES`: `nginx-edge-proxies.sh` renders realip and a geo list at nginx start (a malformed list stops nginx); `X-Forwarded-For` and `X-Forwarded-Proto` are taken only from a listed peer (`$forwarded_proto`); `check-hardening.py` checks both | written, compiled, not yet verified |
+| D-20 | [low] `HSTS_*` never reached the backend in the Compose stack; `SEC_HEADER_*` could only disagree with nginx's fixed cross-origin headers | compose passes `HSTS_MAX_AGE`, `HSTS_INCLUDE_SUBDOMAINS`, `HSTS_PRELOAD` (off by default); `SEC_HEADER_*` removed, the backend's three headers fixed and hidden by nginx on `/api/` | written, compiled, not yet verified |
+| D-21 | [low] An invite's or a room note's stored expiry was creation time plus TTL to the second, so it told the second the row was made | expiry rounded up to the next whole hour (`expiryAfter`, `service.go`, `rooms.go`, `expiry_test.go`); rows stored earlier keep their exact expiry | written, compiled, not yet verified |
+| D-22 | [low] A login lookup the server could not compute (pepper, crypto engine) answered `401 Invalid credentials`, telling the user their only key was worthless | `E_LOGIN_LOOKUP_FAILED` is `500`; computed from the key alone before any account is read, so it tells no account from another | written, compiled, not yet verified |
+| D-23 | [low] `make shell-db` used fixed names (`postgres`, `noaddx`); `make agent` with the OpenSSL engine did not check for the OpenSSL headers before building; no target built an agent for another system | `shell-db` uses the container's `POSTGRES_USER` and `POSTGRES_DB`; `agent` checks OpenSSL >= 3.2 through `pkg-config` first; `agent-cross GOOS= GOARCH=` builds a static native-engine binary | written, compiled, not yet verified |
+| D-24 | [medium] Sessions ended after 15 minutes by default (`JWT_EXPIRATION_MINUTES` allowed 1 to 1440) | default 43200 minutes (30 days), range 1 minute to 365 days, sliding refresh after half the lifetime unchanged (D-2026-11-14-a) | written, compiled, not yet verified |
+| A-11 | [low] The agent answered a known room pasted with other limits with `E_AGENT_ROOM_CODE`, whose sentence says the code is malformed | its own code `E_AGENT_ROOM_CODE_ALTERED` and sentence (`roomentry.go`) | written, compiled, not yet verified |
 
 Feature (13 Nov): two doors. The main menu is the white human side; `robot` is a black door that
 judges whoever presses it in the page (pointer trail, or a SHA-256 question), walks a human back and
 lets a robot in. Theatre: it gates nothing, measures in memory only, sends and stores nothing
 (`frontend/js/robot-door.js`, `docs/architecture/agents.md`). Seen working in a real browser on
-both paths; its unit tests are written, not run.
+both paths; its unit and fuzz tests (`frontend/tests/robot-door*.test.mjs`) ran in the frontend
+suite of the full verification at eb9b17e.
 
 Decided exception (Q-01): `Errors.format()` in `frontend/js/errors.js` throws two `TypeError`s with fixed
 texts for the module's own misuse (unknown code, missing parameter); the user-facing path `message()`
@@ -158,14 +177,19 @@ maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 
 ## Order of work (the snowball)
 
-1. Robot entrance (in progress), S-01 (in progress).
-2. Stage 1: Q-01 error modules per program, then Q-02, Q-03, Q-04; S-02..S-05 and F-01 each in its own commit.
-3. One full verification at the end: `make test-engines`, `make test-equivalence`, frontend tests, race detector, then a live tour of every screen in two browsers plus one agent.
-4. Stage 2 (prove by attack) and stage 3 (fuzz) start only after stage 1 is verified.
+1. Stage 1 (Q-01..Q-04, S-01..S-05, S-09, F-01), the negative-use suites and the fuzz campaign
+   are committed and were run at eb9b17e (State).
+2. Now: one full verification of the 14 Nov working tree (*Found 14 Nov*); fix its fallout; only
+   then commit and push.
+3. Then: the items still open above (S-07 decision, D-09, D-18 remainder, C-22) and what State
+   lists as not verified.
 
 ## Decisions
 
-- D-2026-11-12-a: design of the robot entrance, D1 to D8 in `docs/architecture/agents.md`.
+- D-2026-11-14-a (owner): sessions last 30 days by default (`JWT_EXPIRATION_MINUTES=43200`),
+  configurable from 1 minute to 365 days, with the sliding refresh after half the lifetime, so a
+  session in use does not end; logout and account deletion still end every session at once.
+- D-2026-11-12-a: design of the robot entrance, D1 to D9 in `docs/architecture/agents.md`.
 - D-2026-11-12-b: stored and wire names keep the `noaddx` protocol namespace after the rename.
 - D-2026-11-13-a (owner): no forward secrecy, by design. The identity is one number from which
   everything is derived again on any device, with no secret kept on a device; a ratchet needs

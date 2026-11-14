@@ -8,7 +8,7 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 ### Security
 
 - **Go 1.27.4.** Builds use Go 1.27.4 (GO-2026-6859, net/http HTTP/1 server crash in the
-  MaxBytesReader header race).
+  MaxBytesReader header race); it also carries the fix of Go 1.27.3 (GO-2026-6809).
 - **Existence oracle on send (N-01).** A non-member sending a well-formed message to a live room
   got `400` where a missing id got `404`. Membership is now checked first: both answer `404`.
   Negative-use suites generated from the route table pin it (108 refusals without a session,
@@ -43,9 +43,10 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 - **nginx mirrors the input contract.** `/api/` was one prefix proxied whole, with a 1 MiB body
   limit. nginx now admits only the contract's routes (exact paths, canonical UUIDv4 segments),
   their methods and a body bound per route group at the smallest round size above the
-  contract's (1k, 2k or 8k), and ends in `location /api/ { return 404; }`. Answers are what the
-  backend would give: 405 for another method, 404 for another path, plus 413 for an oversized
-  body before it reaches the backend.
+  contract's (1k, 2k or 8k), and refuses everything else under `/api/` itself: 404 for another
+  path, 405 for another method, 413 for an oversized body before it reaches the backend. These
+  refusals are nginx's own JSON answers with registered `E_EDGE_*` codes (see "JSON answers from
+  nginx (D-11, C-18, L-01)" under Added).
 - **Restricted containers (S-08).** Every service now drops all capabilities (PostgreSQL keeps
   `CHOWN`, `DAC_READ_SEARCH`, `FOWNER`, `SETUID`, `SETGID` for its start as root, then runs as
   uid 70), runs with a read-only root, `no-new-privileges`, Docker's default seccomp profile and
@@ -53,8 +54,8 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
   tmpfs mounts with `noexec,nosuid,nodev`. nginx runs as uid 101 on unprivileged ports and the
   backend gets 512 MiB (Argon2id peak 256 MiB plus headroom, `BACKEND_MEM_LIMIT`). The single
   network is split into `edge` (nginx, tor), `app` (nginx, backend) and `data` (backend,
-  PostgreSQL); `app` and `data` are internal with no bridge address, so the backend and the
-  database have no internet and neither the host nor a container on another network reaches
+  PostgreSQL); `app` and `data` are internal with no bridge address, so in production the backend
+  and the database have no internet and neither the host nor a container on another network reaches
   them, even where the runtime routes between bridges. The backend still trusts nginx alone at
   `PROXY_IP`. Production publishes nginx only; the backend and PostgreSQL ports moved to
   `docker-compose.dev.yaml`, which `make up` adds in development. nginx gained header, timeout,
@@ -146,7 +147,7 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
   `verify-ca`/`verify-full` TLS to PostgreSQL and a non-default database password. The
   PostgreSQL URL is built with escaping (no DSN injection).
 - **Dependencies.** golang-jwt 5.3.1 (GO-2025-3553), pgx 5.11.0 (GO-2026-5004, SQL injection),
-  x/text 0.43.0 (GO-2026-5970, GO-2026-6629); builds use Go 1.27.3 (GO-2026-6809).
+  x/text 0.43.0 (GO-2026-5970, GO-2026-6629). The Go toolchain is in the Go 1.27.4 entry.
 - **Browser hardening.** The page CSP no longer allows inline styles or `data:` images; API
   responses are inert (`default-src 'none'`, `no-store`); text from a peer has bidi overrides
   and control characters neutralized before display.
@@ -155,9 +156,10 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 - **AccountNumber exposure window.** Phase 1 of registration kept the AccountNumber (which also
   seeds the user's E2E identity) in server memory for up to five minutes; it now keeps only the
   derived auth key and public key, and the AccountNumber leaves memory with the phase-1 response.
-- **Argon2id memory bound.** Unlimited concurrent logins could allocate 64 MiB each until the
-  process died; at most `ARGON2_MAX_CONCURRENT` run at once and the rest get 503 after 3 s,
-  for known and unknown accounts alike.
+- **Argon2id memory bound.** Unlimited concurrent Argon2id hashes could allocate 64 MiB each until
+  the process died; at most `ARGON2_MAX_CONCURRENT` run at once and the rest get 503 after 3 s.
+  Argon2id ran at login then; since "Login lockout through Argon2id" (above) it runs only in
+  registration phase 2, behind its proof of work, and the bound applies there.
 - **OpenSSL error queue** is cleared on the thread that filled it (cgo calls can change OS
   threads), so no failure detail lingers between calls.
 - **Master key rotation left the old key in charge.** Rotating only changed the key for new
@@ -171,9 +173,9 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Added
 
-- **Two doors.** The main menu is the white side for people (login, new identity); `robot` is a
-  black door that judges whoever presses it in the page (pointer trail, or a SHA-256 question),
-  walks a human back and lets a robot in to the agent command. It gates nothing, measures in
+- **Two doors.** The main menu is the human door (login, new identity); `robot`, captioned
+  "the other door", is the black robot door that judges whoever presses it in the page (pointer
+  trail, or a SHA-256 question), walks a human back and lets a robot in to the agent command. It gates nothing, measures in
   memory only, and sends and stores nothing. Every screen before login has a way back
   (`← back to main menu`, the brand title, Escape); leaving registration ends its proof of work
   and asks twice once the account may exist. A favicon.
@@ -296,6 +298,22 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
   rule; any `5xx` is a passing failure; one canonical server origin; the join code is parsed
   before an account is created; the cursor never runs past the room's end.
 - **Agent and browser trim message text alike (L-07).** One explicit trim set on both sides.
+- **Code boxes never visible (C-19).** The nonce, the agent command and the open room's code sat
+  in boxes an animation rule kept at opacity 0 (also before the two doors). They are shown now;
+  Enter in the door's challenge field no longer reaches the copy button.
+- **Plain backend refusals under their own codes.** A backend `503` (plain text, "Service
+  unavailable"), `405`, `413` and `415` reached the user as a generic failure; the browser now maps
+  them to `E_API_UNAVAILABLE`, `E_API_METHOD_NOT_ALLOWED`, `E_API_BODY_TOO_LARGE` and
+  `E_API_INVALID_REQUEST`.
+- **Invites cleared from the clipboard (C-18),** like the room code and the account number.
+- **A client leaving while its event stream starts** no longer turns the stream's database lookup
+  into an internal error: the stream's database work runs under its own deadline, and any
+  remaining cancelled work is `E_REQUEST_CANCELLED` (logged at INFO, never as an error).
+- **One origin per server.** A server address with an empty port or another spelling of the same
+  origin made a second origin for one server (a false `E_AGENT_SERVER_MISMATCH`); the agent keeps
+  one canonical origin. Pointer coordinates near the floating-point limit no longer make the
+  robot door draw an endless detour.
+- `make` declares as `.PHONY` only targets that exist.
 - **The integration package exhausted PostgreSQL's connections (N-05).** One pool at a time, no
   exiting path reachable from tests, and a connection guard in `TestMain`.
 
@@ -325,6 +343,11 @@ All notable changes to elyrn. are recorded here. Security fixes are always liste
 
 ### Changed
 
+- **Sessions last 30 days and slide.** `JWT_EXPIRATION_MINUTES` defaults to 43200 (30 days)
+  instead of 15 and accepts 1 to 525600 (365 days) instead of 1 to 1440. A session used past
+  half its lifetime is re-issued, so it ends only at logout, account deletion or after 15-30
+  days without use. A stolen session cookie is therefore useful for that long unless the account
+  logs out or is deleted. The pending-registration token keeps its own `PENDING_TOKEN_TTL_SEC`.
 - The browser reports every failure and warning by a registered code from one module
   (`js/errors.js`) and logs only through `js/log.js`, which keeps a code, an error's name and a
   status number and nothing else; five messages now say what to do next.

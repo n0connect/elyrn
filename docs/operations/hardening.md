@@ -1,8 +1,9 @@
 # Container Hardening
 
 Every service runs restricted: no capabilities it does not need, a read-only root filesystem,
-an unprivileged user, bounded resources, and a network that reaches only its own peers. Only
-nginx publishes a port, on loopback. `make check-hardening` fails if the rendered Compose config
+an unprivileged user, bounded resources, and a network that reaches only its own peers. In the
+production layout only nginx publishes a port, on loopback (development also publishes the
+backend and PostgreSQL on loopback; see [Layouts](#layouts)). `make check-hardening` fails if the rendered Compose config
 (production and development layouts) loses any control below or gains a forbidden one.
 
 ```bash
@@ -83,9 +84,9 @@ Docker's default seccomp profile stays on everywhere (no `seccomp=` option); no 
 | healthcheck | `/internal/health` (loopback only): `SELECT 1` within 3 s and retention cycling | `/` answers | `pg_isready` | onion address published (a file; see Known limits) | starting dependents early, an unnoticed dead database link | `docker ps` |
 | Logs | `local` driver, 3 × 10 MB | same | same | same | logs filling the host's disk | `docker inspect -f '{{.HostConfig.LogConfig}}' <c>` |
 | Stop grace | 30 s (> 10 s requests + 5 s jobs) | default | default | default | a kill before keys are zeroized | `docker inspect -f '{{.Config.StopTimeout}}'` |
-| Networks | app, data | edge, app | data | edge | lateral movement | `docker network inspect noaddx_app` |
+| Networks | app, data (development: also `devhost`) | edge, app | data (development: also `devhost`) | edge | lateral movement | `docker network inspect noaddx_app` |
 | Published | dev only (8080) | `127.0.0.1:HTTP_PORT` → 8080 | dev only (`DB_HOST_PORT`) | none | exposure beyond loopback | `docker ps` |
-| Egress | none | via edge | none | via edge (Tor) | exfiltration, callbacks | a TCP connect from the backend's namespace fails |
+| Egress | none (development: via `devhost`) | via edge | none (development: via `devhost`) | via edge (Tor) | exfiltration, callbacks | in production, a TCP connect from the backend's namespace fails |
 
 **postgres capabilities.** Its entrypoint (`postgres/entrypoint.sh`) runs as root only to hand
 the TLS key to uid 70, then the image's entrypoint drops to uid 70 with `gosu`; the server has
@@ -164,6 +165,11 @@ on a schedule.
 
 ## Known limits
 
+- The backend connects to PostgreSQL as the bootstrap superuser the container creates
+  (`DB_USER`, `postgres` in `.env.example`), with every right in the database, not as a role
+  limited to reading and writing its tables. Open by decision (D-09 in
+  [debt.md](../development/debt.md)): a separate runtime role needs a new secret that existing
+  `.env` files lack, so an in-place upgrade would need a manual step.
 - PostgreSQL's container can open a TCP connection to the backend over `data` (the backend
   listens on every interface). It is an untrusted client there: its address is not in
   `TRUSTED_PROXIES`. Binding the backend to its `app` address would need a configuration option

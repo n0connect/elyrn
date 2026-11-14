@@ -29,7 +29,7 @@ an expired session from none). Three shapes reach the wire:
 | 400 | `Invalid request` | `E_INVALID_REQUEST`, `E_INVALID_INPUT`, `E_LOGIN_BODY_INVALID` (JSON) | the input contract or the service refused the input |
 | 400 | `Pending token required` | `E_PENDING_TOKEN_REQUIRED` | registration phase 2 without its token |
 | 401 | `Unauthorized` | `E_NO_SESSION`, `E_SESSION_CONTEXT_MISSING`, `E_MEMBER_NOT_FOUND`, `E_PENDING_TOKEN_INVALID`, `E_ACCOUNT_EXISTS` | no session, a revoked or expired one, an account that is gone, a spent or expired pending token |
-| 401 | `Invalid credentials` (JSON) | `E_LOGIN_KEY_MALFORMED`, `E_LOGIN_NO_ACCOUNT`, `E_LOGIN_LEGACY_ACCOUNT`, `E_LOGIN_LOOKUP_FAILED` | login: no account for this key, whatever the reason |
+| 401 | `Invalid credentials` (JSON) | `E_LOGIN_KEY_MALFORMED`, `E_LOGIN_NO_ACCOUNT`, `E_LOGIN_LEGACY_ACCOUNT` | login: no account for this key, whatever the reason |
 | 403 | `Forbidden` | `E_CROSS_ORIGIN`, `E_IDENTITY_UNSET`, `E_FORBIDDEN` | a cross-origin write, or an action the caller may not take |
 | 403 | `Invalid proof of work` | `E_POW_INVALID` | forged, expired, already used, below the issued difficulty, or issued before a restart |
 | 404 | `Not Found` | `E_ROUTE_NOT_FOUND` | no such route (a malformed id answers the same) |
@@ -42,7 +42,7 @@ an expired session from none). Three shapes reach the wire:
 | 412 | `Roster changed` | `E_ROSTER_CHANGED` | a room message for a member list that is no longer current |
 | 415 | `Unsupported Media Type` | `E_UNSUPPORTED_MEDIA_TYPE` | a body not declared as exactly `application/json` |
 | 429 | `Too many requests` | `E_RATE_LIMITED`, `E_POW_RATE_LIMITED`, `E_SUBSCRIBER_LIMIT`, `E_LIMIT_REACHED` | any rate limit, stream share or per-account cap |
-| 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED` | a server fault |
+| 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED`, `E_LOGIN_LOOKUP_FAILED` (JSON) | a server fault; on login, a lookup the server could not compute |
 | 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_ARGON2_BUSY`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full; retry later |
 
 `503 E_STORE_UNAVAILABLE` never means a key, session or conversation is gone: clients retry
@@ -78,8 +78,8 @@ peers only (`200` or `503 E_HEALTH_UNAVAILABLE`, no body; any other peer gets `4
 
 - **Session Delivery:** The only credential is an HttpOnly, `SameSite=Strict` cookie: `noaddx_session` in development (a name kept from the project's former name, so sessions survived the rename), `__Host-Session` (Secure, host-only) in production. The token never appears in a response body and the `Authorization` header is ignored, so page script can never read or replay it.
 - **Same-Origin Writes:** `POST`/`PUT`/`PATCH`/`DELETE` requests are refused with `403` unless the browser marks them `Sec-Fetch-Site: same-origin` (or, without that header, sends an `Origin` listed exactly in `ALLOWED_ORIGINS`). Clients that send neither header are not browsers and hold no ambient cookies.
-- **Sliding Expiration:** Sessions expire after `JWT_EXPIRATION_MINUTES` (default: 15m). If an active session is used past its half-life, the backend automatically issues a refreshed cookie.
-- **Saturation and outages:** phase 2 of `POST /api/v2/register` answers `503 Service Unavailable` when every Argon2id slot (`ARGON2_MAX_CONCURRENT`) stays busy for 3 seconds. `POST /api/v2/login` runs no Argon2id and is never refused for that reason; it answers `503` only while the database is unreachable: `401` always means the auth key matches no account, never that the server could not tell. Neither answer depends on whether the account exists; retry with backoff. Every other route answers a database outage (unreachable, restarting, out of connections, or a statement past its timeout) the same way, `503 Service Unavailable`, the session check included, so an outage never logs a client out.
+- **Sliding Expiration:** Sessions expire after `JWT_EXPIRATION_MINUTES` (default 43200 minutes, 30 days; accepted range 1 to 525600 minutes, 365 days). A session used after half its lifetime has passed is re-issued as a fresh cookie, so one used at least once every half-lifetime (15 days by default) does not expire; logout and account deletion end it at once.
+- **Saturation and outages:** phase 2 of `POST /api/v2/register` answers `503 Service Unavailable` when every Argon2id slot (`ARGON2_MAX_CONCURRENT`) stays busy for 3 seconds. `POST /api/v2/login` runs no Argon2id and is never refused for that reason; it answers `503` while the database is unreachable, so an outage is never reported as an unknown account. When the server cannot compute the account lookup from a well-formed key (a missing or short pepper, or a crypto engine failure), login answers `500 Internal server error` (`E_LOGIN_LOOKUP_FAILED`), never `401`: the lookup is computed from the key alone before any account is read, so it fails alike for every key, and `401` always means the key matches no usable account. The `503` and `500` answers do not depend on whether the account exists; retry with backoff. Every other route answers a database outage (unreachable, restarting, out of connections, or a statement past its timeout) the same way, `503 Service Unavailable`, the session check included, so an outage never logs a client out.
 - **Global Invalidation:** `POST /api/v2/logout` with a live session increments the user's `session_epoch`, instantly invalidating every JWT issued for that account on every device. A token revoked earlier cannot trigger this (it no longer authenticates); if revocation fails the endpoint answers `500` instead of reporting success. The cookie is cleared in every case.
 
 ---
@@ -199,7 +199,7 @@ Requires solving a fresh, single-use PoW challenge.
 ### `POST /api/v2/login`
 Authenticates a user via their derived `auth_key`. The `AccountNumber` is **never** sent.
 
-The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_key)`, finds the account by it and compares the two in constant time. No Argon2id runs at login, so a flood of registrations cannot lock existing accounts out. Answers: `200` (logged in), `400` (body is not JSON), `401` (no account for this key, whatever the reason), `429` (per-client or per-account rate limit), `503` (database unreachable).
+The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_key)`, finds the account by it and compares the two in constant time. No Argon2id runs at login, so a flood of registrations cannot lock existing accounts out. Answers: `200` (logged in), `400` (body is not JSON), `401` (no account for this key, whatever the reason), `429` (per-client or per-account rate limit), `500` (the lookup could not be computed, `E_LOGIN_LOOKUP_FAILED`), `503` (database unreachable).
 
 - **Request Body:**
 ```json
@@ -518,7 +518,7 @@ Opens an unbuffered, content-free SSE stream.
 - **Stream Events:**
   - `event: msg` with `data: {"c": "<conversation_id>"}` (signals a new message arrived).
   - `event: conv` with `data: {}` (signals the conversation list, a room's members, or the caller's notes changed).
-  - `: ping` (keepalive comment sent every 25 seconds).
+  - `event: ping` with `data: {}` (heartbeat: sent once right after the `retry: 3000` / `: ready` preamble, which always comes first, then every 25 seconds). It is a named event, not an SSE comment, so the browser can see that the stream is being delivered. The web client treats a stream as held by a proxy when a new connection shows no event within 5 seconds, or a stream that already delivered one then goes 60 seconds without any; it then fetches its updates about every 5 seconds while the tab is visible, until an event arrives again (`frontend/js/chat.js`: `STREAM_FIRST_PROOF_MS`, `STREAM_SILENCE_LIMIT_MS`, `POLL_INTERVAL_MS`). Clients must ignore event names they do not know.
 - **Authentication:** Validated via session cookie. If session is revoked, the stream closes with `401 Unauthorized`.
 - **Limits:** `429` when the account already holds 4 streams, the caller's network (IPv4 address, IPv6 /64 or Tor circuit) holds 16, or the server holds 4,096.
 
