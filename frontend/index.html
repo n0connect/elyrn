@@ -13,8 +13,14 @@
 </head>
 <body>
     <div class="container">
+        <!-- START: the one view shown before any script decides; nothing interactive. app.js leaves
+             it for the main menu or the app once the stored identity (if any) has been resumed. -->
+        <div class="start-view" id="startView">
+            <h1 class="brand-title">elyrn.</h1>
+        </div>
+
         <!-- MAIN MENU -->
-        <div class="main-menu" id="mainMenu">
+        <div class="main-menu" id="mainMenu" data-hidden>
             <div class="brand">
                 <h1 class="brand-title">elyrn.</h1>
                 <p class="tagline">anonymous. <span class="secure-text" data-text="encrypted">encrypted</span>. ephemeral.</p>

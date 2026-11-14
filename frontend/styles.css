@@ -17,6 +17,18 @@
     display: none;
 }
 
+/* Without scripting nothing leaves the start view (index.html): the main menu is shown instead,
+   as before there was a start view */
+@media (scripting: none) {
+    #startView {
+        display: none;
+    }
+
+    #mainMenu {
+        display: block;
+    }
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -64,6 +76,11 @@ body {
 .main-menu {
     text-align: center;
     animation: fadeInUp 0.6s ease;
+}
+
+/* The brand line alone while a stored identity is resumed: still, so a quick answer does not flicker */
+.start-view {
+    text-align: center;
 }
 
 .main-buttons {

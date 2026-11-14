@@ -4,7 +4,9 @@
 // Rendering only: no network, no crypto. Every user- or server-supplied string
 // reaches the DOM through textContent (never innerHTML).
 
-const VIEW_IDS = ['mainMenu', 'loginContainer', 'registerContainer', 'doorVerdictContainer',
+// startView is the page's first view (index.html): the brand line while app.js decides
+const START_VIEW_ID = 'startView';
+const VIEW_IDS = [START_VIEW_ID, 'mainMenu', 'loginContainer', 'registerContainer', 'doorVerdictContainer',
     'doorChallengeContainer', 'robotContainer', 'appContainer'];
 // The robot side of the other door: these views turn the page black (one class on <body>)
 const ROBOT_SIDE_VIEWS = new Set(['doorVerdictContainer', 'doorChallengeContainer', 'robotContainer']);
@@ -45,6 +47,8 @@ const DEFAULT_ROOM_TTL_HOURS = 24;
 document.querySelectorAll('[data-hidden]').forEach(element => {
     element.style.display = 'none';
 });
+// The start view is the one view shown from the start (isShown reads this)
+document.getElementById(START_VIEW_ID).style.display = 'block';
 
 // Every view change passes here, so any way out of the robot side (buttons, brand title, Escape,
 // logging in) turns the page white again, and the pointer trail exists only on the main menu
@@ -135,6 +139,20 @@ function showDoorChallenge() {
 function showMainMenu() {
     setView('mainMenu');
 }
+
+// Fails open: a page still on the start view goes to the main menu; any other view stays
+function leaveStartView() {
+    if (isShown(START_VIEW_ID)) showMainMenu();
+}
+
+// A script that fails to load (it would never decide) still leaves the start view, with the reason
+// on the main menu's own status line: the notification container is not parsed yet at that point.
+// Load failures reach window only in the capture phase; thrown errors are app.js's.
+window.addEventListener('error', event => {
+    if (!(event.target instanceof HTMLScriptElement)) return;
+    leaveStartView();
+    Errors.inline(document.getElementById('resumeError'), Errors.CODES.E_UNEXPECTED);
+}, true);
 
 function showLogin() {
     setView('loginContainer');

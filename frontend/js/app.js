@@ -57,8 +57,18 @@ window.addEventListener('unhandledrejection', event => {
     Errors.report(Errors.CODES.E_UNEXPECTED, null, event.reason);
 });
 
-// Initialize event listeners when DOM is ready
+// Initialize event listeners when DOM is ready. The page opens on the start view (the brand line
+// alone) and boot leaves it for the main menu or the app; whatever boot throws, the page still
+// fails open to the main menu, and the throw itself is reported (unhandledrejection above).
 document.addEventListener('DOMContentLoaded', async function() {
+    try {
+        await boot();
+    } finally {
+        leaveStartView();
+    }
+});
+
+async function boot() {
     // Check if current URL is valid for frontend
     if (!isValidFrontendRoute()) {
         // Redirect to 404 page for invalid routes
@@ -79,7 +89,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     await resumeSession();
-});
+}
 
 // Wires every control once, area by area, in the page's order
 function setupEventListeners() {
