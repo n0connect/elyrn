@@ -43,7 +43,7 @@ services:
       DB_NAME: noaddx_test
       DB_SSL_MODE: disable
       JWT_SECRET_MIN_LEN: "32"
-      JWT_EXPIRATION_MINUTES: "15"
+      JWT_EXPIRATION_MINUTES: "43200"
       JWT_ISSUER: "noaddx-backend"
       JWT_AUDIENCE: "noaddx-web"
       MASTER_KEY_ACTIVE_ID: "test-key-1"

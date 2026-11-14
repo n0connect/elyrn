@@ -112,7 +112,6 @@ const Errors = (() => {
         W_STORAGE_BLOCKED: w('another elyrn. tab is holding the storage — close the other tabs, then reload this one'),
         W_STORAGE_CLOSED: w('another elyrn. tab changed this browser\'s storage — reload this tab'),
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
-        W_LIVE_UPDATES_PAUSED: w('live updates paused — reload to resume'),
         W_COPY_MANUALLY: w('copy it manually'),
         // The robot door's challenge cannot run here (no random source, or no SHA-256 outside
         // https). The door is theatre and gates nothing, so the visitor is let through.
@@ -171,7 +170,16 @@ const Errors = (() => {
         W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT',
         W_RESPONSE_TOO_LARGE: 'W_RESPONSE_TOO_LARGE',
         // No Web Locks API: counters are still read fresh and written ahead, without the lock
-        W_COUNTER_LOCK_UNAVAILABLE: 'W_COUNTER_LOCK_UNAVAILABLE'
+        W_COUNTER_LOCK_UNAVAILABLE: 'W_COUNTER_LOCK_UNAVAILABLE',
+        // More counter records than Counters.MAX_RECORDS: the least recently used were dropped,
+        // so those conversations are judged from their visible messages only (once per page load)
+        W_COUNTER_RECORDS_EVICTED: 'W_COUNTER_RECORDS_EVICTED',
+        // The event stream delivered no event within its silence limit (a proxy buffering or
+        // holding it): updates are fetched on an interval until it delivers one again (chat.js)
+        W_LIVE_STREAM_SILENT: 'W_LIVE_STREAM_SILENT',
+        // The event stream failed MAX_RECONNECT_ATTEMPTS times in a row: it is not retried until
+        // the tab is shown again, and polling carries the updates meanwhile (chat.js)
+        W_LIVE_STREAM_GAVE_UP: 'W_LIVE_STREAM_GAVE_UP'
     });
 
     // Server error texts we recognise (compared lowercased); anything else is E_REQUEST_FAILED

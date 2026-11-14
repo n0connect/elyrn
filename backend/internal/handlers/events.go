@@ -15,7 +15,9 @@ import (
 const (
 	// sseWriteTimeout bounds every individual write so a stalled client cannot pin a goroutine
 	sseWriteTimeout = 10 * time.Second
-	// sseKeepAlive keeps proxies from reaping idle streams
+	// sseKeepAlive keeps proxies from reaping idle streams, and tells the browser the stream is
+	// delivering (frontend chat.js STREAM_SILENCE_LIMIT_MS allows two of them and some slack; one
+	// more is sent right after the preamble, for STREAM_FIRST_PROOF_MS)
 	sseKeepAlive = 25 * time.Second
 	// sseMaxLifetime forces periodic reconnects, which re-run JWT + session-epoch checks
 	sseMaxLifetime = 10 * time.Minute
@@ -23,7 +25,10 @@ const (
 	sseMaxIterations = 100000
 	// sseRetryPreamble asks the browser to reconnect after 3000 ms and marks the stream ready
 	sseRetryPreamble = "retry: 3000\n: ready\n\n"
-	ssePing          = ": ping\n\n"
+	// ssePing is a named event, not a comment: EventSource never shows a comment to the page, so
+	// only an event lets the browser see that a proxy is passing the stream through. The data line
+	// is required (an event without data is never dispatched) and carries nothing.
+	ssePing = "event: ping\ndata: {}\n\n"
 )
 
 // formatEvent renders whitelisted event kinds only; payloads are server-generated IDs.
@@ -77,7 +82,9 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(utils.HeaderContentType, utils.MIMEEventStream)
 	w.Header().Set("X-Accel-Buffering", "no") // nginx: do not buffer the stream
 	w.WriteHeader(http.StatusOK)
-	if !write(sseRetryPreamble) {
+	// The preamble first (the agent waits for its ": ready"), then one heartbeat at once, so a
+	// browser sees within its first-proof limit that the stream is being delivered
+	if !write(sseRetryPreamble + ssePing) {
 		return
 	}
 

@@ -8,13 +8,20 @@ two backend sources from the repository (no secrets there): nginx's own /api/ an
 the ones registered in backend/internal/apperr/edge.go, the 404 page must be the only status
 page (nginx's error_page 404 target, its one HTML location, frontend/js/utils.js
 STATUS_PAGES.NOT_FOUND and the only HTML file in frontend/ besides index.html), and the backend's stop grace must
-outlast its shutdown budget in backend/cmd/server/main.go. Exit 0 when every control holds, 1
+outlast its shutdown budget in backend/cmd/server/main.go. EDGE_TRUSTED_PROXIES: nginx
+believes a client address or protocol a request names only from a listed proxy on the clearnet
+listener, and nginx-edge-proxies.sh is run (into a temporary directory) to prove that the
+configured value renders, that the default renders no entry and that malformed lists are
+refused. Exit 0 when every control holds, 1
 with one line per failure otherwise, 2 on unusable input.
 """
 
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 from http import HTTPStatus
 from pathlib import Path
 
@@ -73,6 +80,39 @@ APPERR_GO = ROOT / "backend/internal/apperr/apperr.go"
 EDGE_GO = ROOT / "backend/internal/apperr/edge.go"
 NGINX_SITE = ROOT / "nginx-site.conf"
 NGINX_API_ERRORS = ROOT / "nginx-api-errors.conf"
+NGINX_CONF = ROOT / "nginx.conf"
+NGINX_API_PROXY = ROOT / "nginx-api-proxy.conf"
+# Renders EDGE_TRUSTED_PROXIES into the files nginx.conf includes (run at every nginx start)
+EDGE_RENDERER = ROOT / "nginx-edge-proxies.sh"
+EDGE_SETTING = "EDGE_TRUSTED_PROXIES"
+EDGE_OUT_DIR = "EDGE_PROXIES_OUT_DIR"
+EDGE_REALIP_FILE = "edge-proxies.realip"
+EDGE_GEO_FILE = "edge-proxies.geo"
+EDGE_REALIP_INCLUDE = "include /etc/nginx/conf.d/" + EDGE_REALIP_FILE + ";"
+EDGE_GEO_INCLUDE = "include /etc/nginx/conf.d/" + EDGE_GEO_FILE + ";"
+EDGE_RENDER_TIMEOUT_SEC = 10
+# Entries the renderer must refuse: injection, a zero prefix (every address), malformed, empty
+EDGE_MALFORMED = ("192.0.2.1;", "0.0.0.0/0", "::/0", "192.0.2.300", "192.0.2.1/33", "192.0.2.1,,192.0.2.2",
+                  "192.0.2.1,", "01.2.3.4", "1::2::3", "192.0.2.1\nset_real_ip_from 0.0.0.0/0")
+EDGE_SAMPLE = ("192.0.2.1", "2001:db8::/32")
+# Directives that make nginx believe a client-sent address; only the rendered file may hold them
+REALIP_DIRECTIVES = ("set_real_ip_from", "real_ip_header", "real_ip_recursive")
+# Headers nginx passes to the backend, each from the variable nginx alone decides
+FORWARDED_HEADERS = {
+    "X-Real-IP": "$client_addr",
+    "X-Forwarded-For": "$client_addr",
+    "X-Forwarded-Proto": "$forwarded_proto",
+}
+# A client-sent forwarding header used anywhere but the protocol map is a client choosing it
+CLIENT_FORWARDING = re.compile(r"\$(?:proxy_add_x_forwarded_for|http_x_forwarded_for|http_x_real_ip|http_forwarded)\b")
+EDGE_GEO = re.compile(r"^geo \$realip_remote_addr \$edge_peer \{\n\s+default 0;\n\s+" + re.escape(EDGE_GEO_INCLUDE) + r"\n\}",
+                      re.MULTILINE)
+PROTO_MAP = re.compile(r'^map "\$proxy_protocol_addr\|\$edge_peer\|\$http_x_forwarded_proto" \$forwarded_proto \{\n(.*?)\n\}',
+                       re.MULTILINE | re.DOTALL)
+PROTO_MAP_LINES = ["default $scheme;", '"|1|https" https;', '"|1|http" http;']
+SERVER_BLOCK = re.compile(r"^server \{\n(.*?)\n\}", re.MULTILINE | re.DOTALL)
+CLEARNET_LISTEN = "listen 8080;"
+ONION_LISTEN = "listen 8081 proxy_protocol;"
 FRONTEND = ROOT / "frontend"
 UTILS_JS = FRONTEND / "js/utils.js"
 # The SPA's page; every other HTML file in frontend/ is a status page
@@ -90,6 +130,12 @@ NOT_FOUND_PAGE = re.compile(r"NOT_FOUND: '(/[\w-]+\.html)'")
 API_PROXY_INCLUDE = "include /etc/nginx/elyrn/api-proxy.conf;"
 API_ERRORS_INCLUDE = "include /etc/nginx/elyrn/api-errors.conf;"
 API_DEFAULT_DENY = "location /api/ { " + API_ERRORS_INCLUDE + " return 404; }"
+# nginx is the one source of these on every response; the backend's copies are hidden on /api/
+NGINX_OWNED_HEADERS = {
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
 # Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
 NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
 # Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
@@ -250,6 +296,12 @@ def check_nginx():
             fail("nginx", f"nginx-site.conf must keep '{line}'")
     if API_DEFAULT_DENY not in site.splitlines():
         fail("nginx", "the /api/ default-deny line is missing")
+    proxy = read(NGINX_API_PROXY)
+    for header, value in NGINX_OWNED_HEADERS.items():
+        if f'add_header {header} "{value}" always;' not in site.splitlines():
+            fail("nginx", f"nginx-site.conf must send {header}: {value} on every response")
+        if f"proxy_hide_header {header};" not in proxy.splitlines():
+            fail("nginx", f"nginx-api-proxy.conf must hide the backend's {header} (one header, never two)")
     if "proxy_intercept_errors off;" not in errors or re.search(r"proxy_intercept_errors\s+on", site + errors):
         fail("nginx", "proxy_intercept_errors must be off: the backend's coded answers pass through")
     # Every location that proxies to the backend answers nginx's own failures in JSON
@@ -299,6 +351,83 @@ def check_status_pages(site):
     pages = sorted("/" + p.name for p in FRONTEND.glob("*.html") if p.name != SPA_PAGE)
     if pages != [page]:
         fail("frontend", "the only status page in frontend/ must be the 404 page; found: " + ", ".join(pages))
+
+
+def render_edge(value, out_dir):
+    """Runs the renderer as the nginx entrypoint does; its exit code (None if it would not run)."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), EDGE_SETTING: value, EDGE_OUT_DIR: out_dir}
+    try:
+        return subprocess.run(["sh", str(EDGE_RENDERER)], env=env, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=EDGE_RENDER_TIMEOUT_SEC, check=False).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def rendered_edge(value):
+    """(exit code, realip file, geo file) for one EDGE_TRUSTED_PROXIES value."""
+    with tempfile.TemporaryDirectory() as out_dir:
+        code = render_edge(value, out_dir)
+        texts = []
+        for name in (EDGE_REALIP_FILE, EDGE_GEO_FILE):
+            try:
+                texts.append(Path(out_dir, name).read_text(encoding="utf-8"))
+            except OSError:
+                texts.append(None)
+        return code, texts[0], texts[1]
+
+
+def entries(text):
+    """The lines of a rendered file that are not comments."""
+    return [line for line in (text or "").splitlines() if line.strip() and not line.startswith("#")]
+
+
+def check_edge_proxies(services):
+    """EDGE_TRUSTED_PROXIES: an address or protocol a request names is believed only from a
+    listed proxy, on the clearnet listener; the default (empty) believes none; a malformed list
+    stops nginx (nginx.conf, nginx-edge-proxies.sh)."""
+    conf, site, proxy, errors = read(NGINX_CONF), read(NGINX_SITE), read(NGINX_API_PROXY), read(NGINX_API_ERRORS)
+    # Comments may name what is forbidden; only directives count
+    static = "\n".join(line for text in (conf, site, proxy, errors) for line in text.splitlines()
+                       if not line.lstrip().startswith("#"))
+    for directive in REALIP_DIRECTIVES:
+        if re.search(r"^\s*" + directive + r"\b", static, re.MULTILINE):
+            fail("nginx", f"{directive} belongs only in the file rendered from {EDGE_SETTING}")
+    if CLIENT_FORWARDING.search(static):
+        fail("nginx", "a client-sent forwarding header is passed on or used outside the protocol map")
+    for header, variable in FORWARDED_HEADERS.items():
+        if f"proxy_set_header {header} {variable};" not in proxy.splitlines():
+            fail("nginx", f"nginx-api-proxy.conf must set {header} from {variable}")
+    if not EDGE_GEO.search(conf):
+        fail("nginx", "nginx.conf must decide $edge_peer by geo on $realip_remote_addr, default 0, from the rendered list")
+    proto = PROTO_MAP.search(conf)
+    if not proto or [" ".join(line.split()) for line in proto.group(1).splitlines()] != PROTO_MAP_LINES:
+        fail("nginx", "$forwarded_proto must be $scheme unless a listed proxy on the clearnet listener names http or https")
+    servers = SERVER_BLOCK.findall(conf)
+    clearnet = [body for body in servers if CLEARNET_LISTEN in body]
+    onion = [body for body in servers if ONION_LISTEN in body]
+    if len(clearnet) != 1 or EDGE_REALIP_INCLUDE not in clearnet[0]:
+        fail("nginx", f"the clearnet server must include {EDGE_REALIP_FILE}")
+    if len(onion) != 1 or EDGE_REALIP_INCLUDE in onion[0]:
+        fail("nginx", f"the onion server must not include {EDGE_REALIP_FILE}: its peer is tor")
+    env = services.get("frontend", {}).get("environment") or {}
+    if EDGE_SETTING not in env:
+        fail("frontend", f"{EDGE_SETTING} must be passed to nginx (empty by default)")
+    code, realip, geo = rendered_edge(str(env.get(EDGE_SETTING) or ""))
+    if code is None:
+        fail("nginx", f"{EDGE_RENDERER.name} cannot be run")
+        return
+    if code != 0:
+        fail("frontend", f"{EDGE_SETTING} is malformed: nginx would refuse to start")
+    code, realip, geo = rendered_edge("")
+    if code != 0 or realip is None or geo is None or entries(realip) or entries(geo):
+        fail("nginx", f"an empty {EDGE_SETTING} must render both files without a single entry")
+    code, realip, geo = rendered_edge(",".join(EDGE_SAMPLE))
+    want_realip = [f"set_real_ip_from {e};" for e in EDGE_SAMPLE] + ["real_ip_header X-Forwarded-For;", "real_ip_recursive on;"]
+    if code != 0 or entries(realip) != want_realip or entries(geo) != [f"{e} 1;" for e in EDGE_SAMPLE]:
+        fail("nginx", f"{EDGE_RENDERER.name} must render one set_real_ip_from and one geo entry per listed proxy")
+    for value in EDGE_MALFORMED:
+        if rendered_edge(value)[0] in (0, None):
+            fail("nginx", f"{EDGE_RENDERER.name} accepts a malformed {EDGE_SETTING}")
 
 
 def check_backend_memory(svc):
@@ -382,6 +511,7 @@ def main():
     check_backend_lifecycle(services["backend"])
     check_trust(services)
     check_nginx()
+    check_edge_proxies(services)
     if failures:
         for line in failures:
             print(f"[FAIL] {layout}: {line}")

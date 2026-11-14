@@ -39,7 +39,7 @@ func SetupTestEnv(t testing.TB) {
 
 	os.Setenv("JWT_SECRET", testJWTSecret)
 	os.Setenv("JWT_SECRET_MIN_LEN", "32")
-	os.Setenv("JWT_EXPIRATION_MINUTES", "15")
+	os.Setenv("JWT_EXPIRATION_MINUTES", "43200")
 	os.Setenv("JWT_ISSUER", "noaddx-backend")
 	os.Setenv("JWT_AUDIENCE", "noaddx-web")
 	os.Setenv("MASTER_KEY_ACTIVE", testEncryptionKey)

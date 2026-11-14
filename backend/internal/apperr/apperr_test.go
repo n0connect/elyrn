@@ -75,7 +75,7 @@ var jsonWire = map[Code]struct {
 }{
 	LoginBodyInvalid:   {400, `{"success":false,"message":"Invalid request"}`},
 	LoginKeyMalformed:  {401, `{"success":false,"message":"Invalid credentials"}`},
-	LoginLookupFailed:  {401, `{"success":false,"message":"Invalid credentials"}`},
+	LoginLookupFailed:  {500, `{"success":false,"message":"Internal server error"}`},
 	LoginNoAccount:     {401, `{"success":false,"message":"Invalid credentials"}`},
 	LoginLegacyAccount: {401, `{"success":false,"message":"Invalid credentials"}`},
 	IDTaken:            {409, `{"success":false,"message":"Id taken"}`},
@@ -209,7 +209,7 @@ func TestWriteMatchesLoginEncoding(t *testing.T) {
 func TestWriteCauseKeepsTheCauseOffTheWire(t *testing.T) {
 	rec := httptest.NewRecorder()
 	WriteCause(rec, "test", LoginLookupFailed, errors.New("pepper missing"))
-	assertAnswer(t, rec, 401, `{"success":false,"message":"Invalid credentials"}`)
+	assertAnswer(t, rec, 500, `{"success":false,"message":"Internal server error"}`)
 }
 
 func TestUnregisteredCodeAnswersInternal(t *testing.T) {

@@ -118,7 +118,7 @@ test('wave 2 codes exist with the severity they are reported at', () => {
         assert.equal(C[code], code);
         assert.equal(Errors.REGISTRY[code].severity, 'warning', code);
     }
-    for (const code of ['W_RESPONSE_TOO_LARGE', 'W_COUNTER_LOCK_UNAVAILABLE']) {
+    for (const code of ['W_RESPONSE_TOO_LARGE', 'W_COUNTER_LOCK_UNAVAILABLE', 'W_COUNTER_RECORDS_EVICTED']) {
         assert.equal(Errors.INTERNAL[code], code);
     }
     // A room judged expired by this device's clock names the clock

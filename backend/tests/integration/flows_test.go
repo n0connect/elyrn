@@ -13,6 +13,7 @@ import (
 
 	"elyrn/internal/auth"
 	"elyrn/internal/chat"
+	"elyrn/internal/config"
 	"elyrn/internal/database"
 	"elyrn/internal/identity"
 	"elyrn/internal/models"
@@ -247,6 +248,40 @@ func TestInvites_ActiveLimit(t *testing.T) {
 		expectStatus(t, alice.createInvite(), http.StatusCreated, "invite "+itoa(int64(i)))
 	}
 	expectStatus(t, alice.createInvite(), http.StatusTooManyRequests, "invite over limit")
+}
+
+// An invite expires on a whole hour, rounded up from its TTL: the stored expiry gives no
+// creation second (a dump grouped per creator_tag would otherwise date every invite), and the
+// invite still lives at least INVITE_TTL_SEC, so it is redeemed well inside it.
+func TestInvites_ExpireOnTheHourNoSoonerThanTheirTTL(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	ttl := config.GetInviteTTL()
+
+	before := time.Now()
+	rr := alice.createInvite()
+	after := time.Now()
+	expectStatus(t, rr, http.StatusCreated, "invite")
+	var invite models.InviteResponse
+	decode(t, rr, &invite)
+	expires := time.Unix(invite.ExpiresAt, 0)
+	if invite.ExpiresAt%int64(time.Hour/time.Second) != 0 {
+		t.Fatalf("expiry %d is not on a whole hour", invite.ExpiresAt)
+	}
+	if expires.Before(before.Add(ttl)) || !expires.Before(after.Add(ttl+time.Hour)) {
+		t.Fatalf("expiry %v is not the first whole hour at or after creation + %v", expires, ttl)
+	}
+
+	var stored models.Invite
+	if err := database.DB.Where("creator_tag <> ''").First(&stored).Error; err != nil {
+		t.Fatalf("read the stored invite: %v", err)
+	}
+	if !stored.ExpiresAt.Equal(expires) || stored.ExpiresAt.UTC().Truncate(time.Hour) != stored.ExpiresAt.UTC() {
+		t.Fatalf("stored expiry %v is not the answered one on a whole hour (%v)", stored.ExpiresAt, expires)
+	}
+
+	expectStatus(t, bob.do("POST", "/api/v2/invites/redeem", models.RedeemInviteRequest{Token: invite.Token}),
+		http.StatusCreated, "redeem inside the TTL")
 }
 
 // An invite costs a fresh, single-use proof of work, like each registration phase: a missing

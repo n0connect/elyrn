@@ -45,7 +45,7 @@ func checkBounds(settings []bounded) error {
 
 func seconds(d time.Duration) int { return int(d / time.Second) }
 
-// Whitelists. "off" (or "disabled") drops a cross-origin header; production keeps all three.
+// Whitelists
 var (
 	allowedAppEnvs   = map[string]struct{}{"development": {}, "test": {}, "production": {}, "prod": {}}
 	allowedLogLevels = map[string]struct{}{"debug": {}, "info": {}, "warn": {}, "error": {}}
@@ -54,16 +54,6 @@ var (
 	productionSSLModes = map[string]struct{}{"verify-ca": {}, "verify-full": {}}
 	// Booleans as config.getEnvBool reads them: anything else would silently read as false
 	allowedBooleans = map[string]struct{}{"true": {}, "false": {}, "1": {}, "0": {}, "yes": {}, "no": {}}
-	headerOff       = map[string]struct{}{"off": {}, "disabled": {}}
-	// Cross-origin header values a browser understands (Fetch and HTML standards)
-	crossOriginHeaders = []struct {
-		key     string
-		allowed map[string]struct{}
-	}{
-		{"SEC_HEADER_COOP", map[string]struct{}{"same-origin": {}, "same-origin-allow-popups": {}, "unsafe-none": {}}},
-		{"SEC_HEADER_CORP", map[string]struct{}{"same-origin": {}, "same-site": {}, "cross-origin": {}}},
-		{"SEC_HEADER_COEP", map[string]struct{}{"require-corp": {}, "credentialless": {}, "unsafe-none": {}}},
-	}
 )
 
 const (
@@ -123,7 +113,7 @@ func startupBounds(minJWTLen int) []bounded {
 	}
 	return []bounded{
 		{"JWT_SECRET_MIN_LEN", minJWTLen, 32, 1024},
-		{"JWT_EXPIRATION_MINUTES", int(config.GetJWTExpiration() / time.Minute), 1, 1440},
+		{"JWT_EXPIRATION_MINUTES", int(config.GetJWTExpiration() / time.Minute), config.MinJWTExpirationMinutes, config.MaxJWTExpirationMinutes},
 		{"MAX_REQUEST_BODY_BYTES", config.GetMaxRequestBodyBytes(), 1024, 16 << 20},
 		{"MAX_JSON_DEPTH", config.GetMaxJSONDepth(), 1, 8},
 		{"INVITE_TTL_SEC", seconds(config.GetInviteTTL()), 60, 7 * 24 * 3600},
@@ -238,8 +228,9 @@ func checkRootCert() error {
 	return nil
 }
 
-// checkHeaders: the HSTS settings and the cross-origin headers are whitelisted, so a typo never
-// reads as "off" (a malformed HSTS_MAX_AGE used to read as 0, i.e. no HSTS at all).
+// checkHeaders: the HSTS settings are whitelisted, so a typo never reads as "off" (a malformed
+// HSTS_MAX_AGE used to read as 0, i.e. no HSTS at all). The cross-origin headers are fixed
+// (middleware/security.go), not settings.
 func checkHeaders() error {
 	if raw := strings.TrimSpace(os.Getenv("HSTS_MAX_AGE")); raw != "" {
 		if age, err := strconv.Atoi(raw); err != nil || age < 0 || age > maxHSTSMaxAge {
@@ -251,20 +242,6 @@ func checkHeaders() error {
 			if _, ok := allowedBooleans[raw]; !ok {
 				return invalid(key, "must be true or false")
 			}
-		}
-	}
-	for _, header := range crossOriginHeaders {
-		raw := strings.ToLower(strings.TrimSpace(os.Getenv(header.key)))
-		if raw == "" {
-			continue
-		}
-		_, known := header.allowed[raw]
-		_, off := headerOff[raw]
-		if !known && !off {
-			return invalid(header.key, "must be a value browsers understand, or off")
-		}
-		if off && config.IsProductionMode() {
-			return invalid(header.key, "must not be off in production")
 		}
 	}
 	return nil

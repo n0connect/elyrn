@@ -191,3 +191,62 @@ test('singleFlight: calls during a run share it and add exactly one run after it
     await later;
     assert.equal(runs, 3);
 });
+
+test('streamNeedsPolling: a logged-in visible page polls only once its stream was silent for the whole limit', () => {
+    const needs = fn('streamNeedsPolling');
+    const limit = 60000;
+    // An event inside the limit: the stream is delivering, nothing is fetched
+    assert.equal(needs(1000, 1000, limit, true, true), false);
+    assert.equal(needs(1000 + limit - 1, 1000, limit, true, true), false);
+    // Silent for the whole limit, or longer: fetch
+    assert.equal(needs(1000 + limit, 1000, limit, true, true), true);
+    assert.equal(needs(1000 + 10 * limit, 1000, limit, true, true), true);
+    // Hidden or logged out: never, however long the silence (onVisible resyncs on return)
+    assert.equal(needs(10 * limit, 0, limit, false, true), false);
+    assert.equal(needs(10 * limit, 0, limit, true, false), false);
+    assert.equal(needs(10 * limit, 0, limit, false, false), false);
+    // Only true itself counts as visible or logged in
+    assert.equal(needs(10 * limit, 0, limit, 'visible', true), false);
+    assert.equal(needs(10 * limit, 0, limit, true, 1), false);
+});
+
+test('streamNeedsPolling: anything that is no proof of a recent event counts as silence', () => {
+    const needs = fn('streamNeedsPolling');
+    const limit = 60000;
+    // An event later than now (a clock that went back) proves nothing
+    assert.equal(needs(1000, 2000, limit, true, true), true);
+    for (const bad of [NaN, Infinity, -Infinity, undefined, null, '1000']) {
+        assert.equal(needs(bad, 1000, limit, true, true), true, `now ${String(bad)}`);
+        assert.equal(needs(1000, bad, limit, true, true), true, `last event ${String(bad)}`);
+        assert.equal(needs(1000, 1000, bad, true, true), true, `limit ${String(bad)}`);
+    }
+    // A limit that is no positive number never lets the stream count as delivering
+    assert.equal(needs(1000, 1000, 0, true, true), true);
+    assert.equal(needs(1000, 1000, -1, true, true), true);
+});
+
+// The watchdog's limits in chat.js against the heartbeat the server really sends, read from both
+// sources: a new stream shows one heartbeat at once and must show it within the first-proof
+// limit; a proven stream is allowed at least two heartbeats of silence before the page polls
+test('the stream limits match the server\'s named heartbeats', () => {
+    const chat = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
+    const events = readFileSync(new URL('../../backend/internal/handlers/events.go', import.meta.url), 'utf8');
+    const seconds = (source, pattern) => {
+        const found = source.match(pattern);
+        assert.ok(found, `${pattern} moved or changed form`);
+        return Number(found[1]);
+    };
+    const firstProof = seconds(chat, /const STREAM_FIRST_PROOF_MS = (\d+) \* SECOND_MS;/);
+    const limit = seconds(chat, /const STREAM_SILENCE_LIMIT_MS = (\d+) \* SECOND_MS;/);
+    const poll = seconds(chat, /const POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
+    const keepAlive = seconds(events, /sseKeepAlive = (\d+) \* time\.Second/);
+    assert.ok(limit >= 2 * keepAlive, 'silence limit shorter than two heartbeats');
+    assert.ok(firstProof > 0 && firstProof < keepAlive, 'the first proof must not wait for a periodic heartbeat');
+    assert.ok(poll > 0 && poll <= firstProof, 'the watchdog looks less often than the first-proof limit');
+    // The heartbeat is a named event the page listens to, never a comment it cannot see, and the
+    // first one follows the preamble at once (the preamble stays first: the agent waits for it)
+    assert.match(events, /ssePing = "event: ping\\ndata: \{\}\\n\\n"/);
+    assert.match(events, /sseRetryPreamble = "retry: 3000\\n: ready\\n\\n"/);
+    assert.match(events, /if !write\(sseRetryPreamble \+ ssePing\) \{/);
+    assert.match(chat, /const STREAM_EVENTS = Object\.freeze\(\['ping', 'msg', 'conv'\]\);/);
+});

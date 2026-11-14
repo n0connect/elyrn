@@ -14,7 +14,7 @@ const (
 	// The "noaddx" issuer, audience and database defaults are stored names kept across the rename to elyrn.
 	defaultJWTIssuer               = "noaddx-backend"
 	defaultJWTAudience             = "noaddx-web"
-	defaultJWTExpirationMinutes    = 15
+	defaultJWTExpirationMinutes    = 30 * 24 * 60 // 30 days: with the sliding refresh a session in use never ends
 	defaultAllowedOrigins          = "http://localhost"
 	defaultAppEnv                  = "development"
 	defaultLogLevel                = "info"
@@ -152,10 +152,19 @@ func GetJWTAudience() string {
 	return strings.TrimSpace(GetEnv("JWT_AUDIENCE", defaultJWTAudience))
 }
 
-// GetJWTExpiration returns JWT token expiration duration
+// Session lifetime accepted at startup (JWT_EXPIRATION_MINUTES).
+const (
+	// MinJWTExpirationMinutes: a session must outlive at least one request round
+	MinJWTExpirationMinutes = 1
+	// MaxJWTExpirationMinutes: 365 days; logout and account deletion revoke sooner (session_epoch)
+	MaxJWTExpirationMinutes = 365 * 24 * 60
+)
+
+// GetJWTExpiration returns JWT token expiration duration. A value above
+// MaxJWTExpirationMinutes reads as 0 (refused at startup) before it can overflow time.Duration.
 func GetJWTExpiration() time.Duration {
 	minutes := getEnvIntDefault("JWT_EXPIRATION_MINUTES", defaultJWTExpirationMinutes)
-	if minutes <= 0 {
+	if minutes <= 0 || minutes > MaxJWTExpirationMinutes {
 		return 0
 	}
 	return time.Duration(minutes) * time.Minute
@@ -283,31 +292,6 @@ func GetHSTSIncludeSubDomains() bool {
 // GetHSTSPreload returns whether HSTS preload is enabled
 func GetHSTSPreload() bool {
 	return getEnvBool("HSTS_PRELOAD")
-}
-
-// crossOriginHeader reads one cross-origin header setting, lower case; "off" or "disabled"
-// drops the header (empty). Startup validation whitelists the values.
-func crossOriginHeader(key, defaultValue string) string {
-	value := strings.ToLower(strings.TrimSpace(GetEnv(key, defaultValue)))
-	if value == "off" || value == "disabled" {
-		return ""
-	}
-	return value
-}
-
-// GetSecurityHeaderCOOP returns Cross-Origin-Opener-Policy (default same-origin; "off" disables)
-func GetSecurityHeaderCOOP() string {
-	return crossOriginHeader("SEC_HEADER_COOP", "same-origin")
-}
-
-// GetSecurityHeaderCORP returns Cross-Origin-Resource-Policy (default same-origin; "off" disables)
-func GetSecurityHeaderCORP() string {
-	return crossOriginHeader("SEC_HEADER_CORP", "same-origin")
-}
-
-// GetSecurityHeaderCOEP returns Cross-Origin-Embedder-Policy (default require-corp; "off" disables)
-func GetSecurityHeaderCOEP() string {
-	return crossOriginHeader("SEC_HEADER_COEP", "require-corp")
 }
 
 // ========================================

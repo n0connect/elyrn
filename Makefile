@@ -53,7 +53,7 @@ FUZZ_TARGETS := scripts/check-fuzz-targets.py
 # Frontend manifest: what the release workflow signs and verify-frontend checks against
 MANIFEST ?= frontend.sha256
 
-.PHONY: help setup certs check-production check-hardening check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent \
+.PHONY: help setup certs check-production check-hardening check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent agent-cross \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db fuzz fuzz-js \
         build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts test-restore
@@ -84,6 +84,8 @@ help:
 	@echo "  clean         Stop services, delete images, volumes and test artifacts"
 	@echo "  check-hardening  Fail unless the rendered compose config keeps every container control"
 	@echo "  agent         Build bin/elyrn-agent (the robot entrance, MCP on stdio) for this host and ENGINE"
+	@echo "                (openssl, the default, needs OpenSSL >= $(AGENT_OPENSSL_MIN) headers and links to them: this host only)"
+	@echo "  agent-cross   Build a portable, static native-engine agent: make agent-cross GOOS=linux GOARCH=arm64"
 	@echo ""
 	@echo "Testing Targets:"
 	@echo "  test          Full Go suite for ENGINE in Docker (openssl also runs equivalence)"
@@ -276,13 +278,39 @@ test-run: test up
 # The robot entrance (docs/architecture/agents.md), built on the host for ENGINE: stripped,
 # position independent, no local paths (RULES.md §14.1)
 AGENT_BIN := bin/elyrn-agent
+AGENT_BUILD := go build -trimpath -buildmode=pie -ldflags "-s -w"
+# The openssl engine compiles against these headers and links to this libcrypto at run time
+AGENT_OPENSSL_MIN := 3.2
+AGENT_OPENSSL_PC := libcrypto
 
 agent:
+	@if [ "$(ENGINE)" = openssl ] && ! pkg-config --atleast-version=$(AGENT_OPENSSL_MIN) $(AGENT_OPENSSL_PC) 2>/dev/null; then \
+		echo "[ERROR] ENGINE=openssl needs OpenSSL >= $(AGENT_OPENSSL_MIN) development headers that pkg-config finds ($(AGENT_OPENSSL_PC))."; \
+		echo "        Install them (Debian/Ubuntu: libssl-dev, Alpine: openssl-dev, macOS: brew install openssl@3 with"; \
+		echo "        PKG_CONFIG_PATH set to its lib/pkgconfig), or build the portable native engine instead:"; \
+		echo "        make agent ENGINE=native, or make agent-cross GOOS=<os> GOARCH=<arch> for another system."; \
+		exit 1; \
+	fi
 	@echo "[INFO] Building $(AGENT_BIN) (crypto engine: $(ENGINE))..."
 	@mkdir -p bin
-	@cd backend && CGO_ENABLED=$(CGO_$(ENGINE)) go build -trimpath -buildmode=pie -ldflags "-s -w" \
+	@cd backend && CGO_ENABLED=$(CGO_$(ENGINE)) $(AGENT_BUILD) \
 		-tags "$(GO_TAGS_$(ENGINE))" -o ../$(AGENT_BIN) ./cmd/agent
 	@echo "[OK] $(AGENT_BIN)"
+
+# The agent for another system (or a portable one for this host): the native engine without
+# cgo, so one static binary per GOOS/GOARCH, named after them. Both are required.
+AGENT_CROSS_BIN = $(AGENT_BIN)-$(GOOS)-$(GOARCH)$(if $(filter windows,$(GOOS)),.exe)
+
+agent-cross:
+	@if [ -z "$(GOOS)" ] || [ -z "$(GOARCH)" ]; then \
+		echo "[ERROR] usage: make agent-cross GOOS=<os> GOARCH=<arch> (e.g. GOOS=linux GOARCH=arm64; list: go tool dist list)"; exit 1; fi
+	@cd backend && go tool dist list | grep -qx "$(GOOS)/$(GOARCH)" || { \
+		echo "[ERROR] $(GOOS)/$(GOARCH) is not a Go target (go tool dist list)"; exit 1; }
+	@echo "[INFO] Building $(AGENT_CROSS_BIN) (crypto engine: native, $(GOOS)/$(GOARCH), static)..."
+	@mkdir -p bin
+	@cd backend && CGO_ENABLED=$(CGO_native) GOOS=$(GOOS) GOARCH=$(GOARCH) $(AGENT_BUILD) \
+		-tags "$(GO_TAGS_native)" -o ../$(AGENT_CROSS_BIN) ./cmd/agent
+	@echo "[OK] $(AGENT_CROSS_BIN)"
 
 test-unit:
 	@echo "[INFO] Running local Go unit tests (crypto engine: $(ENGINE), no database)..."
@@ -393,8 +421,9 @@ verify-frontend:
 shell-backend:
 	@$(DOCKER_COMPOSE) -f docker-compose.yaml exec backend /bin/sh
 
+# The container's own POSTGRES_USER and POSTGRES_DB (DB_USER, DB_NAME): any configured names
 shell-db:
-	@$(DOCKER_COMPOSE) -f docker-compose.yaml exec postgres psql -U postgres -d noaddx
+	@$(DOCKER_COMPOSE) -f docker-compose.yaml exec postgres sh -c 'exec psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
 # Accounts only (users with their id sequence, and key_checks: the pepper commitment, the
 # schema version and the retention mark): messages expire and burned conversations must stay

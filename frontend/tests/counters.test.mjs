@@ -154,3 +154,79 @@ test('earlier page: the loaded sequence and its snapshot are left as they were',
     // The next page down is bounded by the lowest counters of everything above it
     assert.deepEqual(new Map(Counters.lowest(Counters.lowest(new Map(), run.latest), run.state)), new Map([[ALICE, 50], [BOB, 20]]));
 });
+
+// ---------- keeping records (counters.js KEEPING RECORDS) ----------
+// The stored record exactly as Keystore.saveCounters writes it: the counters, a use stamp and
+// the room's expiry (0 for a pair)
+function storedAs(record, used, expires) {
+    return { seq: record.seq, mine: record.mine, senders: record.senders.map((e) => [e[0], e[1]]), used, expires };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const NOW = Date.UTC(2026, 10, 13);
+
+// What retention() drops of { id: [used, expires] }, sorted, in this realm
+function dropped(records, held) {
+    const entries = Object.entries(records).map(([id, [used, expires]]) => Counters.retentionEntry(id, { used, expires }));
+    const verdict = Counters.retention(entries, NOW, held);
+    return { drop: [...verdict.drop].sort(), evicted: verdict.evicted };
+}
+
+test('hide, relist, replay: a pair the server omitted keeps its record, which flags the replay once it is listed again', () => {
+    // The device saw up to seq 10, Alice at 5, and stored that
+    const state = fresh();
+    assert.deepEqual(play(state, [[ALICE, 4, 9], [ALICE, 5, 10]]), ['ok', 'ok']);
+    const stored = storedAs(Counters.snapshot(state, 10, 0), 1, 0);
+    // A listing omits the conversation: nothing the device knows itself drops the record,
+    // however long the server keeps it hidden
+    const later = NOW + 3650 * DAY_MS;
+    assert.deepEqual([...Counters.retention([Counters.retentionEntry('pair', stored)], later, new Set()).drop], []);
+    // Listed again: the stored record still judges, and the old message under a new seq is a replay
+    const relisted = Counters.ledger(Counters.parse(stored));
+    assert.deepEqual(play(relisted, [[ALICE, 5, 11]]), ['replay']);
+    assert.deepEqual(play(Counters.ledger(Counters.parse(stored)), [[ALICE, 3, 12]]), ['replay']);
+    assert.deepEqual(play(Counters.ledger(Counters.parse(stored)), [[ALICE, 6, 11]]), ['ok']);
+});
+
+test('a stored record keeps its counters whatever use stamp and expiry it carries', () => {
+    const record = Counters.parse({ seq: 10, mine: 3, senders: [[ALICE, 5]] });
+    assert.ok(Counters.same(Counters.parse(storedAs(record, 7, NOW)), record));
+    // A record from before stamps were kept is the least recently used, with no expiry
+    const legacy = Counters.retentionEntry('old', { seq: 1, mine: 0, senders: [] });
+    assert.equal(legacy.used, 0);
+    assert.equal(legacy.expires, 0);
+    for (const junk of [null, 'x', { used: -1, expires: 1.5 }, { used: '9', expires: NaN }]) {
+        const entry = Counters.retentionEntry('j', junk);
+        assert.equal(entry.used, 0);
+        assert.equal(entry.expires, 0);
+    }
+});
+
+test('a room record goes only once the room\'s own expiry lies more than the grace in the past', () => {
+    const grace = Counters.EXPIRED_ROOM_GRACE_MS;
+    assert.deepEqual(dropped({ edge: [1, NOW - grace], inside: [2, NOW - grace + 1], past: [3, NOW - grace - 1], pair: [4, 0] }),
+        { drop: ['past'], evicted: false });
+    assert.equal(Counters.expiredLongAgo(NOW - grace, NOW), false);
+    assert.equal(Counters.expiredLongAgo(NOW - grace - 1, NOW), true);
+    assert.equal(Counters.expiredLongAgo(0, NOW), false);
+});
+
+test('bound: past the most records kept, the least recently used go first and the listed ones last', () => {
+    const max = Counters.MAX_RECORDS;
+    const records = {};
+    for (let i = 1; i <= max; i++) records[`c${i}`] = [i, 0];
+    assert.deepEqual(dropped(records), { drop: [], evicted: false });
+    // Three more: the three oldest stamps go, and the bound reports an eviction
+    records.n1 = [max + 1, 0];
+    records.n2 = [max + 2, 0];
+    records.legacy = [0, 0];
+    assert.deepEqual(dropped(records), { drop: ['c1', 'c2', 'legacy'], evicted: true });
+    // A conversation listed now is evicted after every unlisted one, whatever its stamp
+    assert.deepEqual(dropped(records, new Set(['legacy', 'c1'])), { drop: ['c2', 'c3', 'c4'], evicted: true });
+    // A room expired long ago is dropped first and makes room without evicting anything
+    records.n2 = [max + 2, NOW - Counters.EXPIRED_ROOM_GRACE_MS - 1];
+    records.n3 = [max + 3, NOW - Counters.EXPIRED_ROOM_GRACE_MS - 1];
+    delete records.legacy;
+    delete records.n1;
+    assert.deepEqual(dropped(records), { drop: ['n2', 'n3'], evicted: false });
+});

@@ -39,6 +39,16 @@
 // at once can spend the same counter; the second is then flagged as a replay. Two tabs of one
 // browser cannot: chat.js takes each counter under a lock they share, from the record as stored
 // at that moment, and stores the raised record before the message is posted.
+//
+// KEEPING RECORDS (zero trust; the agent's rule, backend/internal/agent/state.go). The server
+// may omit a conversation from one listing, or answer 404 for it, and list it again later: a
+// record dropped on that word would let its old messages replay undetected. So a record is
+// dropped only on facts this device holds itself: the user's own burn or leave the server
+// confirmed (204), or, for a room, its own expiry from its verified code lying more than
+// EXPIRED_ROOM_GRACE_MS in the past (such a room is then never shown again either). A pair has
+// no expiry of its own: its record stays until the user burns it. Past MAX_RECORDS records the
+// least recently used go first (retention()): a use is a raise of the record (a message seen
+// or sent), stamped with an increasing number, never a time.
 
 const Counters = (() => {
     'use strict';
@@ -47,6 +57,10 @@ const Counters = (() => {
     // Bounds the cost of reading a stored record; a room has at most 32 seats at a time,
     // so even heavy churn stays far below this
     const MAX_SENDERS = 4096;
+    // The most counter records one device keeps (the agent keeps as many, maxStateRooms)
+    const MAX_RECORDS = 1024;
+    // How long past its own expiry a room's record is kept (the agent's expiredRoomGrace)
+    const EXPIRED_ROOM_GRACE_MS = 24 * 60 * 60 * 1000;
 
     const EMPTY = Object.freeze({ seq: 0, mine: 0, senders: Object.freeze([]) });
     const REPLAY = Object.freeze({ replay: true, gap: 0 });
@@ -139,5 +153,41 @@ const Counters = (() => {
         return merge(state.record, freeze(seq, mine, state.run));
     }
 
-    return Object.freeze({ EMPTY, parse, merge, same, ledger, history, lowest, judge, admit, snapshot });
+    // ---------- keeping records (see KEEPING RECORDS) ----------
+
+    // Whether a room that expires at expiresMs (0: no expiry of its own, a pair) expired more
+    // than EXPIRED_ROOM_GRACE_MS before nowMs
+    function expiredLongAgo(expiresMs, nowMs) {
+        return isCount(expiresMs) && expiresMs > 0 && nowMs > expiresMs + EXPIRED_ROOM_GRACE_MS;
+    }
+
+    // What retention() needs of a stored record: its use stamp and its room's expiry (both 0
+    // when missing or malformed: a record from before they were kept is the oldest, with none)
+    function retentionEntry(id, raw) {
+        const used = raw && isCount(raw.used) ? raw.used : 0;
+        const expires = raw && isCount(raw.expires) ? raw.expires : 0;
+        return { id: id, used: used, expires: expires };
+    }
+
+    // The ids of the records to drop: those of rooms expired long ago, then, past MAX_RECORDS,
+    // the least recently used (the conversations in `held`, listed now, last). `evicted` says
+    // whether the bound evicted any.
+    function retention(entries, nowMs, held) {
+        const drop = [];
+        const kept = [];
+        for (const entry of entries) {
+            if (expiredLongAgo(entry.expires, nowMs)) drop.push(entry.id);
+            else kept.push(entry);
+        }
+        const excess = kept.length - MAX_RECORDS;
+        if (excess <= 0) return { drop: drop, evicted: false };
+        const isHeld = entry => (held && held.has(entry.id) ? 1 : 0);
+        kept.sort((a, b) => (isHeld(a) - isHeld(b)) || (a.used - b.used));
+        return { drop: drop.concat(kept.slice(0, excess).map(entry => entry.id)), evicted: true };
+    }
+
+    return Object.freeze({
+        EMPTY, MAX_RECORDS, EXPIRED_ROOM_GRACE_MS, parse, merge, same, ledger, history, lowest, judge, admit, snapshot,
+        expiredLongAgo, retentionEntry, retention
+    });
 })();

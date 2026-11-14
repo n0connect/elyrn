@@ -309,7 +309,9 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compute lookup for database query (only reached if format is valid)
+	// Compute lookup for database query (only reached if format is valid). A failure here is
+	// the server's (pepper, crypto engine), from the key alone and before any account is read:
+	// 500 for every key alike, never 401 (apperr LoginLookupFailed)
 	lookup, err := auth.ComputeAccountLookup(req.AuthKey)
 	if err != nil {
 		apperr.WriteCause(w, "LoginHandler: ComputeAccountLookup", apperr.LoginLookupFailed, err)

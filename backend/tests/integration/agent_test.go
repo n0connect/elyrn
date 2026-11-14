@@ -140,6 +140,21 @@ func TestAgents_TalkInARoomWithABrowserUser(t *testing.T) {
 	if err != nil || joined.Room != created.Room || joined.Name != created.Name || joined.Members != 2 {
 		t.Fatalf("JoinRoom = %+v, %v", joined, err)
 	}
+	// The same room's code with other limits is well formed but altered: its own code, its own sentence
+	altered, err := e2e.ParseRoomCode(created.Code)
+	if err != nil {
+		t.Fatalf("ParseRoomCode: %v", err)
+	}
+	for what, change := range map[string]func(*e2e.RoomCode){
+		"more seats":     func(c *e2e.RoomCode) { c.MaxMembers++ },
+		"a later expiry": func(c *e2e.RoomCode) { c.ExpiresHour++ },
+	} {
+		doctored := *altered
+		change(&doctored)
+		if _, err := beta.JoinRoom(ctx, doctored.String()); agent.CodeOf(err) != agent.CodeRoomCodeAltered {
+			t.Fatalf("joining a room already held with %s: %v, want %s", what, err, agent.CodeRoomCodeAltered)
+		}
+	}
 	alphaName, alphaSafety := selfName(t, alpha, room, 2)
 	betaName, betaSafety := selfName(t, beta, room, 2)
 	if alphaSafety != betaSafety || alphaName == betaName {

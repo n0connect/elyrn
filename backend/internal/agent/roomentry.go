@@ -107,9 +107,9 @@ func (a *Agent) JoinRoom(ctx context.Context, codeText string) (*RoomJoined, err
 		if err != nil {
 			return err
 		}
-		// A known room under other limits is a doctored code: the server refuses it too
+		// A known room under other limits is an altered code: the server refuses it too
 		if st, ok := a.rooms[keys.ID]; ok && (st.maxMembers != code.MaxMembers || st.expiresAt.Unix() != code.ExpiresAt()) {
-			return fail(CodeRoomCode, nil)
+			return fail(CodeRoomCodeAltered, nil)
 		}
 		var resp models.ConversationResponse
 		status, err := a.api(ctx, http.MethodPost, pathRoomsJoin, models.JoinRoomRequest{ID: keys.ID.String(), Lookup: keys.Lookup,

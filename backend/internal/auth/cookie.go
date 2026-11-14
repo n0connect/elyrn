@@ -29,7 +29,7 @@ func AuthCookieName() string {
 // SECURITY: SameSite=Strict prevents CSRF
 // SECURITY: __Host- prefix enforces security requirements
 func SetAuthCookie(w http.ResponseWriter, token string) {
-	expirationMinutes := config.GetJWTExpiration()
+	lifetime := config.GetJWTExpiration()
 
 	cookie := &http.Cookie{
 		Name:     AuthCookieName(),
@@ -38,7 +38,7 @@ func SetAuthCookie(w http.ResponseWriter, token string) {
 		HttpOnly: true,                      // JavaScript cannot access (XSS protection)
 		Secure:   config.IsProductionMode(), // HTTPS only in production
 		SameSite: http.SameSiteStrictMode,   // CSRF protection
-		MaxAge:   int(expirationMinutes.Seconds()),
+		MaxAge:   int(lifetime / time.Second),
 	}
 
 	http.SetCookie(w, cookie)

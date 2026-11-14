@@ -335,7 +335,7 @@ func (s *Service) CreateInvite(me *Member) (string, time.Time, error) {
 		return "", time.Time{}, err
 	}
 
-	expiresAt := now.Add(config.GetInviteTTL())
+	expiresAt := expiryAfter(now, config.GetInviteTTL())
 	invite := models.Invite{
 		ID:            inviteID,
 		Lookup:        lookup,
@@ -767,6 +767,22 @@ func (s *Service) ListMessages(me *Member, conversationID uuid.UUID, cursor Page
 		})
 	}
 	return result, nil
+}
+
+// expiryGranularity: invites and room notes expire on a whole hour, rounded up (rooms expire on
+// whole hours, messages on whole days), so a stored expiry never tells the second a row was
+// created. Rows stored before this keep their exact expiry and expire as stored.
+const expiryGranularity = time.Hour
+
+// expiryAfter is now + ttl rounded up to the next whole expiryGranularity (UTC): never before
+// now + ttl, so an invite or a note lives at least its TTL, and at most one granule longer.
+func expiryAfter(now time.Time, ttl time.Duration) time.Time {
+	at := now.UTC().Add(ttl)
+	rounded := at.Truncate(expiryGranularity)
+	if rounded.Before(at) {
+		rounded = rounded.Add(expiryGranularity)
+	}
+	return rounded
 }
 
 // expiryDay returns the day-granular deletion date for ciphertext stored now.

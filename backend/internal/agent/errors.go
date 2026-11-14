@@ -58,22 +58,23 @@ const (
 	CodeStopped          Code = "E_AGENT_STOPPED"
 
 	// Rooms
-	CodeRoomUnknown    Code = "E_AGENT_ROOM_UNKNOWN"
-	CodeRoomVerify     Code = "E_AGENT_ROOM_VERIFY"
-	CodeRoomCode       Code = "E_AGENT_ROOM_CODE"
-	CodeRoomExpired    Code = "E_AGENT_ROOM_EXPIRED"
-	CodeRoomNotFound   Code = "E_AGENT_ROOM_NOT_FOUND"
-	CodeRoomFull       Code = "E_AGENT_ROOM_FULL"
-	CodeRoomLimit      Code = "E_AGENT_ROOM_LIMIT"
-	CodeRoomCreate     Code = "E_AGENT_ROOM_CREATE"
-	CodeRoster         Code = "E_AGENT_ROSTER"
-	CodeRosterChanged  Code = "E_AGENT_ROSTER_CHANGED"
-	CodeMessageText    Code = "E_AGENT_MESSAGE_TEXT"
-	CodeSendUncertain  Code = "E_AGENT_SEND_UNCERTAIN"
-	CodeMessageIDTaken Code = "E_AGENT_MESSAGE_ID_TAKEN"
-	CodeAccountNumber  Code = "E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER"
-	CodeReplay         Code = "E_AGENT_REPLAY"
-	CodeInternal       Code = "E_AGENT_INTERNAL"
+	CodeRoomUnknown     Code = "E_AGENT_ROOM_UNKNOWN"
+	CodeRoomVerify      Code = "E_AGENT_ROOM_VERIFY"
+	CodeRoomCode        Code = "E_AGENT_ROOM_CODE"
+	CodeRoomCodeAltered Code = "E_AGENT_ROOM_CODE_ALTERED"
+	CodeRoomExpired     Code = "E_AGENT_ROOM_EXPIRED"
+	CodeRoomNotFound    Code = "E_AGENT_ROOM_NOT_FOUND"
+	CodeRoomFull        Code = "E_AGENT_ROOM_FULL"
+	CodeRoomLimit       Code = "E_AGENT_ROOM_LIMIT"
+	CodeRoomCreate      Code = "E_AGENT_ROOM_CREATE"
+	CodeRoster          Code = "E_AGENT_ROSTER"
+	CodeRosterChanged   Code = "E_AGENT_ROSTER_CHANGED"
+	CodeMessageText     Code = "E_AGENT_MESSAGE_TEXT"
+	CodeSendUncertain   Code = "E_AGENT_SEND_UNCERTAIN"
+	CodeMessageIDTaken  Code = "E_AGENT_MESSAGE_ID_TAKEN"
+	CodeAccountNumber   Code = "E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER"
+	CodeReplay          Code = "E_AGENT_REPLAY"
+	CodeInternal        Code = "E_AGENT_INTERNAL"
 )
 
 // sentences is the registry: a code without a sentence is a programming error (Sentence falls
@@ -117,22 +118,23 @@ var sentences = map[Code]string{
 	CodeCallInFlight:     "Another tool call is still running (this agent runs one at a time); wait for its answer, or send notifications/cancelled for it, then call again.",
 	CodeStopped:          "The agent is shutting down and takes no more calls; start it again.",
 
-	CodeRoomUnknown:    "This account is in no such room (it may have expired, been burned, or failed verification); call rooms to list the rooms you are in.",
-	CodeRoomVerify:     "The server's data for this room does not match its code, so the room is hidden; do not trust this server with it.",
-	CodeRoomCode:       "The room code is malformed; ask for the code again and pass it exactly as given (elyrn#...).",
-	CodeRoomExpired:    "This room has expired; ask for a new room code.",
-	CodeRoomNotFound:   "No room answers to this code (wrong, expired or burned); ask for a new room code.",
-	CodeRoomFull:       "The room is full; ask its owner for a room with more seats.",
-	CodeRoomLimit:      "max_members or ttl_hours exceeds this server's room limits; call again with smaller values.",
-	CodeRoomCreate:     "The room could not be stored after several fresh codes; retry in a minute.",
-	CodeRoster:         "The member list of this room failed verification; retry, and do not trust this server with the room if it persists.",
-	CodeRosterChanged:  "The room's members kept changing while the message was being sent; read the room, then send again.",
-	CodeMessageText:    "The text is empty, longer than " + strconv.Itoa(MaxMessageChars) + " characters, contains control characters or does not fit one message; shorten or clean it and send again.",
-	CodeSendUncertain:  "The server did not confirm the message; read the room to see whether it arrived before sending it again.",
-	CodeMessageIDTaken: "The server refused the message because its id was already in use, also under a fresh id, so it was not sent; send it again, and tell the server's operator if this repeats.",
-	CodeAccountNumber:  "The text contains something that looks like an account number, which is the only key to an account; it was not sent. Remove it and send again.",
-	CodeReplay:         "A message was served again under a new position, or out of order; it is listed in replays without its text. If this repeats, the server or a member is replaying old messages: do not trust this server with the room.",
-	CodeInternal:       "An internal error occurred in the agent; retry, and report it if it persists.",
+	CodeRoomUnknown:     "This account is in no such room (it may have expired, been burned, or failed verification); call rooms to list the rooms you are in.",
+	CodeRoomVerify:      "The server's data for this room does not match its code, so the room is hidden; do not trust this server with it.",
+	CodeRoomCode:        "The room code is malformed; ask for the code again and pass it exactly as given (elyrn#...).",
+	CodeRoomCodeAltered: "This code names a room you are in, but with other limits than the code you joined with: it was altered. Ask for the code again.",
+	CodeRoomExpired:     "This room has expired; ask for a new room code.",
+	CodeRoomNotFound:    "No room answers to this code (wrong, expired or burned); ask for a new room code.",
+	CodeRoomFull:        "The room is full; ask its owner for a room with more seats.",
+	CodeRoomLimit:       "max_members or ttl_hours exceeds this server's room limits; call again with smaller values.",
+	CodeRoomCreate:      "The room could not be stored after several fresh codes; retry in a minute.",
+	CodeRoster:          "The member list of this room failed verification; retry, and do not trust this server with the room if it persists.",
+	CodeRosterChanged:   "The room's members kept changing while the message was being sent; read the room, then send again.",
+	CodeMessageText:     "The text is empty, longer than " + strconv.Itoa(MaxMessageChars) + " characters, contains control characters or does not fit one message; shorten or clean it and send again.",
+	CodeSendUncertain:   "The server did not confirm the message; read the room to see whether it arrived before sending it again.",
+	CodeMessageIDTaken:  "The server refused the message because its id was already in use, also under a fresh id, so it was not sent; send it again, and tell the server's operator if this repeats.",
+	CodeAccountNumber:   "The text contains something that looks like an account number, which is the only key to an account; it was not sent. Remove it and send again.",
+	CodeReplay:          "A message was served again under a new position, or out of order; it is listed in replays without its text. If this repeats, the server or a member is replaying old messages: do not trust this server with the room.",
+	CodeInternal:        "An internal error occurred in the agent; retry, and report it if it persists.",
 }
 
 // Sentence returns what the operator should do next for code.

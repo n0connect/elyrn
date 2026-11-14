@@ -142,9 +142,13 @@ func overTheNetwork(t *testing.T, method, url string, raw []byte, cookie *http.C
 // longer than the write timeout (15 s).
 const slowChunkDelay = 1500 * time.Millisecond
 
-// sseCommentPrefix starts an SSE comment line (the stream's ": ready" and keep-alive pings),
-// which a client ignores
+// sseCommentPrefix starts an SSE comment line (the stream's ": ready" preamble), which a client
+// ignores
 const sseCommentPrefix = ":"
+
+// The two lines of the stream's heartbeat (handlers' ssePing): sent once right after the preamble
+// and then every sseKeepAlive, so an idle stream carries it too
+var sseHeartbeatLines = map[string]bool{"event: ping": true, "data: {}": true}
 
 // L-03: a request that runs several statements on a slow database, each one well inside its own
 // deadline, still answers its registered 503 before the write deadline, because the whole
@@ -216,8 +220,9 @@ func TestEvents_StreamOutlivesTheRequestDeadline(t *testing.T) {
 	waitFor(t, lines, "retry: 3000")
 
 	// Until the request budget and the write timeout have both passed, the stream may carry only
-	// what an idle stream writes: SSE comment lines (the preamble's ": ready", keep-alive pings)
-	// and the blank lines that end them. Anything else, or the stream closing, fails.
+	// what an idle stream writes: SSE comment lines (the preamble's ": ready"), the heartbeat sent
+	// right after the preamble (a named ping event) and the blank lines that end them. Anything
+	// else, or the stream closing, fails.
 	outlive := time.After(max(database.RequestBudget(), config.GetServerWriteTimeout()) + time.Second)
 	for idle := true; idle; {
 		select {
@@ -225,7 +230,7 @@ func TestEvents_StreamOutlivesTheRequestDeadline(t *testing.T) {
 			if !open {
 				t.Fatal("the stream closed before the request deadline passed")
 			}
-			if line != "" && !strings.HasPrefix(line, sseCommentPrefix) {
+			if line != "" && !strings.HasPrefix(line, sseCommentPrefix) && !sseHeartbeatLines[line] {
 				t.Fatalf("unexpected line %q before any event", line)
 			}
 		case <-outlive:
@@ -280,6 +285,28 @@ func TestLogin_DatabaseOutageIsNotInvalidCredentials(t *testing.T) {
 	restore()
 	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: alice.authKey}),
 		http.StatusOK, "login after the outage")
+}
+
+// A lookup the server cannot compute (here: no pepper) is its own fault, never "invalid
+// credentials": 500 E_LOGIN_LOOKUP_FAILED, the same answer byte for byte for the key of an
+// existing account and for a key that matches none, so it reveals no account either.
+func TestLogin_LookupFailureIsAServerFaultForEveryKey(t *testing.T) {
+	mux := setup(t)
+	alice := register(t, mux)
+	stranger := testutil.NewAuthKey(t)
+
+	t.Setenv("ACCOUNT_LOOKUP_PEPPER", "")
+	answers := make([]*httptest.ResponseRecorder, 0, 2)
+	for _, key := range []string{alice.authKey, stranger} {
+		rr := newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: key})
+		if !testutil.IsAnswer(rr, apperr.LoginLookupFailed) {
+			t.Fatalf("login without a pepper: %d %q, want the registered E_LOGIN_LOOKUP_FAILED answer", rr.Code, rr.Body.String())
+		}
+		answers = append(answers, rr)
+	}
+	if answers[0].Code != answers[1].Code || answers[0].Body.String() != answers[1].Body.String() {
+		t.Fatal("an existing account and an unknown key got different answers")
+	}
 }
 
 // The account number is shown in phase 1 and saved by the user before phase 2 creates the

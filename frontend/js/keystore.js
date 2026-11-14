@@ -8,8 +8,10 @@
 // The AccountNumber itself is never stored anywhere.
 // It also remembers which conversations the user verified (safety number compared),
 // bound to the peer key that was verified, and, per conversation, the counter record that
-// exposes replays after a reload (counters.js: highest seq and counters, never text, ids or
-// times). None of this ever reaches the server.
+// exposes replays after a reload (counters.js: highest seq and counters, a use stamp that only
+// counts, and a room's own expiry hour from its code; never text, ids or the time of any
+// activity). Which records are kept and for how long: counters.js KEEPING RECORDS. None of this
+// ever reaches the server.
 //
 // Two ways to forget. wipeIdentity() is for what the server decides (a 401, a refused /me): it
 // removes the identity record only, so the counter records and verification marks survive and a
@@ -40,6 +42,8 @@ const Keystore = (() => {
     const RECORD = 'identity';
     // The public key of the account the counter and verified records belong to (kept by wipeIdentity)
     const OWNER = 'owner';
+    // The last use stamp given to a counter record (saveCounters): only ever grows
+    const USE_STAMP = 'counterUse';
     // Web Locks name of one conversation's counter record, shared by every tab of this browser
     const COUNTER_LOCK_PREFIX = 'elyrn-counter-';
 
@@ -213,14 +217,18 @@ const Keystore = (() => {
 
     // Without storage the record lives in memory only (chat.js), as before it was persisted.
     // Resolves to the stored value (undefined when none), or null when storage failed.
-    async function countersOp(mode, action) {
+    async function countersRun(storeNames, mode, action) {
         try {
-            const value = await transact(mode, action, COUNTERS_STORE);
+            const value = await run(storeNames, mode, action);
             return mode === 'readonly' ? value : true;
         } catch (e) {
             unavailable(Errors.INTERNAL.W_COUNTERS_UNAVAILABLE, e);
             return null;
         }
+    }
+
+    function countersOp(mode, action) {
+        return countersRun(COUNTERS_STORE, mode, tx => action(tx.objectStore(COUNTERS_STORE)));
     }
 
     // Runs action holding one conversation's counter lock, shared by every tab of this browser,
@@ -241,17 +249,54 @@ const Keystore = (() => {
         return countersOp('readonly', store => store.get(conversationId));
     }
 
-    function saveCounters(conversationId, record) {
-        return countersOp('readwrite', store => store.put({
-            seq: record.seq,
-            mine: record.mine,
-            senders: record.senders.map(entry => [entry[0], entry[1]])
-        }, conversationId));
+    // Stores a raised record with its use stamp (the next USE_STAMP: an increasing number shared
+    // by every tab, never a time) and its room's expiry (expiresMs; 0 for a pair), the two facts
+    // pruneCounters keeps records by (counters.js KEEPING RECORDS)
+    function saveCounters(conversationId, record, expiresMs) {
+        return countersRun([STORE, COUNTERS_STORE], 'readwrite', tx => {
+            const keys = tx.objectStore(STORE);
+            const stamp = keys.get(USE_STAMP);
+            stamp.onsuccess = () => {
+                const used = (Number.isSafeInteger(stamp.result) && stamp.result > 0 ? stamp.result : 0) + 1;
+                keys.put(used, USE_STAMP);
+                tx.objectStore(COUNTERS_STORE).put({
+                    seq: record.seq,
+                    mine: record.mine,
+                    senders: record.senders.map(entry => [entry[0], entry[1]]),
+                    used: used,
+                    expires: expiresMs
+                }, conversationId);
+            };
+        });
     }
 
-    // Burned, left or gone: nothing about the conversation stays behind
+    // Only the user's own burn or leave the server confirmed: never a listing that omitted the
+    // conversation or a 404 (counters.js KEEPING RECORDS)
     function forgetCounters(conversationId) {
         return countersOp('readwrite', store => store.delete(conversationId));
+    }
+
+    // Drops the records Counters.retention names (rooms expired long ago; past its bound the least
+    // recently used, the conversations in `held` last), in one transaction. Resolves to whether
+    // the bound evicted any (false when storage failed).
+    async function pruneCounters(nowMs, held) {
+        let evicted = false;
+        const done = await countersOp('readwrite', store => {
+            const entries = [];
+            const cursor = store.openCursor();
+            cursor.onsuccess = () => {
+                const at = cursor.result;
+                if (at) {
+                    entries.push(Counters.retentionEntry(at.key, at.value));
+                    at.continue();
+                    return;
+                }
+                const verdict = Counters.retention(entries, nowMs, held);
+                evicted = verdict.evicted;
+                for (const id of verdict.drop) store.delete(id);
+            };
+        });
+        return done === true && evicted;
     }
 
     // A session the server ended: the identity goes, the replay records stay with their owner
@@ -282,6 +327,6 @@ const Keystore = (() => {
 
     return Object.freeze({
         save, load, wipeIdentity, wipeAll, setVerified, isVerified,
-        loadCounters, saveCounters, forgetCounters, withCounterLock
+        loadCounters, saveCounters, forgetCounters, pruneCounters, withCounterLock
     });
 })();

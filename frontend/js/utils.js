@@ -135,6 +135,18 @@ function singleFlight(task) {
     };
 }
 
+// Whether a page must fetch its updates instead of waiting for its live event stream (chat.js
+// watchdog): only a logged-in, visible page polls, and only once the stream has delivered no
+// event of any kind for silenceLimitMs. Anything that is no proof of a recent event (a time that
+// is not finite, an event later than now, a limit that is not a positive number) counts as
+// silence: a needless poll costs one request, a missed one hides messages until a tab switch.
+function streamNeedsPolling(now, lastEventAt, silenceLimitMs, visible, loggedIn) {
+    if (loggedIn !== true || visible !== true) return false;
+    const recent = Number.isFinite(now) && Number.isFinite(lastEventAt) && Number.isFinite(silenceLimitMs) &&
+        silenceLimitMs > 0 && lastEventAt <= now && now - lastEventAt < silenceLimitMs;
+    return !recent;
+}
+
 // Fallback for older browsers and insecure contexts: execCommand reports failure by returning
 // false or by throwing, depending on the browser; both reject
 function copyBySelection(text) {

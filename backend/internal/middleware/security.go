@@ -12,6 +12,17 @@ import (
 // apiCSP makes every API response inert: JSON is data, never a document that loads or runs anything
 const apiCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
+// The cross-origin headers, fixed: the app loads nothing from other origins. nginx sends the
+// same three on every response the browser sees (nginx-site.conf) and hides these copies of
+// them on /api/ (nginx-api-proxy.conf), so a browser never gets two of one; they are set here
+// for a backend reached without nginx. Not configurable: a setting here could only disagree
+// with nginx (the SEC_HEADER_* settings of earlier releases are gone and ignored).
+const (
+	crossOriginOpenerPolicy   = "same-origin"
+	crossOriginResourcePolicy = "same-origin"
+	crossOriginEmbedderPolicy = "require-corp"
+)
+
 // permissionsPolicy denies every powerful browser feature the app never uses
 const permissionsPolicy = "accelerometer=(), autoplay=(), browsing-topics=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), interest-cohort=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=()"
 
@@ -25,6 +36,9 @@ func SecurityHeadersMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", permissionsPolicy)
 
+		// HSTS: nginx never sends it, so this is its only source (on API answers, which a browser
+		// applies to the whole host). HTTPS is known from nginx's X-Forwarded-Proto, which carries
+		// the outer proxy's word only from EDGE_TRUSTED_PROXIES (nginx.conf).
 		if config.IsProductionMode() && IsRequestHTTPS(r) {
 			maxAge := config.GetHSTSMaxAge()
 			if maxAge > 0 {
@@ -39,15 +53,9 @@ func SecurityHeadersMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		if coop := config.GetSecurityHeaderCOOP(); coop != "" {
-			w.Header().Set("Cross-Origin-Opener-Policy", coop)
-		}
-		if corp := config.GetSecurityHeaderCORP(); corp != "" {
-			w.Header().Set("Cross-Origin-Resource-Policy", corp)
-		}
-		if coep := config.GetSecurityHeaderCOEP(); coep != "" {
-			w.Header().Set("Cross-Origin-Embedder-Policy", coep)
-		}
+		w.Header().Set("Cross-Origin-Opener-Policy", crossOriginOpenerPolicy)
+		w.Header().Set("Cross-Origin-Resource-Policy", crossOriginResourcePolicy)
+		w.Header().Set("Cross-Origin-Embedder-Policy", crossOriginEmbedderPolicy)
 
 		next(w, r)
 	}

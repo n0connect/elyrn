@@ -7,8 +7,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"elyrn/internal/apperr/opcode"
 	"elyrn/internal/config"
@@ -53,7 +55,7 @@ func TestValidateStartupConfig_RejectsOutOfRangeValues(t *testing.T) {
 		"body limit over 16 MiB":        {"MAX_REQUEST_BODY_BYTES", "99999999"},
 		"json depth too deep":           {"MAX_JSON_DEPTH", "64"},
 		"invite ttl over 7 days":        {"INVITE_TTL_SEC", "9999999"},
-		"session lifetime over a day":   {"JWT_EXPIRATION_MINUTES", "100000"},
+		"session lifetime over a year":  {"JWT_EXPIRATION_MINUTES", "525601"},
 		"conversations per user absurd": {"MAX_CONVERSATIONS_PER_USER", "1000000"},
 		"non-numeric value":             {"MAX_ACTIVE_INVITES", "five"},
 	}
@@ -62,6 +64,46 @@ func TestValidateStartupConfig_RejectsOutOfRangeValues(t *testing.T) {
 			t.Setenv(c[0], c[1])
 			if err := validate(t); err == nil {
 				t.Errorf("%s=%s accepted", c[0], c[1])
+			}
+		})
+	}
+}
+
+// The session lifetime is accepted from 1 minute to 365 days, defaults to 30 days, and a value
+// whose nanoseconds would wrap time.Duration back into the range is refused, not wrapped.
+func TestValidateStartupConfig_SessionLifetimeBounds(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+
+	t.Run("default is 30 days", func(t *testing.T) {
+		t.Setenv("JWT_EXPIRATION_MINUTES", "")
+		if got, want := config.GetJWTExpiration(), 30*24*time.Hour; got != want {
+			t.Fatalf("default session lifetime %v, want %v", got, want)
+		}
+		if err := validate(t); err != nil {
+			t.Fatalf("default session lifetime rejected: %v", err)
+		}
+	})
+
+	for _, minutes := range []int{config.MinJWTExpirationMinutes, 43200, config.MaxJWTExpirationMinutes} {
+		value := strconv.Itoa(minutes)
+		t.Run("accepts "+value, func(t *testing.T) {
+			t.Setenv("JWT_EXPIRATION_MINUTES", value)
+			if err := validate(t); err != nil {
+				t.Fatalf("JWT_EXPIRATION_MINUTES=%s rejected: %v", value, err)
+			}
+			if got, want := config.GetJWTExpiration(), time.Duration(minutes)*time.Minute; got != want {
+				t.Fatalf("JWT_EXPIRATION_MINUTES=%s read as %v, want %v", value, got, want)
+			}
+		})
+	}
+
+	// 307488935 minutes overflows int64 nanoseconds and would wrap to exactly 43200 minutes
+	for _, value := range []string{"0", "-1", strconv.Itoa(config.MaxJWTExpirationMinutes + 1), "307488935", "1e3"} {
+		t.Run("refuses "+value, func(t *testing.T) {
+			t.Setenv("JWT_EXPIRATION_MINUTES", value)
+			if err := validate(t); err == nil {
+				t.Fatalf("JWT_EXPIRATION_MINUTES=%q accepted", value)
 			}
 		})
 	}
@@ -198,10 +240,6 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 		{"HSTS_MAX_AGE", "leak-hsts-age", false},
 		{"HSTS_INCLUDE_SUBDOMAINS", "leak-hsts-sub", false},
 		{"HSTS_PRELOAD", "leak-hsts-preload", false},
-		{"SEC_HEADER_COOP", "leak-coop", false},
-		{"SEC_HEADER_CORP", "leak-corp", false},
-		{"SEC_HEADER_COEP", "leak-coep", false},
-		{"SEC_HEADER_COOP", "off", true},
 		{"DB_PASSWORD", "leak-pw", true},
 	}
 	for _, c := range cases {

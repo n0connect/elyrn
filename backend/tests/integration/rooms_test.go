@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"elyrn/internal/chat"
+	"elyrn/internal/config"
 	"elyrn/internal/database"
 	"elyrn/internal/e2e"
 	"elyrn/internal/models"
@@ -756,6 +757,7 @@ func TestRoomNotes_AFriendRequestReachesOnlyItsAddressee(t *testing.T) {
 	var invite models.InviteResponse
 	decode(t, rr, &invite)
 	noteID, blob := a.note(t, b, invite.Token)
+	sentAt := time.Now()
 	expectStatus(t, a.postNote(noteID, b.member.Card, blob), http.StatusCreated, "send the request")
 	expectStatus(t, a.postNote(noteID, b.member.Card, blob), http.StatusConflict, "send it again")
 
@@ -770,6 +772,19 @@ func TestRoomNotes_AFriendRequestReachesOnlyItsAddressee(t *testing.T) {
 	waiting := b.notes(t)
 	if len(waiting) != 1 || waiting[0].ID != noteID {
 		t.Fatalf("bob's notes: %+v", waiting)
+	}
+	// Stored on a whole hour, like the room's own expiry: no creation second in a dump
+	var stored models.RoomNote
+	if err := database.DB.Where("id = ?", noteID).First(&stored).Error; err != nil {
+		t.Fatalf("read the stored note: %v", err)
+	}
+	roomExpiry := time.Unix(a.code.ExpiresAt(), 0)
+	wantAtLeast := sentAt.Add(config.GetInviteTTL())
+	if roomExpiry.Before(wantAtLeast) {
+		wantAtLeast = roomExpiry
+	}
+	if at := stored.ExpiresAt.UTC(); !at.Truncate(time.Hour).Equal(at) || at.After(roomExpiry) || at.Before(wantAtLeast) {
+		t.Fatalf("note expiry %v: want a whole hour, at least %v and never after the room (%v)", at, wantAtLeast, roomExpiry)
 	}
 	opened, err := b.room.OpenNote(b.member, uuid.MustParse(noteID), waiting[0].Blob)
 	if err != nil || opened.Text != invite.Token || !bytes.Equal(opened.Sender, a.member.Public) {

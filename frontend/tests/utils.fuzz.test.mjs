@@ -1,7 +1,8 @@
 // Fuzz: frontend/js/utils.js, loaded as the browser loads it (after log.js and errors.js).
 // apiCall reads answers of random status, type, size and chunking from a real local node:http
 // server, including bodies around MAX_RESPONSE_BYTES, declared or streamed; once and
-// singleFlight run under random interleavings of calls and completions.
+// singleFlight run under random interleavings of calls and completions; streamNeedsPolling (the
+// event stream watchdog's decision) is checked against an independent model.
 // Run: node --test frontend/tests/*.fuzz.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,6 +19,9 @@ const MAX_CHUNKS = 8;
 const STATUSES = [200, 201, 204, 400, 401, 403, 404, 409, 413, 429, 500, 502, 503];
 const TYPES = ['application/json', 'application/json; charset=utf-8', 'text/plain', 'text/html', ''];
 const NO_BODY = 204;
+const POLL_ITERATIONS = 5000;
+// Times and limits the watchdog decision is fuzzed over, in milliseconds either side of zero
+const POLL_SPAN = 600000;
 
 const { context, get } = load({ AbortSignal, DOMException, Response, TextDecoder }, ['../js/log.js', '../js/errors.js', '../js/utils.js']);
 const MAX = get('MAX_RESPONSE_BYTES');
@@ -211,5 +215,31 @@ test('singleFlight: runs never overlap, and every call awaits a run that started
         await Promise.all(settled);
         assert.deepEqual(unserved, [], 'calls settled without a run started after them');
         assert.ok(starts.length <= calls, `${starts.length} runs for ${calls} calls`);
+    });
+});
+
+test('streamNeedsPolling: matches an independent model on random times, limits and states', async () => {
+    const needs = get('streamNeedsPolling');
+    const odd = [NaN, Infinity, -Infinity, undefined, null, '5', {}, -0];
+    const number = (r) => (r.bool(0.1) ? r.pick(odd) : r.int(-POLL_SPAN, POLL_SPAN));
+    const flag = (r) => (r.bool(0.1) ? r.pick([1, 'true', null, undefined]) : r.bool());
+    await fuzz(SEED + 4, POLL_ITERATIONS, async (r) => {
+        const now = number(r);
+        const last = r.bool(0.3) && Number.isFinite(now) ? now - r.int(0, POLL_SPAN) : number(r);
+        const limit = number(r);
+        const visible = flag(r);
+        const loggedIn = flag(r);
+        const got = needs(now, last, limit, visible, loggedIn);
+        assert.equal(typeof got, 'boolean');
+        // The model: never for a page that is hidden or logged out; otherwise unless an event
+        // provably lies inside the limit
+        const active = visible === true && loggedIn === true;
+        const finite = [now, last, limit].every((v) => typeof v === 'number' && Number.isFinite(v));
+        const delivering = finite && limit > 0 && last <= now && now - last < limit;
+        assert.equal(got, active && !delivering, `now=${String(now)} last=${String(last)} limit=${String(limit)} visible=${String(visible)} in=${String(loggedIn)}`);
+        // Monotone in time: once a visible page polls, a later look with no new event polls too
+        if (got && finite && limit > 0 && last <= now) {
+            assert.equal(needs(now + r.int(0, POLL_SPAN), last, limit, true, true), true);
+        }
     });
 });

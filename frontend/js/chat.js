@@ -14,6 +14,19 @@ const Chat = (() => {
     const MAX_RECONNECT_ATTEMPTS = 8;
     const RECONNECT_BASE_MS = 1000;
     const RECONNECT_MAX_MS = 30000;
+    // The server sends a named heartbeat right after a stream opens (backend handlers/events.go):
+    // a (re)connected stream that has not shown it this long is not delivering (a proxy buffers
+    // or holds it), and the page polls instead of waiting longer
+    const STREAM_FIRST_PROOF_MS = 5 * SECOND_MS;
+    // ...and one every 25 s after (sseKeepAlive): a stream that proved itself and then went silent
+    // for two of them and some slack has stopped delivering
+    const STREAM_SILENCE_LIMIT_MS = 60 * SECOND_MS;
+    // How often the watchdog looks, and so how often a silent stream's page fetches its updates:
+    // at most 5 requests per poll per visible tab (1 when no conversation is open), so 4 visible
+    // tabs stay at 4 r/s, inside nginx's 20 r/s with burst 40 per client
+    const POLL_INTERVAL_MS = 5 * SECOND_MS;
+    // Every named event the stream sends; any one of them proves it is delivering
+    const STREAM_EVENTS = Object.freeze(['ping', 'msg', 'conv']);
     const MAX_CIPHERTEXT_CHARS = 11000;
     // A roster can change between fetching it and sending (412): fetch, re-encrypt, retry, bounded
     const MAX_ROSTER_RETRIES = 2;
@@ -33,6 +46,11 @@ const Chat = (() => {
     let events = null;
     let reconnectAttempts = 0;
     let reconnectTimer = null;
+    let pollTimer = null;             // the watchdog's next look (watchStream), from start to stop
+    let lastStreamEventAt = 0;        // performance.now() of the last stream event, or of the last (re)connect
+    let streamLimitMs = STREAM_FIRST_PROOF_MS;  // the silence allowed since then: first proof, or the heartbeat limit
+    let polling = false;              // the watchdog is fetching for a silent stream (logged once per silence)
+    let outageShown = false;          // a fetch failed while polling and was shown: polls stay quiet until one succeeds
     let refreshTimer = null;
     let listLoaded = false;           // distinguishes the first load from live additions
     let inviteRun = null;             // { stopScramble } while an invite is paid for and revealed
@@ -41,6 +59,11 @@ const Chat = (() => {
     const drafts = new Map();         // id -> composer text typed for it and not sent (memory only, never stored)
     const unverified = new Map();     // id -> { id, aura, owner }: listed rooms that failed verification
     const reportedRooms = new Set();  // ids of rooms whose failed verification was reported (once each)
+    // id -> the last counter record of a conversation dropped from this session but not burned by
+    // the user (a listing omitted it, a 404): it judges again if the server lists it again, also
+    // when storage failed (counters.js KEEPING RECORDS)
+    const parked = new Map();
+    let evictionWarned = false;       // W_COUNTER_RECORDS_EVICTED is logged once per page load
     // Raised by every local change to the set of conversations (a join, a burn, a leave, the end
     // of the session): a list fetched before it is stale and is never applied (refreshNow)
     let listGeneration = 0;
@@ -132,6 +155,7 @@ const Chat = (() => {
         showApp();
         await refreshConversations();
         connectEvents();
+        armWatchdog();
     }
 
     function stop() {
@@ -140,6 +164,9 @@ const Chat = (() => {
         // A proof of work still running belongs to this session: end it, which releases its lock
         cancelProofsOfWork();
         closeEvents();
+        clearTimeout(pollTimer);
+        polling = false;
+        outageShown = false;
         clearTimeout(refreshTimer);
         conversations.clear();
         order = [];
@@ -149,6 +176,7 @@ const Chat = (() => {
         unsent = null;
         unverified.clear();
         reportedRooms.clear();
+        parked.clear();
         drafts.clear();
         me = null;
         clearChildren(document.getElementById('conversationList'));
@@ -186,14 +214,16 @@ const Chat = (() => {
         const result = await api('GET', '/conversations');
         if (generation !== listGeneration) return;
         if (!result.ok || !result.data || !Array.isArray(result.data.conversations)) {
-            if (result.status !== 401) Errors.report(Errors.CODES.E_CONVERSATIONS_NOT_LOADED, null, result);
+            if (result.status !== 401) reportFetchFailure(Errors.CODES.E_CONVERSATIONS_NOT_LOADED, result);
             return;
         }
+        outageShown = false;
 
         const listed = await mergeListed(result.data.conversations, generation);
         if (!listed) return;
         dropUnlisted(listed.seen);
         order = listed.order;
+        if (!listLoaded) pruneMarks(listed.seen);
         listLoaded = true;
         renderList();
         const active = conversations.get(activeId);
@@ -231,6 +261,7 @@ const Chat = (() => {
             // Joining again (from another device) re-seals this account's vault: verify the new
             // one from scratch instead of taking the change for tampering
             if (existing && isRoom && existing.room && item.room.vault !== existing.room.vault) {
+                parked.set(item.id, existing.mark);
                 conversations.delete(item.id);
                 existing = null;
                 reopen = reopen || activeId === item.id;
@@ -257,7 +288,9 @@ const Chat = (() => {
         return { seen: seen, order: nextOrder, joined: joined, reopen: reopen };
     }
 
-    // Forgets every conversation the server no longer lists; leaving the open one says why
+    // Drops every conversation the server no longer lists from this session; leaving the open one
+    // says why. Its counter record stays (the server's word is no fact to forget it on): if the
+    // server lists it again, its old messages are still judged against what this device saw.
     function dropUnlisted(seen) {
         for (const id of Array.from(unverified.keys())) {
             if (!seen.has(id)) unverified.delete(id);
@@ -266,7 +299,6 @@ const Chat = (() => {
             if (!seen.has(id)) {
                 const gone = conversations.get(id);
                 forget(id);
-                forgetMark(gone);
                 if (activeId === id) {
                     activeId = null;
                     setComposer('');
@@ -289,7 +321,9 @@ const Chat = (() => {
             myMaxN: 0,                  // this device's highest counter here: never spent twice
             spare: 0,                   // a counter taken for a send the server refused: taken again next
             ledger: Counters.ledger(Counters.EMPTY),  // senders' counters in the loaded sequence
-            mark: Counters.EMPTY,       // the last record saved: kept in memory when storage fails
+            // the last record saved (kept in memory when storage fails), or the one kept when this
+            // conversation was dropped from the session earlier (parked)
+            mark: parked.get(item.id) || Counters.EMPTY,
             markLoad: Promise.resolve(Counters.EMPTY),  // the record read when last opened
             lastSeq: item.last_seq,
             readSeq: item.read_seq,
@@ -315,6 +349,8 @@ const Chat = (() => {
             await holdUnverified(item, e);
             return null;
         }
+        // Expired long ago by its own code: its counter record may be gone, so it is never shown
+        if (Counters.expiredLongAgo(state.room.expiresAt, Date.now())) return null;
         state.aura = await Rooms.aura(item.id);
         return state;
     }
@@ -343,7 +379,7 @@ const Chat = (() => {
             if (result.status === 204 || result.status === 404) {
                 listGeneration++;
                 unverified.delete(id);
-                await Keystore.forgetCounters(id);
+                if (result.status === 204) await forgetRecord(id);
                 renderList();
                 showSuccess(held.owner ? Errors.NOTICE.BURNED : Errors.NOTICE.ROOM_LEFT);
                 scheduleRefresh();
@@ -353,8 +389,11 @@ const Chat = (() => {
         });
     }
 
-    // Drops a conversation from this session, with the draft typed for it
+    // Drops a conversation from this session, with the draft typed for it; its counter record is
+    // parked, never forgotten (only forgetMark forgets it)
     function forget(id) {
+        const conv = conversations.get(id);
+        if (conv) parked.set(id, conv.mark);
         conversations.delete(id);
         drafts.delete(id);
     }
@@ -447,7 +486,7 @@ const Chat = (() => {
     function sync(conv) {
         conv.syncChain = conv.syncChain.then(() => syncNow(conv)).catch(error => {
             if (me && activeId === conv.id && conv.loaded) {
-                Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, error);
+                reportFetchFailure(Errors.CODES.E_MESSAGES_NOT_LOADED, error);
             } else {
                 Log.error(Errors.INTERNAL.E_SYNC_FAILED, error);
             }
@@ -470,10 +509,11 @@ const Chat = (() => {
         }
         if (!result.ok || !result.data || !Array.isArray(result.data.messages)) {
             // A first load that fails is shown in the conversation itself, by open()
-            if (conv.loaded) Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
+            if (conv.loaded) reportFetchFailure(Errors.CODES.E_MESSAGES_NOT_LOADED, result);
             else Log.error(Errors.INTERNAL.E_SYNC_FAILED, result);
             return false;
         }
+        outageShown = false;
         if (!conv.loaded) {
             // A new loaded sequence starts from what this device remembers (counters.js, rule 2)
             const record = await conv.markLoad;
@@ -668,7 +708,7 @@ const Chat = (() => {
     async function writeMark(conv, stored, record) {
         conv.mark = record;
         if (!Counters.same(record, stored)) {
-            await Keystore.saveCounters(conv.id, record);
+            await Keystore.saveCounters(conv.id, record, conv.room ? conv.room.expiresAt : 0);
         }
     }
 
@@ -699,9 +739,25 @@ const Chat = (() => {
         }
     }
 
-    // Queued behind the conversation's syncs so a save in flight cannot land after the removal
+    // The user's own burn or leave, confirmed by the server (204): the only time a conversation's
+    // counter record is forgotten before its room expires (counters.js KEEPING RECORDS). Queued
+    // behind the conversation's syncs so a save in flight cannot land after the removal.
     function forgetMark(conv) {
-        conv.syncChain = conv.syncChain.then(() => Keystore.forgetCounters(conv.id));
+        conv.syncChain = conv.syncChain.then(() => forgetRecord(conv.id));
+    }
+
+    function forgetRecord(id) {
+        parked.delete(id);
+        return Keystore.forgetCounters(id);
+    }
+
+    // Once per session, on its first listing: drops the records of rooms expired long ago and,
+    // past the bound, the least recently used (the conversations listed now last)
+    async function pruneMarks(listedIds) {
+        if (await Keystore.pruneCounters(Date.now(), listedIds) && !evictionWarned) {
+            evictionWarned = true;
+            Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
+        }
     }
 
     async function markRead(conv) {
@@ -1277,7 +1333,8 @@ const Chat = (() => {
         if (result.status === 204 || result.status === 404) {
             listGeneration++;
             forget(id);
-            if (conv) forgetMark(conv);
+            // Only a burn or leave the server confirmed forgets the record; a 404 is its word only
+            if (conv && result.status === 204) forgetMark(conv);
             // Nothing typed for a burned conversation is kept
             setComposer('');
             backToList();
@@ -1301,11 +1358,16 @@ const Chat = (() => {
     function connectEvents() {
         closeEvents();
         if (!me) return;
+        // The new stream has STREAM_FIRST_PROOF_MS to show its first heartbeat before the watchdog
+        // polls (also while it backs off and reconnects: the page is not left waiting)
+        lastStreamEventAt = performance.now();
+        streamLimitMs = STREAM_FIRST_PROOF_MS;
         events = new EventSource(`${API_BASE_URL}/events`);
-        events.addEventListener('open', () => {
-            reconnectAttempts = 0;
-            resync();
-        });
+        // 'open' proves nothing: a buffering proxy sends the headers and holds every event after
+        // them, and a proxy that opens and drops would otherwise reconnect forever. It catches up
+        // (resync); only an event that arrived proves the stream (noteStreamEvent).
+        events.addEventListener('open', () => resync());
+        STREAM_EVENTS.forEach(kind => events.addEventListener(kind, noteStreamEvent));
         events.addEventListener('msg', onMessageEvent);
         events.addEventListener('conv', scheduleRefresh);
         // Never rely on the browser's built-in retry (fixed interval, unlimited attempts):
@@ -1320,7 +1382,9 @@ const Chat = (() => {
         if (!me) return;
         const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            Errors.report(Errors.CODES.W_LIVE_UPDATES_PAUSED);
+            // Nothing to show: the watchdog keeps fetching while the tab is visible (no stream
+            // event can arrive now), and showing the tab again retries the stream (onVisible)
+            Log.warn(Errors.INTERNAL.W_LIVE_STREAM_GAVE_UP);
             return;
         }
         reconnectAttempts++;
@@ -1360,17 +1424,68 @@ const Chat = (() => {
         }
     }
 
-    function resync() {
-        if (!me) return;
+    // Resolves once the open conversation's sync has settled (the list refresh runs on its own
+    // debounce, one at a time), so the watchdog never queues a poll behind one still running.
+    // fromPoll: the watchdog asked, so a failure already shown in this outage stays quiet
+    // (reportFetchFailure); any other resync shows its failure again, as it always did.
+    function resync(fromPoll = false) {
+        if (!me) return Promise.resolve();
+        if (!fromPoll) outageShown = false;
         scheduleRefresh();
         const conv = conversations.get(activeId);
-        if (conv) sync(conv);
+        return conv ? sync(conv) : Promise.resolve();
+    }
+
+    // ---------- watchdog: polling while the stream is silent ----------
+
+    // Any stream event proves the stream delivers: the watchdog stops polling, the stream's next
+    // silence may last the heartbeat limit, and the reconnect backoff starts again from the bottom
+    function noteStreamEvent() {
+        lastStreamEventAt = performance.now();
+        streamLimitMs = STREAM_SILENCE_LIMIT_MS;
+        polling = false;
+        reconnectAttempts = 0;
+    }
+
+    // A fetch failure the watchdog would repeat on every poll while the server is down: shown once
+    // per outage while polling (outageShown, cleared by the next fetch that succeeds or by any
+    // resync not from a poll), logged every time. Outside polling it is shown every time.
+    function reportFetchFailure(code, cause) {
+        if (polling && outageShown) {
+            Log.warn(code, cause);
+            return;
+        }
+        if (polling) outageShown = true;
+        Errors.report(code, null, cause);
+    }
+
+    // The one owner of pollTimer: at most one look is pending, from start() until stop()
+    function armWatchdog() {
+        clearTimeout(pollTimer);
+        if (!me) return;
+        pollTimer = setTimeout(watchStream, POLL_INTERVAL_MS);
+    }
+
+    // One look: a visible page whose stream proved nothing within its limit fetches what the
+    // stream would have poked (resync, an authenticated request, which also keeps the session
+    // sliding), then looks again. It keeps fetching until a stream event arrives; a hidden page
+    // fetches nothing (onVisible resyncs when it is shown).
+    async function watchStream() {
+        const visible = document.visibilityState === 'visible';
+        if (streamNeedsPolling(performance.now(), lastStreamEventAt, streamLimitMs, visible, me !== null)) {
+            if (!polling) Log.warn(Errors.INTERNAL.W_LIVE_STREAM_SILENT);
+            polling = true;
+            await resync(true);
+        }
+        armWatchdog();
     }
 
     // The page came back from the back-forward cache: the session may have ended meanwhile. A 401
     // ends it here as anywhere (sessionLost); a live one reconnects its event stream.
     async function onRestored() {
         if (!me) return;
+        // The look pending when the page was frozen is restarted from now
+        armWatchdog();
         const check = await api('GET', '/me');
         if (!me || check.status === 401) return;
         if (!check.ok) {

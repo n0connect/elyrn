@@ -194,14 +194,17 @@ var registry = map[Code]entry{
 	// Login answers in JSON (shapeJSON); a body that is not JSON is its InvalidRequest twin
 	LoginBodyInvalid: {"E_LOGIN_BODY_INVALID", http.StatusBadRequest, sayInvalidRequest, utils.LogLevelWARN, shapeJSON},
 
-	// MERGE (all 401 "Invalid credentials"): a malformed key, no account for the key, an
-	// account without an identity key, and a lookup the server failed to compute (a server
-	// fault kept at 401 by the clients' contract; its cause is logged). One answer, so an
-	// account can be neither enumerated nor told apart from a damaged one
+	// MERGE (all 401 "Invalid credentials"): a malformed key, no account for the key and an
+	// account without an identity key. One answer, so an account can be neither enumerated nor
+	// told apart from a damaged one; 401 always means the key matches no usable account
 	LoginKeyMalformed:  {"E_LOGIN_KEY_MALFORMED", http.StatusUnauthorized, sayInvalidCredentials, utils.LogLevelWARN, shapeJSON},
-	LoginLookupFailed:  {"E_LOGIN_LOOKUP_FAILED", http.StatusUnauthorized, sayInvalidCredentials, utils.LogLevelERROR, shapeJSON},
 	LoginNoAccount:     {"E_LOGIN_NO_ACCOUNT", http.StatusUnauthorized, sayInvalidCredentials, utils.LogLevelWARN, shapeJSON},
 	LoginLegacyAccount: {"E_LOGIN_LEGACY_ACCOUNT", http.StatusUnauthorized, sayInvalidCredentials, utils.LogLevelWARN, shapeJSON},
+	// A lookup the server failed to compute (no or a short pepper, a crypto engine failure;
+	// the cause is logged) is a server fault, never "invalid credentials" (which would tell the
+	// user their only key is worthless). It is computed from the key alone, before any account
+	// is read, so it fails alike for every key: the answer tells no account from another.
+	LoginLookupFailed: {"E_LOGIN_LOOKUP_FAILED", http.StatusInternalServerError, sayInternalServerErr, utils.LogLevelERROR, shapeJSON},
 
 	// MERGE: a phase-1 account-number collision is reported as a plain server fault
 	AccountCollision: {"E_ACCOUNT_COLLISION", http.StatusInternalServerError, sayInternalServerErr, utils.LogLevelERROR, shapeText},

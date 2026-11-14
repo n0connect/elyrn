@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"elyrn/internal/auth"
+	"elyrn/internal/config"
 	"elyrn/tests/testutil"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -89,6 +92,66 @@ func TestSessionToken_RoundTrip(t *testing.T) {
 	}
 	if session.UserUUID != userID || session.SessionEpoch != 3 {
 		t.Fatalf("session = %+v, want subject %s epoch 3", session, userID)
+	}
+}
+
+// tokenLifetime reads exp - iat of a token the server signed (its signature is checked elsewhere)
+func tokenLifetime(t *testing.T, token string, claims jwt.Claims) time.Duration {
+	t.Helper()
+	if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
+		t.Fatalf("ParseUnverified: %v", err)
+	}
+	exp, err := claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		t.Fatalf("expiry claim: %v", err)
+	}
+	iat, err := claims.GetIssuedAt()
+	if err != nil || iat == nil {
+		t.Fatalf("issued-at claim: %v", err)
+	}
+	return exp.Sub(iat.Time)
+}
+
+// At every accepted session lifetime the session token and its cookie carry exactly that
+// lifetime, while the pending-registration token keeps its own short PENDING_TOKEN_TTL_SEC.
+func TestSessionLifetime_TokenCookieAndPendingToken(t *testing.T) {
+	setupPendingJWTEnv(t)
+
+	for _, minutes := range []int{config.MinJWTExpirationMinutes, 43200, config.MaxJWTExpirationMinutes} {
+		t.Run(strconv.Itoa(minutes), func(t *testing.T) {
+			t.Setenv("JWT_EXPIRATION_MINUTES", strconv.Itoa(minutes))
+			want := time.Duration(minutes) * time.Minute
+
+			token, err := auth.SignToken(testutil.NewInternalID(t), 0)
+			if err != nil {
+				t.Fatalf("SignToken: %v", err)
+			}
+			if got := tokenLifetime(t, token, &auth.Claims{}); got != want {
+				t.Fatalf("session token lives %v, want %v", got, want)
+			}
+			if _, err := auth.VerifyToken(token); err != nil {
+				t.Fatalf("VerifyToken: %v", err)
+			}
+
+			rr := httptest.NewRecorder()
+			auth.SetAuthCookie(rr, token)
+			cookies := rr.Result().Cookies()
+			if len(cookies) != 1 || cookies[0].MaxAge != int(want/time.Second) {
+				t.Fatalf("session cookie %+v, want one with MaxAge %d", cookies, int(want/time.Second))
+			}
+
+			pendingID, err := auth.GeneratePendingID()
+			if err != nil {
+				t.Fatalf("GeneratePendingID: %v", err)
+			}
+			pending, err := auth.SignPendingRegistrationToken(pendingID)
+			if err != nil {
+				t.Fatalf("SignPendingRegistrationToken: %v", err)
+			}
+			if got, ttl := tokenLifetime(t, pending, &auth.PendingRegistrationClaims{}), config.GetPendingTokenTTL(); got != ttl {
+				t.Fatalf("pending token lives %v, want PENDING_TOKEN_TTL_SEC %v", got, ttl)
+			}
+		})
 	}
 }
 

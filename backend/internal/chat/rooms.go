@@ -491,7 +491,8 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 		if recipient.MemberTag == sender.MemberTag {
 			return ErrInvalidInput
 		}
-		expiresAt := time.Now().UTC().Add(config.GetInviteTTL())
+		// On the hour like the room's own expiry (expiryAfter), and never after the room
+		expiresAt := expiryAfter(time.Now(), config.GetInviteTTL())
 		if room.ExpiresAt.Before(expiresAt) {
 			expiresAt = room.ExpiresAt
 		}
