@@ -40,30 +40,40 @@ func NewTokenBucket(maxTokens int, refillRate time.Duration) *TokenBucket {
 func (tb *TokenBucket) Allow() bool {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
+	return tb.allowLocked(time.Now())
+}
 
-	now := time.Now()
-	tb.lastAccess = now // Update last access time
-	elapsed := now.Sub(tb.lastRefill)
-
-	// Refill tokens based on elapsed time
-	if elapsed > 0 {
-		tokensToAdd := int(elapsed / tb.refillRate)
-		if tokensToAdd > 0 {
-			tb.tokens = tb.tokens + tokensToAdd
-			if tb.tokens > tb.maxTokens {
-				tb.tokens = tb.maxTokens
-			}
-			tb.lastRefill = now
-		}
-	}
-
-	// Check if we have tokens available
+// allowLocked takes one token at now, after refilling. Caller holds tb.mu.
+func (tb *TokenBucket) allowLocked(now time.Time) bool {
+	tb.lastAccess = now
+	tb.refillLocked(now)
 	if tb.tokens > 0 {
 		tb.tokens--
 		return true
 	}
-
 	return false
+}
+
+// refillLocked adds one token per whole refillRate since the last one was added, and keeps the
+// part of an interval that has not completed yet, so the bucket refills exactly at its configured
+// rate, never faster: time while the bucket is full earns nothing (the clock restarts once a token
+// is taken from a full bucket). Caller holds tb.mu.
+func (tb *TokenBucket) refillLocked(now time.Time) {
+	if tb.tokens >= tb.maxTokens {
+		tb.lastRefill = now
+		return
+	}
+	elapsed := now.Sub(tb.lastRefill)
+	if elapsed < tb.refillRate {
+		return
+	}
+	added := min(elapsed/tb.refillRate, time.Duration(tb.maxTokens-tb.tokens))
+	tb.tokens += int(added)
+	if tb.tokens >= tb.maxTokens {
+		tb.lastRefill = now
+		return
+	}
+	tb.lastRefill = tb.lastRefill.Add(added * tb.refillRate)
 }
 
 // deficit is how many tokens the bucket lacks at now, refill included: what dropping it and
@@ -71,14 +81,8 @@ func (tb *TokenBucket) Allow() bool {
 func (tb *TokenBucket) deficit(now time.Time) int {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	missing := tb.maxTokens - tb.tokens
-	if missing <= 0 {
-		return 0
-	}
-	if elapsed := now.Sub(tb.lastRefill); elapsed > 0 {
-		missing -= int(min(elapsed/tb.refillRate, time.Duration(missing)))
-	}
-	return missing
+	tb.refillLocked(now)
+	return tb.maxTokens - tb.tokens
 }
 
 // Refund gives back one token that Allow took for work that was then not done, never above the
