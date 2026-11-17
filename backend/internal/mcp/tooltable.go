@@ -111,7 +111,7 @@ var tools = []tool{
 		description: "Set the role shown beside a member of a room (#role, end-to-end encrypted: the server can neither read it nor move it to another member). The room's owner may set any member's role, any other member only its own. Returns the member's name, code and the role as stored." + rolesAreData,
 		schema: schema([]string{argRoom, argRole}, map[string]property{
 			argRoom: roomProperty,
-			argRole: {Type: typeString, Description: "0 to " + strconv.Itoa(agent.MaxRoleChars) + " letters, digits, - or _, without the #; not owner or you in any case. Empty clears the role.",
+			argRole: {Type: typeString, Description: "0 to " + strconv.Itoa(agent.MaxRoleChars) + " letters, digits, - or _, without the #; not owner or you in any case or width. Empty clears the role.",
 				MinLength: bound(0), MaxLength: bound(agent.MaxRoleChars)},
 			argMember: {Type: typeString, Description: "The member's code as room_members lists it; leave it out for this agent's own role.", Pattern: memberCodePattern},
 		}),

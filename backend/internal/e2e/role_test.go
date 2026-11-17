@@ -22,8 +22,12 @@ func TestRoleText_TheRule(t *testing.T) {
 		nfd:                               "über",
 		strings.Repeat("é", RoleMaxChars): strings.Repeat("é", RoleMaxChars),
 		strings.Repeat("𝒜", RoleMaxChars): strings.Repeat("𝒜", RoleMaxChars), // 4 bytes each: exactly 64
-		"owners":                          "owners",
-		"you2":                            "you2",
+		// Fullwidth letters are \p{L}: a fullwidth word that is not reserved passes, stored as typed
+		"ｌｉｄｅｒ": "ｌｉｄｅｒ",
+		// Known limit: another script's lookalike is not a reserved word (Cyrillic о)
+		"\u043ewner": "\u043ewner",
+		"owners":     "owners",
+		"you2":       "you2",
 	} {
 		got, err := ValidateRoleText(in)
 		if err != nil || got != want {
@@ -32,7 +36,7 @@ func TestRoleText_TheRule(t *testing.T) {
 	}
 	for _, bad := range []string{
 		strings.Repeat("a", RoleMaxChars+1), "#lider", "two words", "tab\there", "dot.ted", "emoji😀",
-		"owner", "OWNER", "Owner", "you", "YOU", "yOu", "line\n", "\u0007", "zero‍width",
+		"owner", "OWNER", "Owner", "OwNeR", "you", "YOU", "yOu", "ｏｗｎｅｒ", "ＯＷＮＥＲ", "ＹＯＵ", "ｙｏｕ", "oｗner", "line\n", "\u0007", "zero‍width",
 		"swap‮me", "\xff", "a\x00",
 	} {
 		if got, err := ValidateRoleText(bad); err == nil {
@@ -93,7 +97,7 @@ func TestRole_ClearedIsSealedAndOfTheSameSize(t *testing.T) {
 func TestRole_SealRefusesWhatTheRuleRefuses(t *testing.T) {
 	_, room := roomFixture(t, 4)
 	a := joinAs(t, room, accountA)
-	for _, bad := range []string{"owner", "two words", "über", strings.Repeat("a", RoleMaxChars+1)} {
+	for _, bad := range []string{"owner", "ｏｗｎｅｒ", "ＹＯＵ", "two words", "über", strings.Repeat("a", RoleMaxChars+1)} {
 		if _, err := room.SealRole(a.member.Card, bad); err == nil {
 			t.Errorf("SealRole sealed %q", bad)
 		}
@@ -138,6 +142,7 @@ func TestRole_OpenRefusesWhatACodeHolderMisSealed(t *testing.T) {
 		"length past text":   withLength(byte(len("lider")-1), "lider"),
 		"padding not zero":   dirtyPadding,
 		"reserved word":      rolePlain("Owner"),
+		"fullwidth reserved": rolePlain("ｏｗｎｅｒ"),
 		"not NFC":            rolePlain("über"),
 		"forbidden rune":     rolePlain("a b"),
 		"invalid UTF-8":      rolePlain("\xc3"),

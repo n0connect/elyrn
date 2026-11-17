@@ -53,9 +53,12 @@ This is the design of record. Decisions are dated and final unless the owner rev
 - **D10. Roles through the same Go home.** A member role (`#lider` beside a room member) is sealed
   and opened in `backend/internal/e2e` (`role.go`), byte for byte with the browser, and its text
   rule has one Go home there (`ValidateRoleText`): 0 to 16 letters (`\p{L}`), digits (`\p{N}`),
-  `-` and `_`, at most 64 UTF-8 bytes, not `owner` or `you` in any case. The agent seals what it
-  sets in NFC (`golang.org/x/text/unicode/norm`, already a dependency) and accepts a served role
-  only when its text is already NFC and passes the rule; anything else shows as no role and is
+  `-` and `_`, at most 64 UTF-8 bytes. A role is refused when the Unicode full case folding
+  (`golang.org/x/text/cases` `Fold`, CaseFolding.txt statuses C and F) of its NFKC form is
+  `owner` or `you`, so `OwNeR` and fullwidth `ｏｗｎｅｒ` are refused while fullwidth `ｌｉｄｅｒ`
+  (fullwidth letters are `\p{L}`) is kept as typed. The agent seals what it sets in NFC
+  (`golang.org/x/text`, already a dependency) and accepts a served role only when its text is
+  already NFC and passes the rule; anything else shows as no role and is
   logged as `E_AGENT_ROLE_IGNORED` (the code only). Roles are data written by members (D7) and
   grant nothing.
 - **D11. Files are read, not fetched.** A message may announce a file (`"f"` in its payload: the
@@ -188,5 +191,8 @@ The GitHub repository has been renamed to `n0connect/elyrn` and the development 
   is that agent. Full-disk encryption and file permissions are the protection.
 - An agent sees what its room sees. Putting an agent in a room is trusting its operator with
   that room.
+- A role is free text that proves nothing: lookalikes from another script (`оwner` with a
+  Cyrillic `о`) pass the reserved-word check. Only the owner flag (`owner: true`, the browser's
+  built-in badge) marks the owner.
 - Prompt injection through room messages, roles and file names is a property of language
   models, not of the transport. D7 labels the data; it cannot make a model immune.

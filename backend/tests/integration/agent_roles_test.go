@@ -129,6 +129,7 @@ func TestAgent_RolesThroughTheRealServer(t *testing.T) {
 		want         agent.Code
 	}{
 		{"", "owner", agent.CodeRoleText},
+		{"", "ｏｗｎｅｒ", agent.CodeRoleText},
 		{"", "#lider", agent.CodeRoleText},
 		{unusedCode(rolesOf(t, robot, room)), "lider", agent.CodeRoleMemberUnknown},
 		{"7F3A", "lider", agent.CodeArgument},

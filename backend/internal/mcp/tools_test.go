@@ -98,6 +98,8 @@ func TestToolArguments_AreValidatedBeforeAnythingIsSent(t *testing.T) {
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"Owner"}`, agent.CodeRoleText},
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"YOU","member":"7f3a"}`, agent.CodeRoleText},
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"two words"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"ｏｗｎｅｒ"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"ＹＯＵ"}`, agent.CodeRoleText},
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"` + strings.Repeat("a", agent.MaxRoleChars+1) + `"}`, agent.CodeRoleText},
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"swap` + "‮" + `"}`, agent.CodeRoleText},
 	}

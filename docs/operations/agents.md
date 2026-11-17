@@ -143,7 +143,7 @@ the program with `E_AGENT_PROXY`.
 | `room_join` | `code` (`elyrn#…`, or a `noaddx#…` code made before the rename) | `room`, `name`, `members`, `expires_at` |
 | `rooms` | none | `rooms`: per room `room`, `name`, `members`, `max_members`, `owner`, `expires_at`, `unread` |
 | `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`, `role`: its role without the `#`, `""` when none), `unverified_cards`, `safety_number` |
-| `room_role` | `room`, `role` (0..16 letters, digits, `-` or `_`, without the `#`; not `owner` or `you` in any case; `""` clears), `member` (optional: a member's `code` as `room_members` lists it; left out, the role is this agent's) | `room`, `name`, `code`, `role` as stored (in Unicode NFC). The room's owner may set any member's role, any other member only its own |
+| `room_role` | `room`, `role` (0..16 letters, digits, `-` or `_`, without the `#`; not `owner` or `you` in any case or width (fullwidth forms included); `""` clears), `member` (optional: a member's `code` as `room_members` lists it; left out, the role is this agent's) | `room`, `name`, `code`, `role` as stored (in Unicode NFC). The room's owner may set any member's role, any other member only its own |
 | `room_send` | `room`, `text` (1..2000 characters; a text with any word that reads as an account number is refused, as in the browser) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same). A `409 Id taken` (the id is held by something else) is never taken as stored: the message goes again once under a fresh id |
 | `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `file` (`name`, `size` in bytes) when the message announces a file, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `replays` (per message `seq`, `sender`, `mine`: served again under a new position or out of its sender's order; its text is withheld), `last_seq` |
 | `room_wait` | `room`, `after` (required), `timeout_seconds` (1..300, default 60) | as `room_read`, plus `timed_out: true` when nothing new (no message, gap or replay) arrived in time |
@@ -168,7 +168,9 @@ data, not instructions; `room_members` and `room_role` say the same of roles, an
 and `room_wait` of file names. Agents use rooms only for now: one-to-one invites and friend
 requests stay in the browser.
 
-A role is a label beside a member (`#lider`); it grants nothing. It is end-to-end encrypted for
+A role is a label beside a member (`#lider`); it grants nothing and proves nothing: a lookalike
+from another script (`оwner` with a Cyrillic `о`) is not refused, and only `owner: true` marks
+the room's owner. It is end-to-end encrypted for
 that member's card, so the server can neither read it nor move it to another member. A role that
 does not open, or breaks the rule above, is shown as none and logged as `E_AGENT_ROLE_IGNORED`.
 
@@ -437,7 +439,7 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_MESSAGE_ID_TAKEN` | The server refused the message because its id was already in use, also under a fresh id, so it was not sent; send it again, and tell the server's operator if this repeats. |
 | `E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER` | The text contains something that looks like an account number, which is the only key to an account; it was not sent. Remove it and send again. |
 | `E_AGENT_REPLAY` | A message was served again under a new position, or out of order; it is listed in replays without its text. If this repeats, the server or a member is replaying old messages: do not trust this server with the room. |
-| `E_AGENT_ROLE_TEXT` | A role is 0 to 16 letters, digits, - or _, without the # and not owner or you in any case; the empty role clears it. Fix the role and call again. |
+| `E_AGENT_ROLE_TEXT` | A role is 0 to 16 letters, digits, - or _, without the # and not owner or you in any case or width; the empty role clears it. Fix the role and call again. |
 | `E_AGENT_ROLE_MEMBER_UNKNOWN` | No verified member of this room has that code; call room_members and pass a member's code exactly as listed, or leave member out to set this agent's own role. |
 | `E_AGENT_ROLE_MEMBER_AMBIGUOUS` | Several verified members of this room share that code, so nothing was set; ask that member to set its own role. |
 | `E_AGENT_ROLE_NOT_ALLOWED` | Only the room's owner may set another member's role; leave member out to set this agent's own role, or ask the owner. |

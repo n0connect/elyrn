@@ -18,6 +18,7 @@ import (
 	"elyrn/internal/cryptoengine"
 	"elyrn/internal/utils"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -44,7 +45,8 @@ const (
 
 var (
 	roomRoleMagic = []byte("NADL")
-	// reservedRoles are refused whatever their case: the browser shows these words itself
+	// reservedRoles, in folded form (reservedFold), are refused in any case or compatibility form:
+	// the browser shows these words itself
 	reservedRoles = [...]string{"owner", "you"}
 )
 
@@ -53,9 +55,18 @@ func roleRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == roleHyphen || r == roleUnderscore
 }
 
+// reservedFold is the form a role is compared with the reserved words in: Unicode full case
+// folding (golang.org/x/text/cases Fold, CaseFolding.txt statuses C and F) of the NFKC form, so a
+// fullwidth or other compatibility spelling of a reserved word is refused too. Lookalikes from
+// other scripts (a Cyrillic "о") are not caught: a role proves nothing, only the owner badge does.
+func reservedFold(text string) string {
+	return cases.Fold().String(norm.NFKC.String(text)) // a Caser is stateful: one per call
+}
+
 // ValidateRoleText is the one Go home of the role text rule (the text after the '#'): it returns
 // the text in Unicode NFC, which must then be 0..16 code points of letters, digits, '-' and '_',
-// at most 64 UTF-8 bytes, and not a reserved word in any case. The empty role means "no role".
+// at most 64 UTF-8 bytes, and not a reserved word once folded (reservedFold). The empty role means
+// "no role".
 // A sealer passes what this returns; an opener accepts only text this returns unchanged.
 func ValidateRoleText(text string) (string, error) {
 	if !utf8.ValidString(text) {
@@ -66,8 +77,9 @@ func ValidateRoleText(text string) (string, error) {
 		strings.IndexFunc(normalized, func(r rune) bool { return !roleRune(r) }) >= 0 {
 		return "", ErrInvalidInput
 	}
+	folded := reservedFold(normalized)
 	for _, reserved := range reservedRoles {
-		if strings.EqualFold(normalized, reserved) {
+		if folded == reserved {
 			return "", ErrInvalidInput
 		}
 	}

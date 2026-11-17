@@ -15,7 +15,7 @@ import (
 // FuzzRoleText: what ValidateRoleText accepts is NFC, within both bounds, made of letters, digits,
 // '-' and '_' only, not reserved, and accepted again unchanged; NFC-equal inputs get one answer.
 func FuzzRoleText(f *testing.F) {
-	for _, seed := range []string{"", "komutan", goRoleText, "über", "owner", "OwNeR", "you", "a b", "#x",
+	for _, seed := range []string{"", "komutan", goRoleText, "über", "owner", "OwNeR", "you", "ｏｗｎｅｒ", "ＹＯＵ", "ｌｉｄｅｒ", "a b", "#x",
 		strings.Repeat("𝒜", RoleMaxChars), strings.Repeat("a", RoleMaxChars+1), "\xff", "swap‮me", "ﬁ", "Ⅻ", "K"} {
 		f.Add(seed)
 	}
@@ -39,7 +39,9 @@ func FuzzRoleText(f *testing.F) {
 			}
 		}
 		for _, reserved := range reservedRoles {
-			if strings.EqualFold(got, reserved) {
+			// An oracle independent of cases.Fold: for these ASCII words simple folding of the
+			// NFKC form says the same
+			if strings.EqualFold(norm.NFKC.String(got), reserved) {
 				t.Fatalf("ValidateRoleText(%q) accepted a reserved word", text)
 			}
 		}
