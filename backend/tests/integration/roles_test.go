@@ -175,9 +175,8 @@ func TestRoles_RosterEntriesCarryExactlyTheirFields(t *testing.T) {
 // A role change tells every member, the caller included (its other devices).
 func TestRoles_EveryMemberIsTold(t *testing.T) {
 	mux := setup(t)
-	alice, bob := register(t, mux), register(t, mux)
-	a := createRoom(t, alice, 4, 24)
-	b := joinRoom(t, bob, a.code)
+	a, b := roomOfTwo(t, mux)
+	alice, bob := a.u, b.u
 
 	srv := eventServer(t, mux)
 	_, aliceLines := openEvents(t, srv, alice.cookie)

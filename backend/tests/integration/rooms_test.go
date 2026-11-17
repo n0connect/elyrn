@@ -107,6 +107,15 @@ func joinRoom(t *testing.T, u *user, code *e2e.RoomCode) *roomSide {
 	return s
 }
 
+// roomOfTwo registers alice and bob, and alice creates a four-seat room for a day that bob
+// joins; the sides are returned in that order.
+func roomOfTwo(t *testing.T, mux http.Handler) (a, b *roomSide) {
+	t.Helper()
+	alice, bob := register(t, mux), register(t, mux)
+	a = createRoom(t, alice, 4, 24)
+	return a, joinRoom(t, bob, a.code)
+}
+
 // roomOfThree registers alice, bob and carol, and alice creates a four-seat room for a day that
 // bob and carol join; the sides are returned in that order.
 func roomOfThree(t *testing.T, mux http.Handler) (a, b, c *roomSide) {

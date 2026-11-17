@@ -169,9 +169,7 @@ func TestNegative_PageLimit(t *testing.T) {
 
 func TestNegative_NotesPerSenderAndAddressee(t *testing.T) {
 	mux := setup(t)
-	alice, bob := register(t, mux), register(t, mux)
-	a := createRoom(t, alice, 4, 24)
-	b := joinRoom(t, bob, a.code)
+	a, b := roomOfTwo(t, mux)
 	firstID, first := a.note(t, b, "noaddx:first")
 	expectStatus(t, a.postNote(firstID, b.member.Card, first), http.StatusCreated, "the one note that may wait")
 	secondID, second := a.note(t, b, "noaddx:second")

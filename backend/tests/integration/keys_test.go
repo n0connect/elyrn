@@ -94,16 +94,14 @@ func TestVerifyKeys_PinsThePepperOnlyOnceRecordsProveIt(t *testing.T) {
 	mux := setup(t)
 	alice, bob := register(t, mux), register(t, mux)
 	svc := chat.NewService()
-	right := os.Getenv("ACCOUNT_LOOKUP_PEPPER")
-
-	t.Setenv("ACCOUNT_LOOKUP_PEPPER", newKeyHex(t))
+	right := switchToWrongPepper(t)
 	if err := svc.VerifyKeys(); err != nil {
 		t.Fatalf("accounts alone prove nothing about the pepper, yet VerifyKeys = %v", err)
 	}
-	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 0 {
+	if pinned := keyCheckRows(t, pepperRow); pinned != 0 {
 		t.Fatal("an unproven pepper was pinned")
 	}
-	if floors := countWhere(t, &models.KeyCheck{}, "name = ?", pepperFloorRow); floors != 1 {
+	if floors := keyCheckRows(t, pepperFloorRow); floors != 1 {
 		t.Fatal("an unverified start did not mark the pepper floor")
 	}
 
@@ -117,7 +115,7 @@ func TestVerifyKeys_PinsThePepperOnlyOnceRecordsProveIt(t *testing.T) {
 	if err := svc.VerifyKeys(); err != nil {
 		t.Fatalf("right pepper: %v", err)
 	}
-	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 1 {
+	if pinned := keyCheckRows(t, pepperRow); pinned != 1 {
 		t.Fatal("a proven pepper was not pinned")
 	}
 }
@@ -128,6 +126,20 @@ const (
 	pepperFloorRow = "pepper-floor"
 )
 
+// keyCheckRows counts the key_checks rows named name.
+func keyCheckRows(t *testing.T, name string) int64 {
+	t.Helper()
+	return countWhere(t, &models.KeyCheck{}, "name = ?", name)
+}
+
+// switchToWrongPepper sets a fresh random ACCOUNT_LOOKUP_PEPPER and returns the one it replaced.
+func switchToWrongPepper(t *testing.T) (right string) {
+	t.Helper()
+	right = os.Getenv("ACCOUNT_LOOKUP_PEPPER")
+	t.Setenv("ACCOUNT_LOOKUP_PEPPER", newKeyHex(t))
+	return right
+}
+
 // Accounts registered while the pepper was unverified (possibly under a wrong one) neither pin
 // a pepper nor lock the right one out: only conversations of accounts at or below the floor,
 // which nobody can log in to under a wrong pepper, prove or contradict it.
@@ -135,9 +147,7 @@ func TestVerifyKeys_AccountsAfterTheFloorNeverPinAPepper(t *testing.T) {
 	mux := setup(t)
 	alice, bob := register(t, mux), register(t, mux)
 	svc := chat.NewService()
-	right := os.Getenv("ACCOUNT_LOOKUP_PEPPER")
-
-	t.Setenv("ACCOUNT_LOOKUP_PEPPER", newKeyHex(t))
+	right := switchToWrongPepper(t)
 	if err := svc.VerifyKeys(); err != nil {
 		t.Fatalf("unverified start refused: %v", err)
 	}
@@ -146,7 +156,7 @@ func TestVerifyKeys_AccountsAfterTheFloorNeverPinAPepper(t *testing.T) {
 	if err := svc.VerifyKeys(); err != nil {
 		t.Fatalf("wrong pepper with only post-floor conversations: %v", err)
 	}
-	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 0 {
+	if pinned := keyCheckRows(t, pepperRow); pinned != 0 {
 		t.Fatal("conversations of accounts registered under an unverified pepper pinned it")
 	}
 
@@ -158,7 +168,7 @@ func TestVerifyKeys_AccountsAfterTheFloorNeverPinAPepper(t *testing.T) {
 	if err := svc.VerifyKeys(); err != nil {
 		t.Fatalf("right pepper with a pre-floor conversation: %v", err)
 	}
-	if pinned := countWhere(t, &models.KeyCheck{}, "name = ?", pepperRow); pinned != 1 {
+	if pinned := keyCheckRows(t, pepperRow); pinned != 1 {
 		t.Fatal("a conversation of a pre-floor account did not pin the pepper")
 	}
 }

@@ -79,14 +79,7 @@ func TestAgentSend_ALostAnswerThenConflictIsStored(t *testing.T) {
 		if !isMessageSend(r) || !dropped.CompareAndSwap(false, true) {
 			return false
 		}
-		mux.ServeHTTP(httptest.NewRecorder(), r) // stored, and the answer goes nowhere
-		conn, _, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			t.Errorf("hijack: %v", err)
-			return true
-		}
-		_ = conn.Close()
-		return true
+		return loseAnswer(t, mux, w, r)
 	})
 	robot, room, s := agentWithRoom(t, mux, srv, newIdentityPath(t.TempDir(), "robot"))
 	sent, err := robot.Send(context.Background(), room, "once")

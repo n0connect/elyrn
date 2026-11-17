@@ -488,21 +488,7 @@ func TestAgent_AFailedMeCheckLeavesNoSession(t *testing.T) {
 		if !lie.Load() || r.Method != http.MethodGet || r.URL.Path != models.PathMe {
 			return false
 		}
-		rr := httptest.NewRecorder()
-		mux.ServeHTTP(rr, r)
-		var me models.MeResponse
-		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &me) != nil {
-			t.Errorf("the real /me answered %d", rr.Code)
-			return false
-		}
-		me.PublicKey = otherKey
-		for name, values := range rr.Header() {
-			w.Header()[name] = values
-		}
-		w.Header().Del("Content-Length") // the body below is re-encoded
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(&me)
-		return true
+		return serveAlteredMe(t, mux, w, r, func(me *models.MeResponse) { me.PublicKey = otherKey })
 	})
 	ctx := context.Background()
 	robot := newAgent(t, srv.URL, newIdentityPath(t.TempDir(), "robot"))
@@ -632,6 +618,41 @@ func TestAgent_WaitOutlivesAStreamThatCannotBeHeld(t *testing.T) {
 	}
 }
 
+// serveAlteredMe answers r with the real /me as alter changes it (headers kept, the body
+// re-encoded); false, letting the request through, when the real /me does not answer 200.
+func serveAlteredMe(t *testing.T, mux http.Handler, w http.ResponseWriter, r *http.Request, alter func(*models.MeResponse)) bool {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, r)
+	var me models.MeResponse
+	if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &me) != nil {
+		t.Errorf("the real /me answered %d", rr.Code)
+		return false
+	}
+	alter(&me)
+	for name, values := range rr.Header() {
+		w.Header()[name] = values
+	}
+	w.Header().Del("Content-Length") // the body below is re-encoded
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(&me)
+	return true
+}
+
+// loseAnswer lets the server handle r (it is stored) and drops the connection, so the answer goes
+// nowhere.
+func loseAnswer(t *testing.T, mux http.Handler, w http.ResponseWriter, r *http.Request) bool {
+	t.Helper()
+	mux.ServeHTTP(httptest.NewRecorder(), r) // stored, and the answer goes nowhere
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		t.Errorf("hijack: %v", err)
+		return true
+	}
+	_ = conn.Close()
+	return true
+}
+
 // A-06: the server stores the room but its answer is lost. The agent finds the room in its
 // listing and returns it, code included, instead of a network error that invites a second room.
 func TestAgent_ALostCreateAnswerSettlesTheStoredRoom(t *testing.T) {
@@ -641,14 +662,7 @@ func TestAgent_ALostCreateAnswerSettlesTheStoredRoom(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != models.PathRooms || !dropped.CompareAndSwap(false, true) {
 			return false
 		}
-		mux.ServeHTTP(httptest.NewRecorder(), r) // stored, and the answer goes nowhere
-		conn, _, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			t.Errorf("hijack: %v", err)
-			return true
-		}
-		_ = conn.Close()
-		return true
+		return loseAnswer(t, mux, w, r)
 	})
 	ctx := context.Background()
 	robot := newAgent(t, srv.URL, newIdentityPath(t.TempDir(), "robot"))

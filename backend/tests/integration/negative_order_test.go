@@ -187,18 +187,16 @@ func roomPath(s *roomSide, sub string) string {
 func TestNegative_RoomsInTheWrongOrder(t *testing.T) {
 	runScenarios(t, []scenario{
 		{"join twice", func(t *testing.T, mux http.Handler) {
-			alice, bob := register(t, mux), register(t, mux)
-			a := createRoom(t, alice, 4, 24)
-			b := joinRoom(t, bob, a.code)
+			a, b := roomOfTwo(t, mux)
+			bob := b.u
 			expectStatus(t, bob.do(http.MethodPost, models.PathRoomsJoin, b.joinRequest(t)), http.StatusOK, "join again")
 			if n := len(a.members(t)); n != 2 {
 				t.Fatalf("join twice left %d members", n)
 			}
 		}},
 		{"join after leaving: a new seat that reads only what follows", func(t *testing.T, mux http.Handler) {
-			alice, bob := register(t, mux), register(t, mux)
-			a := createRoom(t, alice, 4, 24)
-			b := joinRoom(t, bob, a.code)
+			a, b := roomOfTwo(t, mux)
+			bob := b.u
 			a.say(t, "while bob is in", 1)
 			expectStatus(t, bob.do(http.MethodDelete, roomPath(b, ""), nil), http.StatusNoContent, "leave")
 			a.say(t, "while bob is out", 2)
@@ -220,9 +218,8 @@ func TestNegative_RoomsInTheWrongOrder(t *testing.T) {
 			expectRows(t, &models.ConversationMember{}, 0, "join after burn")
 		}},
 		{"leave twice", func(t *testing.T, mux http.Handler) {
-			alice, bob := register(t, mux), register(t, mux)
-			a := createRoom(t, alice, 4, 24)
-			b := joinRoom(t, bob, a.code)
+			a, b := roomOfTwo(t, mux)
+			bob := b.u
 			expectStatus(t, bob.do(http.MethodDelete, roomPath(b, ""), nil), http.StatusNoContent, "leave")
 			expectAnswer(t, bob.do(http.MethodDelete, roomPath(b, ""), nil), apperr.NotFound, "leave again")
 			if n := len(a.members(t)); n != 1 {
@@ -236,9 +233,8 @@ func TestNegative_RoomsInTheWrongOrder(t *testing.T) {
 			expectAnswer(t, alice.do(http.MethodDelete, roomPath(a, ""), nil), apperr.NotFound, "burn again")
 		}},
 		{"a non-owner's burn is a leave", func(t *testing.T, mux http.Handler) {
-			alice, bob := register(t, mux), register(t, mux)
-			a := createRoom(t, alice, 4, 24)
-			b := joinRoom(t, bob, a.code)
+			a, b := roomOfTwo(t, mux)
+			alice, bob := a.u, b.u
 			expectStatus(t, bob.do(http.MethodDelete, roomPath(b, ""), nil), http.StatusNoContent, "bob burns")
 			expectRows(t, &models.Room{}, 1, "a non-owner's burn")
 			if view := conversationView(t, alice, a.room.ID.String()); view.Room.Members != 1 {
