@@ -15,7 +15,7 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | `bind: address already in use (port 80 or 5432)` | Port occupied by another local service (Apache, local Postgres). | `sudo lsof -i :80` or remap ports in `docker-compose.yaml`. |
 | Backend log: `E_DB_UNREACHABLE ... [connection refused]` | The backend cannot reach PostgreSQL (not running, or `DOCKER_DB_HOST` names another host). | `docker compose ps`; keep `DOCKER_DB_HOST=postgres` in `.env` (section 5). |
 | Backend container exits with code `137` | Linux Out-Of-Memory (OOM) Killer killed backend during Argon2id. | Reduce `ARGON2_MEMORY_KIB=32768` and enable host swap. |
-| Session lost immediately upon browser reload | Private/Incognito mode blocked IndexedDB storage. | Normal window or save AccountNumber to log in again. |
+| Session lost immediately upon browser reload | Private/Incognito mode blocked IndexedDB storage, or the browser could not keep the identity. | Normal window or save AccountNumber to log in again; see section 7. |
 | Backend restarts in a loop with `E_KEY_CHECK` | `.env` does not belong to this database (regenerated, or an old master key removed too early). | Restore the original `.env`; see section 9. |
 | `bind source path does not exist: .../certs/postgres` (or `certs/ca`) | The stack was started without `make certs` (plain `docker compose up`). | `make certs`, or start with `make up`, which runs it. |
 | Backend log: `E_DB_UNREACHABLE ... [TLS: the database certificate does not verify against PGSSLROOTCERT; ...]` (or `has expired`) | `certs/` was replaced but a container still holds the old material, a certificate expired, or `DOCKER_DB_HOST` names a host the certificate does not list. | `make up` (renews and recreates what must reload); keep `DOCKER_DB_HOST=postgres`. |
@@ -181,6 +181,8 @@ The browser is operating in **Incognito / Private Browsing mode** or **Tor Brows
 In this mode, `keystore.js` keeps private keys in volatile memory only.
 
 When storage fails, the page says so once: *"this browser is not keeping anything — you will be logged out on reload, and replay protection lasts only until then"*. Two related warnings name another tab: *"another elyrn. tab is holding the storage — close the other tabs, then reload this one"* (an upgrade is held back by a tab still running an older version) and *"another elyrn. tab changed this browser's storage — reload this tab"* (another tab upgraded the storage, or logged out and deleted it; this tab stops using storage until reloaded).
+
+In Safari (WebKit) before this was fixed, every reload opened on the main menu with no warning: WebKit stores the identity's X25519 key in IndexedDB without error and cannot read it back. Such a browser now keeps the identity in its sealed form ([Cryptography](../security/cryptography.md#3-the-identity-kept-across-reloads-indexeddb)); a record written by an older version is still unreadable, so the first reload after the update opens logged out once (the console shows `W_IDENTITY_UNREADABLE`) and the next login replaces it. A browser that can keep neither form says so after login: *"this browser cannot keep your identity — you will need your account number after a reload"*.
 
 ### Handling
 - If privacy settings block IndexedDB, keep your 43-character `AccountNumber` copied in a password manager.

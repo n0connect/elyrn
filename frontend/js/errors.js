@@ -111,6 +111,8 @@ const Errors = (() => {
         W_STORAGE_UNAVAILABLE: w('this browser is not keeping anything — you will be logged out on reload, and replay protection lasts only until then'),
         W_STORAGE_BLOCKED: w('another elyrn. tab is holding the storage — close the other tabs, then reload this one'),
         W_STORAGE_CLOSED: w('another elyrn. tab changed this browser\'s storage — reload this tab'),
+        // Storage works, but neither form of the identity read back (keystore.js save)
+        W_IDENTITY_NOT_KEPT: w('this browser cannot keep your identity — you will need your account number after a reload'),
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_COPY_MANUALLY: w('copy it manually'),
         // The robot door's challenge cannot run here (no random source, or no SHA-256 outside
@@ -165,6 +167,9 @@ const Errors = (() => {
         W_CLIPBOARD_NOT_CLEARED: 'W_CLIPBOARD_NOT_CLEARED',
         E_SCRAMBLE_ELEMENTS_MISSING: 'E_SCRAMBLE_ELEMENTS_MISSING',
         W_KEYSTORE_UNAVAILABLE: 'W_KEYSTORE_UNAVAILABLE',
+        // A stored identity record gave no identity at load (an engine that cannot read its key
+        // back, a damaged record): the page opens logged out, and the next login replaces it
+        W_IDENTITY_UNREADABLE: 'W_IDENTITY_UNREADABLE',
         W_COUNTERS_UNAVAILABLE: 'W_COUNTERS_UNAVAILABLE',
         E_SYNC_FAILED: 'E_SYNC_FAILED',
         W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT',

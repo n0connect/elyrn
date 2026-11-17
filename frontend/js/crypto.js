@@ -47,6 +47,12 @@ const ElyrnCrypto = (() => {
     ]);
     const AAD_MAGIC = [0x4e, 0x41, 0x44, 0x4d]; // "NADM"
     const AAD_VERSION = 0x01;
+    // The sealed identity (sealIdentity): the identity's PKCS#8 wrapped under a device key with
+    // AES-256-GCM, its AAD binding the blob to one identity public key
+    const SEAL_MAGIC = [0x4e, 0x41, 0x49, 0x44]; // "NAID"
+    const SEAL_VERSION = 0x01;
+    const X25519 = Object.freeze({ name: 'X25519' });
+    const SEALED_IDENTITY_BYTES = PKCS8_X25519_PREFIX.length + KEY_BYTES + TAG_BYTES;
     // Safety numbers: groups of decimal digits, each read from a run of digest bytes
     const SAFETY_GROUPS = 6;
     const SAFETY_GROUP_BYTES = 5;
@@ -155,38 +161,86 @@ const ElyrnCrypto = (() => {
     }
 
     // Turns a 32-byte X25519 scalar into a NON-extractable private key plus its public key
-    // (base64url). The caller wipes the seed.
-    async function x25519FromSeed(seed) {
+    // (base64url). withSealed: the identity also gets its sealed form (sealIdentity), made from
+    // the same moment of extractability, for a browser that cannot keep the key itself. The
+    // caller wipes the seed.
+    async function x25519FromSeed(seed, withSealed) {
         const pkcs8 = concat(PKCS8_X25519_PREFIX, seed);
         try {
-            // Extractable only long enough to read the public coordinate (x)
-            const temp = await subtle.importKey('pkcs8', pkcs8, { name: 'X25519' }, true, ['deriveBits']);
+            // Extractable only long enough to read the public coordinate (x) and, for the
+            // identity, to wrap it
+            const temp = await subtle.importKey('pkcs8', pkcs8, X25519, true, ['deriveBits']);
             const jwk = await subtle.exportKey('jwk', temp);
             const publicKey = jwk.x;
             jwk.d = '';
             b64urlDecode(publicKey, KEY_BYTES);
-            const privateKey = await subtle.importKey('pkcs8', pkcs8, { name: 'X25519' }, false, ['deriveBits']);
-            return { privateKey: privateKey, publicKey: publicKey };
+            const privateKey = await subtle.importKey('pkcs8', pkcs8, X25519, false, ['deriveBits']);
+            if (withSealed !== true) {
+                return { privateKey: privateKey, publicKey: publicKey };
+            }
+            return { privateKey: privateKey, publicKey: publicKey, sealed: await sealIdentity(temp, publicKey) };
         } finally {
             wipe(pkcs8);
         }
     }
 
-    // Returns a NON-extractable private key plus the public key (base64url).
-    async function deriveIdentity(accountNumber) {
+    // Returns a NON-extractable private key plus the public key (base64url); withSealed adds the
+    // sealed form (x25519FromSeed), which only a session kept on this device needs
+    async function deriveIdentity(accountNumber, withSealed) {
         const raw = accountBytes(accountNumber);
         let seed = null;
         try {
             seed = await hkdf(raw, encoder.encode(SALT), INFO_IDENTITY, KEY_BYTES);
-            return await x25519FromSeed(seed);
+            return await x25519FromSeed(seed, withSealed);
         } finally {
             wipe(raw);
             wipe(seed);
         }
     }
 
+    // ---------- sealed identity ----------
+    // Some engines (WebKit, Nov 2026) store an X25519 CryptoKey in IndexedDB without error and
+    // cannot read it back, while AES keys round-trip. For them the identity is kept sealed: its
+    // PKCS#8 wrapped under a non-extractable AES-256-GCM device key that may only wrap and unwrap,
+    // opened at load straight into a non-extractable key. The honest path never shows the private
+    // key to script, but script running in this origin could unwrap an extractable copy, which it
+    // cannot do with a kept CryptoKey (docs/security/threat-model.md).
+
+    function sealAAD(publicKey) {
+        return concat(SEAL_MAGIC, [SEAL_VERSION], b64urlDecode(publicKey, KEY_BYTES));
+    }
+
+    function sealParams(iv, publicKey) {
+        return { name: 'AES-GCM', iv: iv, additionalData: sealAAD(publicKey), tagLength: TAG_BITS };
+    }
+
+    // { deviceKey, iv, wrapped } for temp, the identity key while it is extractable
+    async function sealIdentity(temp, publicKey) {
+        const deviceKey = await subtle.generateKey({ name: 'AES-GCM', length: KEY_BITS }, false, ['wrapKey', 'unwrapKey']);
+        const iv = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
+        const wrapped = new Uint8Array(await subtle.wrapKey('pkcs8', temp, deviceKey, sealParams(iv, publicKey)));
+        return Object.freeze({ deviceKey: deviceKey, iv: iv, wrapped: wrapped });
+    }
+
+    function isDeviceKey(key) {
+        return typeof CryptoKey !== 'undefined' && key instanceof CryptoKey && !key.extractable &&
+            key.algorithm.name === 'AES-GCM' && key.usages.includes('unwrapKey');
+    }
+
+    // The non-extractable identity key a stored sealed form opens to. Rejects anything that is not
+    // exactly a sealed identity of publicKey: a malformed record, another identity's blob.
+    async function unsealIdentity(sealed, publicKey) {
+        if (!sealed || typeof sealed !== 'object' || !isDeviceKey(sealed.deviceKey) ||
+            !(sealed.iv instanceof Uint8Array) || sealed.iv.length !== NONCE_BYTES ||
+            !(sealed.wrapped instanceof Uint8Array) || sealed.wrapped.length !== SEALED_IDENTITY_BYTES) {
+            throw new Error('invalid sealed identity');
+        }
+        return subtle.unwrapKey('pkcs8', sealed.wrapped, sealed.deviceKey, sealParams(sealed.iv, publicKey),
+            X25519, false, ['deriveBits']);
+    }
+
     async function conversationKey(privateKey, peerPublicKey, conversationId) {
-        const peer = await subtle.importKey('raw', b64urlDecode(peerPublicKey, KEY_BYTES), { name: 'X25519' }, false, []);
+        const peer = await subtle.importKey('raw', b64urlDecode(peerPublicKey, KEY_BYTES), X25519, false, []);
         const shared = new Uint8Array(await subtle.deriveBits({ name: 'X25519', public: peer }, privateKey, KEY_BITS));
         try {
             const base = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
@@ -423,7 +477,7 @@ const ElyrnCrypto = (() => {
             return false;
         }
         try {
-            await subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']);
+            await subtle.generateKey(X25519, false, ['deriveBits']);
             return true;
         } catch (e) {
             return false;
@@ -459,6 +513,7 @@ const ElyrnCrypto = (() => {
         digitGroups,
         deriveAuthKey,
         deriveIdentity,
+        unsealIdentity,
         conversationKey,
         encryptMessage,
         decryptMessage,

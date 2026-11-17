@@ -6,6 +6,15 @@
 // re-entering the account number. Raw key bytes cannot be read back out of a
 // non-extractable CryptoKey, not even by script running on this page.
 // The AccountNumber itself is never stored anywhere.
+//
+// Which form of the identity is kept is decided by what this browser proves it can read back,
+// never by its name: save() stores the key itself and reads it back through load()'s own path.
+// An engine that stores an X25519 key and cannot read it back (WebKit, Nov 2026) gets the sealed
+// form instead (ElyrnCrypto.unsealIdentity: the PKCS#8 wrapped under a non-extractable AES device
+// key, weaker at rest, docs/security/threat-model.md). Both live under RECORD, so one form at a
+// time exists and every wipe removes either. When neither reads back, nothing is kept and the
+// user is told once (W_IDENTITY_NOT_KEPT).
+//
 // It also remembers which conversations the user verified (safety number compared),
 // bound to the peer key that was verified, and, per conversation, the counter record that
 // exposes replays after a reload (counters.js: highest seq and counters, a use stamp that only
@@ -143,11 +152,20 @@ const Keystore = (() => {
         return run(storeName, mode, tx => action(tx.objectStore(storeName)));
     }
 
-    // Stores the identity, and first clears the records of any other account (see OWNER above)
+    // Stores the identity, and first clears the records of any other account (see OWNER above).
+    // True only once a read through load()'s own path gave the identity back: the key itself,
+    // or else its sealed form. Neither: the unusable record goes and the user is told once.
     async function save(identity) {
         try {
-            await run([STORE, VERIFIED_STORE, COUNTERS_STORE], 'readwrite', tx => claimRecords(tx, identity));
-            return true;
+            for (const form of [directForm(identity), identity.sealed ? sealedForm(identity) : null]) {
+                if (!form) continue;
+                await run([STORE, VERIFIED_STORE, COUNTERS_STORE], 'readwrite', tx => claimRecords(tx, identity.publicKey, form));
+                const kept = (await readIdentity()).identity;
+                if (kept && kept.publicKey === identity.publicKey) return true;
+            }
+            await transact('readwrite', store => store.delete(RECORD));
+            stopped(Errors.CODES.W_IDENTITY_NOT_KEPT);
+            return false;
         } catch (e) {
             // Private windows may block IndexedDB: identity then lives in memory only
             unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
@@ -155,38 +173,73 @@ const Keystore = (() => {
         }
     }
 
+    function directForm(identity) {
+        return { privateKey: identity.privateKey, publicKey: identity.publicKey, roomsRoot: identity.roomsRoot };
+    }
+
+    function sealedForm(identity) {
+        return { sealed: identity.sealed, publicKey: identity.publicKey, roomsRoot: identity.roomsRoot };
+    }
+
     // A database from before OWNER existed was always wiped whole on logout, so its records
     // belong to the identity it holds: that identity's key stands in for the missing owner
-    function claimRecords(tx, identity) {
+    function claimRecords(tx, publicKey, form) {
         const keys = tx.objectStore(STORE);
         const owner = keys.get(OWNER);
         owner.onsuccess = () => {
             const previous = keys.get(RECORD);
             previous.onsuccess = () => {
                 const holder = owner.result || (previous.result && previous.result.publicKey);
-                if (holder && holder !== identity.publicKey) {
+                if (holder && holder !== publicKey) {
                     tx.objectStore(VERIFIED_STORE).clear();
                     tx.objectStore(COUNTERS_STORE).clear();
                 }
-                keys.put(identity.publicKey, OWNER);
-                keys.put({
-                    privateKey: identity.privateKey,
-                    publicKey: identity.publicKey,
-                    roomsRoot: identity.roomsRoot
-                }, RECORD);
+                keys.put(publicKey, OWNER);
+                keys.put(form, RECORD);
             };
         };
     }
 
-    async function load() {
-        try {
-            const record = await transact('readonly', store => store.get(RECORD));
-            // A record from before rooms has no rooms root: logging in again derives it
-            if (!record || !(record.privateKey instanceof CryptoKey) || record.privateKey.extractable ||
-                typeof record.publicKey !== 'string' || !ElyrnRoomCrypto.isRoomsRoot(record.roomsRoot)) {
+    // { present, identity }: whether a record is stored (counted, so one this engine cannot read
+    // back still counts), and the identity it gives, or null
+    async function readIdentity() {
+        const read = { present: false, record: null };
+        await run(STORE, 'readonly', tx => {
+            const keys = tx.objectStore(STORE);
+            const count = keys.count(RECORD);
+            count.onsuccess = () => { read.present = count.result > 0; };
+            const record = keys.get(RECORD);
+            record.onsuccess = () => { read.record = record.result; };
+        });
+        return { present: read.present, identity: await identityFrom(read.record) };
+    }
+
+    // The identity a stored record gives, or null. A record from before rooms has no rooms root:
+    // logging in again derives it.
+    async function identityFrom(record) {
+        if (!record || typeof record !== 'object' || typeof record.publicKey !== 'string' ||
+            !ElyrnRoomCrypto.isRoomsRoot(record.roomsRoot)) {
+            return null;
+        }
+        let privateKey = record.privateKey;
+        if (record.sealed !== undefined) {
+            try {
+                privateKey = await ElyrnCrypto.unsealIdentity(record.sealed, record.publicKey);
+            } catch (e) {
                 return null;
             }
-            return { privateKey: record.privateKey, publicKey: record.publicKey, roomsRoot: record.roomsRoot };
+        }
+        if (!(privateKey instanceof CryptoKey) || privateKey.extractable) return null;
+        return { privateKey: privateKey, publicKey: record.publicKey, roomsRoot: record.roomsRoot };
+    }
+
+    async function load() {
+        try {
+            const read = await readIdentity();
+            // Stored but unusable (an engine that cannot read its key back, a damaged record):
+            // logged, then treated as no identity; the next login replaces it
+            if (!read.identity && read.present) Log.warn(Errors.INTERNAL.W_IDENTITY_UNREADABLE);
+            return read.identity;
         } catch (e) {
             unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return null;
