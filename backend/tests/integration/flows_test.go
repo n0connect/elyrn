@@ -551,24 +551,3 @@ func TestLogin_IgnoresArgon2Saturation(t *testing.T) {
 	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: testutil.NewAuthKey(t)}),
 		http.StatusUnauthorized, "login while Argon2id is saturated: unknown key")
 }
-
-// The stored Argon2id hash is not a login factor: the keyed lookup proves the key. A damaged
-// hash column must not lock the account out, and must not let any other key in.
-func TestLogin_DoesNotReadTheStoredHash(t *testing.T) {
-	mux := setup(t)
-	alice := register(t, mux)
-
-	lookup, err := auth.ComputeAccountLookup(alice.authKey)
-	if err != nil {
-		t.Fatalf("ComputeAccountLookup: %v", err)
-	}
-	result := database.DB.Model(&models.User{}).Where("account_lookup = ?", lookup).Update("account_hash", "argon2id$corrupted")
-	if result.Error != nil || result.RowsAffected != 1 {
-		t.Fatalf("corrupting the stored hash: rows %d, err %v", result.RowsAffected, result.Error)
-	}
-
-	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: alice.authKey}),
-		http.StatusOK, "login with a corrupted stored hash")
-	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: testutil.NewAuthKey(t)}),
-		http.StatusUnauthorized, "another key with a corrupted stored hash")
-}

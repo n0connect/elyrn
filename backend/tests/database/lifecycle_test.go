@@ -3,6 +3,7 @@ package database
 import (
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,64 @@ func TestMigrate_StampsAnUnversionedDatabase(t *testing.T) {
 	}
 	if got, ok := storedSchemaVersion(t); !ok || got != strconv.Itoa(database.SchemaVersion) {
 		t.Fatalf("schema version = %q (%v), want %d", got, ok, database.SchemaVersion)
+	}
+}
+
+// usersWithout snapshots every users row as JSON without the named column, ordered by uuid:
+// equal snapshots mean every other column of every row holds the same value.
+func usersWithout(t *testing.T, column string) []string {
+	t.Helper()
+	var rows []string
+	if err := database.DB.Raw("SELECT (to_jsonb(u) - ?)::text FROM users u ORDER BY u.uuid", column).Scan(&rows).Error; err != nil {
+		t.Fatalf("snapshot the users: %v", err)
+	}
+	return rows
+}
+
+// D-2026-11-18-a: a version-1 database still holds users.account_hash (the Argon2id hash
+// registration used to store). Migrating drops the column inside the migration transaction and
+// leaves every other column of every row as it was; a second migration (the same backup
+// restored twice, or a restart) changes nothing.
+func TestMigrate_DropsTheStoredAccountHash(t *testing.T) {
+	startDatabase(t)
+	const column = "account_hash"
+	var created []string
+	for i := 0; i < 3; i++ {
+		user := models.User{UUID: testutil.NewInternalID(t), AccountLookup: testutil.NewAuthKey(t),
+			EncryptedKey: testutil.NewAuthKey(t), MasterKeyID: "test-key-1", SessionEpoch: i}
+		if err := database.DB.Create(&user).Error; err != nil {
+			t.Fatalf("create a user: %v", err)
+		}
+		created = append(created, user.UUID)
+	}
+	t.Cleanup(func() { database.DB.Where("uuid IN ?", created).Delete(&models.User{}) })
+
+	// The version-1 shape: the column, NOT NULL, a value in every row, and the version-1 stamp
+	if err := database.DB.Exec("ALTER TABLE users ADD COLUMN " + column + " text NOT NULL DEFAULT ''").Error; err != nil {
+		t.Fatalf("add the version-1 column: %v", err)
+	}
+	if err := database.DB.Exec("UPDATE users SET " + column + " = 'argon2id$m=65536$t=3$p=2$' || md5(uuid) || '$' || md5(account_lookup)").Error; err != nil {
+		t.Fatalf("fill the version-1 column: %v", err)
+	}
+	if err := database.DB.Exec("ALTER TABLE users ALTER COLUMN " + column + " DROP DEFAULT").Error; err != nil {
+		t.Fatalf("drop the version-1 default: %v", err)
+	}
+	setSchemaVersion(t, 1)
+	before := usersWithout(t, column)
+
+	for run := 1; run <= 2; run++ {
+		if f := database.Migrate(database.DB); f != nil {
+			t.Fatalf("migration %d of a version-1 database: %s", run, f.Error())
+		}
+		if database.DB.Migrator().HasColumn(&models.User{}, column) {
+			t.Fatalf("users.%s survived migration %d", column, run)
+		}
+		if got, ok := storedSchemaVersion(t); !ok || got != strconv.Itoa(database.SchemaVersion) {
+			t.Fatalf("schema version after migration %d = %q (%v), want %d", run, got, ok, database.SchemaVersion)
+		}
+		if after := usersWithout(t, column); !slices.Equal(after, before) {
+			t.Fatalf("migration %d changed the other columns:\nbefore %v\nafter  %v", run, before, after)
+		}
 	}
 }
 

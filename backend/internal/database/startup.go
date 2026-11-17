@@ -124,9 +124,13 @@ func failureDetail(err error) string {
 const (
 	// SchemaVersion is the schema this binary migrates to. Raise it with every change to the
 	// models that a previous binary must not run against. 2: file_parts (a binary that does not
-	// know the table would never purge it) and conversation_members.role.
+	// know the table would never purge it), conversation_members.role, and users.account_hash
+	// dropped (a binary that still writes it would fail every registration).
 	SchemaVersion     = 2
 	schemaVersionName = "schema-version"
+	// droppedAccountHashColumn: the Argon2id hash of the auth key that registration used to store
+	// and nothing read (D-2026-11-18-a); every migration drops it if it is still there
+	droppedAccountHashColumn = "account_hash"
 	// migrationLockKey: one transaction-level advisory lock serialises instances that migrate at
 	// once ("elyrnMIG" in ASCII); it is released with the transaction
 	migrationLockKey int64 = 0x656c79726e4d4947
@@ -155,6 +159,10 @@ func Migrate(db *gorm.DB) *opcode.Failure {
 		}
 		if err := tx.AutoMigrate(&models.User{}, &models.Invite{}, &models.Conversation{}, &models.ConversationMember{},
 			&models.Message{}, &models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}); err != nil {
+			return err
+		}
+		// Idempotent, so a database restored from an older backup is migrated the same way
+		if err := tx.Exec("ALTER TABLE " + models.User{}.TableName() + " DROP COLUMN IF EXISTS " + droppedAccountHashColumn).Error; err != nil {
 			return err
 		}
 		return tx.Clauses(clause.OnConflict{
