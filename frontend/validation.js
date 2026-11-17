@@ -185,6 +185,56 @@ function validateJoinCode(input) {
     }
 }
 
+// A room member's role (docs/architecture/rooms.md, Member roles): the one home of its rule,
+// applied to what is typed before it is sealed and to what a sealed role opens to. Stored
+// NFC-normalised; 1 to MAX_ROLE_CHARS code points, each a letter, a digit, '-' or '_'; at most
+// MAX_ROLE_BYTES of UTF-8 (ElyrnRoomCrypto's bound); case kept. A word that reads as a built-in
+// badge is reserved: compared after NFKC and toLowerCase (so fullwidth or mixed-case spellings
+// are caught; a lookalike from another script is not, and proves nothing: only the badge marks
+// the owner).
+const MAX_ROLE_CHARS = 16;
+const ROLE_CHAR_RULE = /^[\p{L}\p{N}_-]+$/u;
+const RESERVED_ROLES = Object.freeze(['owner', 'you']);
+const roleEncoder = new TextEncoder();
+
+/**
+ * Validates a role as typed (without its '#')
+ * @param {any} input
+ * @returns {object} - {valid: boolean, value: string, error: string, params?: object}; value is the
+ *     NFC text to seal ('' when invalid), error an Errors code
+ */
+function validateRoleText(input) {
+    const refused = (code, params) => ({ valid: false, value: '', error: code, params: params });
+    if (typeof input !== 'string') {
+        return refused(Errors.CODES.E_ROLE_INVALID);
+    }
+    const value = input.normalize('NFC');
+    if (value.length === 0) {
+        return refused(Errors.CODES.E_ROLE_EMPTY);
+    }
+    if ([...value].length > MAX_ROLE_CHARS || roleEncoder.encode(value).length > ElyrnRoomCrypto.MAX_ROLE_BYTES) {
+        return refused(Errors.CODES.E_ROLE_TOO_LONG, { max: MAX_ROLE_CHARS });
+    }
+    if (!ROLE_CHAR_RULE.test(value)) {
+        return refused(Errors.CODES.E_ROLE_CHARS);
+    }
+    if (RESERVED_ROLES.includes(value.normalize('NFKC').toLowerCase())) {
+        return refused(Errors.CODES.E_ROLE_RESERVED);
+    }
+    return { valid: true, value: value, error: '' };
+}
+
+/**
+ * True when a role opened from its sealed form is one the rule allows, exactly as stored (NFC
+ * already): anything else is shown as no role
+ * @param {any} text
+ * @returns {boolean}
+ */
+function isRoleText(text) {
+    const checked = validateRoleText(text);
+    return checked.valid && checked.value === text;
+}
+
 /**
  * Validates a conversation or message ID (canonical lowercase UUIDv4)
  * @param {any} id

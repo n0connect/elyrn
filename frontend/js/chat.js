@@ -25,6 +25,9 @@ const Chat = (() => {
     // at most 5 requests per poll per visible tab (1 when no conversation is open), so 4 visible
     // tabs stay at 4 r/s, inside nginx's 20 r/s with burst 40 per client
     const POLL_INTERVAL_MS = 5 * SECOND_MS;
+    // A hidden page behind a silent stream polls too, this much less often: it is not being read
+    // (nothing is marked read while hidden), it only has to learn that something arrived
+    const HIDDEN_POLL_INTERVAL_MS = 30 * SECOND_MS;
     // Every named event the stream sends; any one of them proves it is delivering
     const STREAM_EVENTS = Object.freeze(['ping', 'msg', 'conv']);
     const MAX_CIPHERTEXT_CHARS = 11000;
@@ -50,6 +53,7 @@ const Chat = (() => {
     let lastStreamEventAt = 0;        // performance.now() of the last stream event, or of the last (re)connect
     let streamLimitMs = STREAM_FIRST_PROOF_MS;  // the silence allowed since then: first proof, or the heartbeat limit
     let polling = false;              // the watchdog is fetching for a silent stream (logged once per silence)
+    let lastPollAt = -Infinity;       // performance.now() of the watchdog's last poll (none yet: due)
     let outageShown = false;          // a fetch failed while polling and was shown: polls stay quiet until one succeeds
     let refreshTimer = null;
     let listLoaded = false;           // distinguishes the first load from live additions
@@ -137,6 +141,12 @@ const Chat = (() => {
         updateTitle();
     }
 
+    // A message newer than any known in conv was found (a poll, or a sync): on a hidden page that
+    // is worth a content-free alert (Alerts.raise decides)
+    function noteNewer(conv, seq) {
+        if (listLoaded && seq > conv.lastSeq) Alerts.raise();
+    }
+
     function bump(id) {
         recent = [id].concat(recent.filter(other => other !== id));
     }
@@ -154,6 +164,7 @@ const Chat = (() => {
             pageLimit: limits.pageLimit  // 0: the server did not say, so no paging back
         };
         renderMe(me.aura);
+        await Alerts.start();
         setComposerHint(ttlDays);
         setRoomLimits(limits.maxMembers, Rooms.ttlChoices(limits.maxTTLHours));
         showHome();
@@ -168,9 +179,12 @@ const Chat = (() => {
         listGeneration++;
         // A proof of work still running belongs to this session: end it, which releases its lock
         cancelProofsOfWork();
+        Alerts.stop();
+        RoleControl.reset();
         closeEvents();
         clearTimeout(pollTimer);
         polling = false;
+        lastPollAt = -Infinity;
         outageShown = false;
         clearTimeout(refreshTimer);
         conversations.clear();
@@ -279,6 +293,7 @@ const Chat = (() => {
                     forget(item.id);
                     continue;
                 }
+                noteNewer(existing, item.last_seq);
                 existing.lastSeq = Math.max(existing.lastSeq, item.last_seq);
                 existing.readSeq = Math.max(existing.readSeq, item.read_seq);
                 continue;
@@ -544,6 +559,7 @@ const Chat = (() => {
         renderEmptyConversation(me.ttlDays, conv.room);
         if (first) setEarlierControl(conv.earlier, false);
         if (conv.room) checkLookalikes(conv);
+        noteNewer(conv, conv.maxSeq);
         conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
         await markRead(conv);
         return true;
@@ -631,12 +647,13 @@ const Chat = (() => {
     }
 
     // Decrypts and authenticates one message: { seq, mine, text, sentAt, sender, counter, from? },
-    // or { seq, mine, broken } when anything fails (shown as unreadable)
+    // or { seq, mine, broken, newer } when anything fails: shown as unreadable, or, for an
+    // authentic payload a newer elyrn wrote (newer), as such (ElyrnCrypto.isNewerPayload)
     async function openMessage(conv, key, raw) {
         try {
             return conv.room ? await openRoomMessage(conv, raw) : await openPairMessage(conv, key, raw);
         } catch (e) {
-            return { seq: raw.seq, mine: raw.mine, broken: true };
+            return { seq: raw.seq, mine: raw.mine, broken: true, newer: ElyrnCrypto.isNewerPayload(e) };
         }
     }
 
@@ -662,7 +679,7 @@ const Chat = (() => {
             // Off the roster, yet a lookalike all the same: its name is compared too
             conv.room.outsiders.set(plain.sender, { publicKey: plain.sender, aura: aura });
         }
-        return Object.assign(message, { from: aura, left: !entry });
+        return Object.assign(message, { from: aura, left: !entry, role: entry ? entry.role : '' });
     }
 
     // Judges an authenticated message's counter on a ledger (counters.js), the same way for pairs
@@ -1057,6 +1074,7 @@ const Chat = (() => {
         checkLookalikes(conv);
         if (activeId === conv.id) {
             renderRoomHeader(conv.room);
+            RoleControl.markBubbles(new Map(conv.room.roster.map(entry => [entry.publicKey, entry.role])));
         }
         return true;
     }
@@ -1083,13 +1101,30 @@ const Chat = (() => {
     async function refreshRoomPanels(conv) {
         if (!conv.room.roster || activeId !== conv.id) return;
         if (document.getElementById('membersPanel').style.display !== 'none') {
-            renderMembers(conv.room.roster, conv.room.skipped, conv.room.requested, conv.room.lookalikes,
-                entry => befriend(conv, entry));
+            renderMemberList(conv);
             renderRoomSafety(await Rooms.safetyNumber(conv));
         }
         const notes = conv.room.notes > 0 ? await Rooms.notes(api, conv) : [];
         if (activeId !== conv.id) return;
         renderNotes(notes, note => acceptNote(conv, note), note => ignoreNote(conv, note));
+    }
+
+    function renderMemberList(conv) {
+        if (activeId !== conv.id || !conv.room.roster) return;
+        renderMembers({
+            entries: conv.room.roster, skipped: conv.room.skipped, requested: conv.room.requested,
+            lookalikes: conv.room.lookalikes, onBefriend: entry => befriend(conv, entry),
+            roleControl: entry => RoleControl.control({
+                room: conv.room, entry, save: text => saveRole(conv, entry, text), rerender: () => renderMemberList(conv)
+            })
+        });
+    }
+
+    // Stores a member's role (RoleControl); a stored one shows at once, before the conv event
+    async function saveRole(conv, entry, text) {
+        const saved = await RoleControl.save({ api, conv, entry, text });
+        if (saved && me) await refreshActiveRoom(conv);
+        return saved;
     }
 
     async function joinRoom(code) {
@@ -1389,8 +1424,8 @@ const Chat = (() => {
         if (!me) return;
         const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            // Nothing to show: the watchdog keeps fetching while the tab is visible (no stream
-            // event can arrive now), and showing the tab again retries the stream (onVisible)
+            // Nothing to show: the watchdog keeps fetching (no stream event can arrive now; less
+            // often while the tab is hidden), and showing the tab again retries the stream (onVisible)
             Log.warn(Errors.INTERNAL.W_LIVE_STREAM_GAVE_UP);
             return;
         }
@@ -1418,6 +1453,7 @@ const Chat = (() => {
             return;
         }
         if (!data || Object.keys(data).length !== 1 || !validateConversationId(data.c)) return;
+        Alerts.raise();
         const conv = conversations.get(data.c);
         if (!conv) {
             scheduleRefresh();
@@ -1475,14 +1511,19 @@ const Chat = (() => {
         pollTimer = setTimeout(watchStream, POLL_INTERVAL_MS);
     }
 
-    // One look: a visible page whose stream proved nothing within its limit fetches what the
-    // stream would have poked (resync, an authenticated request, which also keeps the session
-    // sliding), then looks again. It keeps fetching until a stream event arrives; a hidden page
-    // fetches nothing (onVisible resyncs when it is shown).
+    // One look: a page whose stream proved nothing within its limit fetches what the stream would
+    // have poked (resync, an authenticated request, which also keeps the session sliding), then
+    // looks again. It keeps fetching until a stream event arrives: at every look while visible,
+    // every HIDDEN_POLL_INTERVAL_MS while hidden (streamNeedsPolling).
     async function watchStream() {
-        if (streamNeedsPolling(performance.now(), lastStreamEventAt, streamLimitMs, isPageVisible(), me !== null)) {
+        const now = performance.now();
+        if (streamNeedsPolling({
+            now: now, lastEventAt: lastStreamEventAt, silenceLimitMs: streamLimitMs, visible: isPageVisible(),
+            loggedIn: me !== null, lastPollAt: lastPollAt, hiddenIntervalMs: HIDDEN_POLL_INTERVAL_MS
+        })) {
             if (!polling) Log.warn(Errors.INTERNAL.W_LIVE_STREAM_SILENT);
             polling = true;
+            lastPollAt = now;
             await resync(true);
         }
         armWatchdog();

@@ -39,7 +39,10 @@ const ElyrnCrypto = (() => {
     const MAX_FRAME_BYTES = 4096;
     const FRAME_LENGTH_BYTES = 2;
     const MAX_PAYLOAD_BYTES = MAX_FRAME_BYTES - FRAME_LENGTH_BYTES;
-    const PAYLOAD_FIELDS = 3;
+    const PAYLOAD_KEYS = Object.freeze(['t', 'ts', 'n']);
+    // The error name of a payload a newer elyrn wrote (decodePayload): valid t, ts and n plus
+    // keys this build does not know. Told apart from tampering, never read.
+    const NEWER_PAYLOAD = 'NewerPayload';
     // RFC 8410 PrivateKeyInfo header for an X25519 key (OID 1.3.101.110)
     const PKCS8_X25519_PREFIX = new Uint8Array([
         0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
@@ -185,7 +188,8 @@ const ElyrnCrypto = (() => {
     }
 
     // Returns a NON-extractable private key plus the public key (base64url); withSealed adds the
-    // sealed form (x25519FromSeed), which only a session kept on this device needs
+    // sealed form (x25519FromSeed), which only a session kept by an engine that cannot keep the
+    // key itself needs (Keystore.keepsKeys)
     async function deriveIdentity(accountNumber, withSealed) {
         const raw = accountBytes(accountNumber);
         let seed = null;
@@ -200,7 +204,8 @@ const ElyrnCrypto = (() => {
 
     // ---------- sealed identity ----------
     // Some engines (WebKit, Nov 2026) store an X25519 CryptoKey in IndexedDB without error and
-    // cannot read it back, while AES keys round-trip. For them the identity is kept sealed: its
+    // cannot read it back, while AES keys round-trip (Keystore.keepsKeys finds out by trying a
+    // throwawayKey). Only for them is the sealed form made at all, and the identity kept sealed: its
     // PKCS#8 wrapped under a non-extractable AES-256-GCM device key that may only wrap and unwrap,
     // opened at load straight into a non-extractable key. The honest path never shows the private
     // key to script, but script running in this origin could unwrap an extractable copy, which it
@@ -220,6 +225,18 @@ const ElyrnCrypto = (() => {
         const iv = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
         const wrapped = new Uint8Array(await subtle.wrapKey('pkcs8', temp, deviceKey, sealParams(iv, publicKey)));
         return Object.freeze({ deviceKey: deviceKey, iv: iv, wrapped: wrapped });
+    }
+
+    // A non-extractable X25519 private key that protects nothing: Keystore stores and reads one
+    // back to learn whether this engine keeps such keys, before any identity is derived
+    async function throwawayKey() {
+        return (await subtle.generateKey(X25519, false, ['deriveBits'])).privateKey;
+    }
+
+    // Whether key came back from storage as the kind throwawayKey makes (WebKit gives back null)
+    function isThrowawayKey(key) {
+        return typeof CryptoKey !== 'undefined' && key instanceof CryptoKey && key.type === 'private' &&
+            !key.extractable && key.algorithm.name === X25519.name;
     }
 
     function isDeviceKey(key) {
@@ -313,15 +330,29 @@ const ElyrnCrypto = (() => {
         return frame(payloadBytes(text, sentAt, counter));
     }
 
-    // Accepts exactly the three payload fields; the caller wipes `plain`
+    // Accepts exactly the three payload fields; the caller wipes `plain`. A well-formed frame
+    // holding an object with valid t, ts and n plus keys this build does not know was written by a
+    // newer elyrn: it throws a NEWER_PAYLOAD error (isNewerPayload); anything else that fails
+    // throws 'bad payload'.
     function decodePayload(plain) {
         const parsed = JSON.parse(decoder.decode(unframe(plain)));
-        const keys = Object.keys(parsed);
-        if (keys.length !== PAYLOAD_FIELDS || typeof parsed.t !== 'string' || !Number.isSafeInteger(parsed.ts) || parsed.ts <= 0 ||
+        const has = (key) => Object.prototype.hasOwnProperty.call(parsed, key);
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) || !PAYLOAD_KEYS.every(has) ||
+            typeof parsed.t !== 'string' || !Number.isSafeInteger(parsed.ts) || parsed.ts <= 0 ||
             !Number.isSafeInteger(parsed.n) || parsed.n < 1 || parsed.n > MAX_COUNTER) {
             throw new Error('bad payload');
         }
+        if (Object.keys(parsed).length !== PAYLOAD_KEYS.length) {
+            const newer = new Error('payload from a newer elyrn');
+            newer.name = NEWER_PAYLOAD;
+            throw newer;
+        }
         return { text: parsed.t, sentAt: parsed.ts, counter: parsed.n };
+    }
+
+    // Whether error is decodePayload's verdict on a payload a newer elyrn wrote
+    function isNewerPayload(error) {
+        return error instanceof Error && error.name === NEWER_PAYLOAD;
     }
 
     async function encryptMessage({ key, conversationId, messageId, senderPublicKey, text, sentAt, counter }) {
@@ -510,10 +541,13 @@ const ElyrnCrypto = (() => {
         x25519FromSeed,
         encodePayload,
         decodePayload,
+        isNewerPayload,
         digitGroups,
         deriveAuthKey,
         deriveIdentity,
         unsealIdentity,
+        throwawayKey,
+        isThrowawayKey,
         conversationKey,
         encryptMessage,
         decryptMessage,

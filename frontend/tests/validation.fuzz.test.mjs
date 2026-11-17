@@ -12,6 +12,9 @@ const MESSAGE_ITERATIONS = 3000;
 const CODE_ITERATIONS = 3000;
 const ID_ITERATIONS = 5000;
 const ORIGIN_ITERATIONS = 3000;
+const ROLE_ITERATIONS = 5000;
+const MAX_ROLE_CHARS = 16;
+const ROLE_RESERVED = ['owner', 'you'];
 const MAX_MESSAGE_CHARS = 2000;
 // crypto.js INVITE_TOKEN_BYTES and the server's utils.InviteTokenBytes
 const INVITE_TOKEN_BYTES = 16;
@@ -180,5 +183,36 @@ test('buildAgentCommand: an origin or nothing, never a shell metacharacter', asy
         if (result === '') return;
         assert.equal(result, command + ' ' + input);
         assert.match(input, SHELL_SAFE_ORIGIN, `the command carries ${JSON.stringify(input)}`);
+    });
+});
+
+test('validateRoleText: never throws, matches an independent model, and what it accepts opens as itself', async () => {
+    const validate = get('validateRoleText');
+    const isRole = get('isRoleText');
+    const letters = 'abcçğıöşüABCÇĞİÖŞÜ0123456789-_ｏｗｎｅｒＹＯＵ日本ω٣';
+    await fuzz(SEED + 7, ROLE_ITERATIONS, (r) => {
+        const roll = r.next();
+        const input = roll < 0.4 ? r.from(letters, r.int(0, 20))
+            : roll < 0.5 ? r.mutate(r.pick(ROLE_RESERVED)) : roll < 0.9 ? r.string() : r.value();
+        const result = validate(input);
+        // The model, written apart from validation.js
+        let want = false;
+        if (typeof input === 'string') {
+            const nfc = input.normalize('NFC');
+            const chars = [...nfc];
+            want = chars.length >= 1 && chars.length <= MAX_ROLE_CHARS && new TextEncoder().encode(nfc).length <= R.MAX_ROLE_BYTES &&
+                chars.every((ch) => /^[\p{L}\p{N}_-]$/u.test(ch)) && !ROLE_RESERVED.includes(nfc.normalize('NFKC').toLowerCase());
+        }
+        assert.equal(result.valid, want, JSON.stringify(input));
+        if (!result.valid) {
+            assert.equal(result.value, '');
+            assert.ok(registered(result.error), `unregistered code ${result.error}`);
+            assert.equal(isRole(input), false);
+            return;
+        }
+        assert.equal(result.value, input.normalize('NFC'));
+        assert.equal(isRole(result.value), true);
+        assert.equal(isRole(input), input === result.value);
+        assert.equal(validate(result.value).value, result.value);
     });
 });

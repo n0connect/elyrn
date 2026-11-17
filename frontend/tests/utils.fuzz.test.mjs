@@ -223,23 +223,32 @@ test('streamNeedsPolling: matches an independent model on random times, limits a
     const odd = [NaN, Infinity, -Infinity, undefined, null, '5', {}, -0];
     const number = (r) => (r.bool(0.1) ? r.pick(odd) : r.int(-POLL_SPAN, POLL_SPAN));
     const flag = (r) => (r.bool(0.1) ? r.pick([1, 'true', null, undefined]) : r.bool());
+    const finite = (v) => typeof v === 'number' && Number.isFinite(v);
+    // The model: `at` provably lies less than `limit` before `now`
+    const proven = (now, at, limit) => [now, at, limit].every(finite) && limit > 0 && at <= now && now - at < limit;
+    const before = (r, now) => (r.bool(0.3) && Number.isFinite(now) ? now - r.int(0, POLL_SPAN) : number(r));
     await fuzz(SEED + 4, POLL_ITERATIONS, async (r) => {
-        const now = number(r);
-        const last = r.bool(0.3) && Number.isFinite(now) ? now - r.int(0, POLL_SPAN) : number(r);
-        const limit = number(r);
-        const visible = flag(r);
-        const loggedIn = flag(r);
-        const got = needs(now, last, limit, visible, loggedIn);
+        const look = {
+            now: number(r), silenceLimitMs: number(r), visible: flag(r), loggedIn: flag(r), hiddenIntervalMs: number(r)
+        };
+        look.lastEventAt = before(r, look.now);
+        look.lastPollAt = r.bool(0.1) ? -Infinity : before(r, look.now);
+        const got = needs(look);
         assert.equal(typeof got, 'boolean');
-        // The model: never for a page that is hidden or logged out; otherwise unless an event
-        // provably lies inside the limit
-        const active = visible === true && loggedIn === true;
-        const finite = [now, last, limit].every((v) => typeof v === 'number' && Number.isFinite(v));
-        const delivering = finite && limit > 0 && last <= now && now - last < limit;
-        assert.equal(got, active && !delivering, `now=${String(now)} last=${String(last)} limit=${String(limit)} visible=${String(visible)} in=${String(loggedIn)}`);
-        // Monotone in time: once a visible page polls, a later look with no new event polls too
-        if (got && finite && limit > 0 && last <= now) {
-            assert.equal(needs(now + r.int(0, POLL_SPAN), last, limit, true, true), true);
+        // Never for a page logged out, nor while an event provably lies inside the limit; then
+        // always for a visible page, and for a hidden one unless a poll provably lies inside the
+        // hidden interval
+        const silent = look.loggedIn === true && !proven(look.now, look.lastEventAt, look.silenceLimitMs);
+        const want = silent && (look.visible === true || !proven(look.now, look.lastPollAt, look.hiddenIntervalMs));
+        assert.equal(got, want, JSON.stringify(look, (k, v) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)));
+        // A hidden page never polls more than a visible one would
+        if (got && look.visible !== true) assert.equal(needs({ ...look, visible: true }), true);
+        // Monotone in time: once a page polls, a later look with no new event or poll polls too
+        // (a poll stamped after now could come to lie inside the interval: no proof either way)
+        const pastPoll = look.visible === true || !finite(look.lastPollAt) || look.lastPollAt <= look.now;
+        if (got && pastPoll && [look.now, look.lastEventAt, look.silenceLimitMs].every(finite) &&
+            look.silenceLimitMs > 0 && look.lastEventAt <= look.now) {
+            assert.equal(needs({ ...look, now: look.now + r.int(0, POLL_SPAN) }), true);
         }
     });
 });

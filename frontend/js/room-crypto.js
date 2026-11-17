@@ -50,12 +50,18 @@ const ElyrnRoomCrypto = (() => {
     const MAX_SHUFFLE_DRAWS = 64;
     // A note stands alone, outside any sender's counted sequence: its counter is always the first
     const NOTE_COUNTER = 1;
+    // A member's role (docs/architecture/rooms.md, Member roles): len(1) || utf8 || zero padding,
+    // always ROLE_PLAIN_BYTES, so every sealed role (set or cleared) has the same size
+    const MAX_ROLE_BYTES = 64;
+    const ROLE_PLAIN_BYTES = 1 + MAX_ROLE_BYTES;
+    const ROLE_BYTES = NONCE_BYTES + ROLE_PLAIN_BYTES + TAG_BYTES;
 
     // "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
     const SALT = encoder.encode('noaddx.v1');
     const INFO_ID = encoder.encode('noaddx/room/id');
     const INFO_LOOKUP = encoder.encode('noaddx/room/lookup');
     const INFO_CARD = encoder.encode('noaddx/room/card');
+    const INFO_ROLE = encoder.encode('noaddx/room/role');
     const INFO_ROOT = encoder.encode('noaddx/rooms');
     const INFO_VAULT = encoder.encode('noaddx/rooms/vault');
     const INFO_MEMBER = encoder.encode('noaddx/rooms/member/x25519');
@@ -68,6 +74,7 @@ const ElyrnRoomCrypto = (() => {
     const MAGIC_NOTE = encoder.encode('NADN');
     const MAGIC_CARD = encoder.encode('NADC');
     const MAGIC_VAULT = encoder.encode('NADV');
+    const MAGIC_ROLE = encoder.encode('NADL');
     const ZERO_NONCE = new Uint8Array(NONCE_BYTES);
 
     // ---------- helpers ----------
@@ -206,15 +213,18 @@ const ElyrnRoomCrypto = (() => {
         idBytes[8] = (idBytes[8] & 0x3f) | 0x80; // RFC 4122 variant
         const lookup = await hkdfBits(secret, SALT, INFO_LOOKUP, KEY_BYTES);
         const cardRaw = await hkdfBits(secret, SALT, INFO_CARD, KEY_BYTES);
+        const roleRaw = await hkdfBits(secret, SALT, INFO_ROLE, KEY_BYTES);
         try {
             return Object.freeze({
                 id: uuidString(idBytes),
                 idBytes: idBytes,
                 lookup: C.b64urlEncode(lookup),
-                cardKey: await aesKey(cardRaw, ['encrypt', 'decrypt'])
+                cardKey: await aesKey(cardRaw, ['encrypt', 'decrypt']),
+                roleKey: await aesKey(roleRaw, ['encrypt', 'decrypt'])
             });
         } finally {
             C.wipe(cardRaw);
+            C.wipe(roleRaw);
         }
     }
 
@@ -274,6 +284,55 @@ const ElyrnRoomCrypto = (() => {
     // Only a code holder can make a card the room's card key opens
     function openCard(room, card) {
         return openCardBytes(room, C.b64urlDecode(card, CARD_BYTES));
+    }
+
+    // ---------- member roles ----------
+    // Sealed for the room (any code holder can open it, the server cannot) and bound to the
+    // member's stored card, so the server can neither read a role nor move it to someone else.
+    // These functions handle bytes only: the text rule is validation.js validateRoleText, applied
+    // before sealing and after opening.
+
+    function roleAAD(room, card) {
+        return C.concat(MAGIC_ROLE, new Uint8Array([VERSION]), room.idBytes, C.b64urlDecode(card, CARD_BYTES));
+    }
+
+    // The sealed role under a given nonce. Reusing a nonce under one room's key breaks AES-GCM:
+    // only sealRole (a fresh random nonce) and the interop vectors call this.
+    async function sealRoleWithNonce({ room, card, text, nonce }) {
+        const bytes = typeof text === 'string' ? encoder.encode(text) : null;
+        if (!bytes || bytes.length > MAX_ROLE_BYTES || !isBytes(nonce, NONCE_BYTES)) {
+            throw new Error('invalid role');
+        }
+        const plain = new Uint8Array(ROLE_PLAIN_BYTES);
+        plain[0] = bytes.length;
+        plain.set(bytes, 1);
+        try {
+            return C.b64urlEncode(C.concat(nonce, await aesSeal(room.roleKey, nonce, plain, roleAAD(room, card))));
+        } finally {
+            C.wipe(plain);
+        }
+    }
+
+    // text '' seals the cleared role: the same size as any other, so set and cleared look alike
+    function sealRole({ room, card, text }) {
+        return sealRoleWithNonce({ room, card, text, nonce: globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES)) });
+    }
+
+    // The text a sealed role holds ('' for the cleared role). Throws unless the tag verifies for
+    // this room and card, the length is at most MAX_ROLE_BYTES, every padding byte is zero and
+    // the bytes are UTF-8.
+    async function openRole({ room, card, role }) {
+        const raw = C.b64urlDecode(role, ROLE_BYTES);
+        const plain = await aesOpen(room.roleKey, raw.subarray(0, NONCE_BYTES), raw.subarray(NONCE_BYTES), roleAAD(room, card));
+        try {
+            const length = plain[0];
+            if (length > MAX_ROLE_BYTES || plain.subarray(1 + length).some(b => b !== 0)) {
+                throw new Error('bad role');
+            }
+            return new TextDecoder('utf-8', { fatal: true }).decode(plain.subarray(1, 1 + length));
+        } finally {
+            C.wipe(plain);
+        }
     }
 
     // ---------- the vault ----------
@@ -538,6 +597,8 @@ const ElyrnRoomCrypto = (() => {
         MIN_MEMBERS,
         MAX_MEMBERS,
         CARD_BYTES,
+        ROLE_BYTES,
+        MAX_ROLE_BYTES,
         WRAP_BYTES,
         HEADER_BYTES,
         newRoomCode,
@@ -550,6 +611,9 @@ const ElyrnRoomCrypto = (() => {
         member,
         sealCard,
         openCard,
+        sealRole,
+        sealRoleWithNonce,
+        openRole,
         sealVault,
         openVault,
         rosterDigest,

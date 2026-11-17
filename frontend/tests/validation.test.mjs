@@ -63,3 +63,55 @@ test('the robot entrance builds its command only from an http(s) origin', () => 
         assert.equal(build(bad), '', `accepted ${JSON.stringify(bad)}`);
     }
 });
+
+// ---------- member roles: the one rule, before sealing and after opening ----------
+
+const validateRole = (text) => vm.runInContext('validateRoleText', context)(text);
+const isRole = (text) => vm.runInContext('isRoleText', context)(text);
+const ROLE_CODES = vm.runInContext('Errors.CODES', context);
+
+test('a role is 1 to 16 letters, digits, - or _, kept in NFC and in its own case', () => {
+    for (const text of ['lider', 'Komutan', 'Kâşif-7_ü', 'x'.repeat(16), '𝔸'.repeat(16), '日本語', 'ｌｉｄｅｒ', '٣٤', 'о-wner', 'оwner']) {
+        const checked = validateRole(text);
+        assert.equal(checked.valid, true, text);
+        assert.equal(checked.value, text.normalize('NFC'));
+        assert.equal(isRole(text), true, text);
+    }
+    // Typed decomposed, sealed composed; only the composed form passes when it is opened
+    const decomposed = 'u\u0308ber';
+    assert.equal(validateRole(decomposed).value, 'über');
+    assert.equal(isRole(decomposed), false);
+    assert.equal(isRole('über'), true);
+});
+
+test('a role is refused with the reason: empty, too long, a character outside the rule, a reserved word', () => {
+    const cases = [
+        ['', ROLE_CODES.E_ROLE_EMPTY], ['x'.repeat(17), ROLE_CODES.E_ROLE_TOO_LONG], ['🙂'.repeat(17), ROLE_CODES.E_ROLE_TOO_LONG],
+        ['#lider', ROLE_CODES.E_ROLE_CHARS], ['li der', ROLE_CODES.E_ROLE_CHARS], [' lider', ROLE_CODES.E_ROLE_CHARS],
+        ['<b>x</b>', ROLE_CODES.E_ROLE_CHARS], ['a.b', ROLE_CODES.E_ROLE_CHARS], ['lider\u202e', ROLE_CODES.E_ROLE_CHARS],
+        ['li\u200bder', ROLE_CODES.E_ROLE_CHARS], ['🙂', ROLE_CODES.E_ROLE_CHARS], ['a\u0000', ROLE_CODES.E_ROLE_CHARS],
+        // reserved: compared after NFKC and lowercasing (fullwidth, mixed case)
+        ['owner', ROLE_CODES.E_ROLE_RESERVED], ['you', ROLE_CODES.E_ROLE_RESERVED], ['OwNeR', ROLE_CODES.E_ROLE_RESERVED],
+        ['YOU', ROLE_CODES.E_ROLE_RESERVED], ['ｏｗｎｅｒ', ROLE_CODES.E_ROLE_RESERVED], ['ＹＯＵ', ROLE_CODES.E_ROLE_RESERVED],
+        [5, ROLE_CODES.E_ROLE_INVALID], [null, ROLE_CODES.E_ROLE_INVALID], [undefined, ROLE_CODES.E_ROLE_INVALID], [['x'], ROLE_CODES.E_ROLE_INVALID]
+    ];
+    for (const [text, code] of cases) {
+        const checked = validateRole(text);
+        assert.equal(checked.valid, false, JSON.stringify(text));
+        assert.equal(checked.error, code, JSON.stringify(text));
+        assert.equal(checked.value, '');
+        assert.equal(isRole(text), false, JSON.stringify(text));
+    }
+    assert.deepEqual({ ...validateRole('x'.repeat(17)).params }, { max: 16 });
+});
+
+test('the role rule agrees with the Go side\'s own cases (vectors from backend/internal/e2e)', () => {
+    // vectors-go.json role_text_rule, 17 Nov 2026: Go folds with full Unicode case folding, the
+    // browser lowercases; for the reserved words the two agree
+    for (const text of ['ｏｗｎｅｒ', 'ＹＯＵ', 'OwNeR', 'owner']) {
+        assert.equal(validateRole(text).error, ROLE_CODES.E_ROLE_RESERVED, text);
+    }
+    for (const text of ['ｌｉｄｅｒ', 'über', 'оwner']) {
+        assert.equal(validateRole(text).value, text, text);
+    }
+});

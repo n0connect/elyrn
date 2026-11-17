@@ -631,9 +631,18 @@ function createMessageListItem(message) {
     return createMessageElement(message);
 }
 
+// What a message that does not open says instead of its text: one a newer elyrn wrote is not
+// shown as tampered with
+const UNREADABLE_MARK = '⚠ unreadable — integrity check failed';
+
+function unreadableText(message) {
+    return message.newer ? Errors.message(Errors.CODES.W_MESSAGE_FROM_NEWER) : UNREADABLE_MARK;
+}
+
 function createMessageElement(message) {
     const item = document.createElement('li');
-    item.className = 'msg ' + (message.mine ? 'mine' : 'theirs') + (message.broken ? ' broken' : '');
+    const state = !message.broken ? '' : message.newer ? ' newer' : ' broken';
+    item.className = 'msg ' + (message.mine ? 'mine' : 'theirs') + state;
     item.dataset.seq = String(message.seq);
 
     // In a room, every message from someone else says who: glyph, name and code in this room only
@@ -642,6 +651,8 @@ function createMessageElement(message) {
         sender.className = 'msg-sender';
         sender.dataset.sender = message.sender;
         appendAura(sender, message.from);
+        const role = RoleControl.tag(message.role);
+        if (role) sender.appendChild(role);
         if (message.left) {
             const left = document.createElement('span');
             left.textContent = LEFT_MARK;
@@ -652,7 +663,7 @@ function createMessageElement(message) {
 
     const text = document.createElement('div');
     text.className = 'msg-text';
-    text.textContent = message.broken ? '⚠ unreadable — integrity check failed' : neutralizeReceivedText(message.text);
+    text.textContent = message.broken ? unreadableText(message) : neutralizeReceivedText(message.text);
     item.appendChild(text);
 
     if (!message.broken) {
@@ -950,15 +961,20 @@ function markLookalikes(keys) {
 }
 
 // entries: verified roster; skipped: cards that failed to open (shown, never written to);
-// lookalikes: public keys whose name another key shares
-function renderMembers(entries, skipped, requested, lookalikes, onBefriend) {
+// lookalikes: public keys whose name another key shares; roleControl(entry): the role control
+// for that entry, or null where this account may not change its role (RoleControl.control)
+function renderMembers({ entries, skipped, requested, lookalikes, onBefriend, roleControl }) {
     const list = document.getElementById('memberList');
     clearChildren(list);
     entries.forEach(entry => {
         const row = memberRow(entry);
+        const role = RoleControl.tag(entry.role);
+        if (role) row.appendChild(role);
         if (entry.mine) row.appendChild(memberTag('you'));
         if (entry.owner) row.appendChild(memberTag('owner'));
         if (lookalikes.has(entry.publicKey)) row.appendChild(lookalikeTag());
+        const control = roleControl(entry);
+        if (control) row.appendChild(control);
         if (!entry.mine) {
             const button = document.createElement('button');
             button.className = 'menu-opt member-action';

@@ -45,7 +45,7 @@ const Rooms = (() => {
             owner: view.owner,
             members: view.members,
             notes: view.notes,
-            roster: null,       // [{ card, publicKey, aura, mine, owner }], valid cards only
+            roster: null,       // [{ card, publicKey, aura, mine, owner, role }], valid cards only
             rosterCards: null,  // every card as served (the digest covers them all)
             skipped: 0,         // cards that failed to open: counted, never wrapped for
             requested: new Set(),
@@ -110,7 +110,8 @@ const Rooms = (() => {
         let skipped = 0;
         let storedCard = null;
         for (const entry of members) {
-            if (!entry || typeof entry.card !== 'string' || typeof entry.mine !== 'boolean' || typeof entry.owner !== 'boolean') {
+            if (!entry || typeof entry.card !== 'string' || typeof entry.mine !== 'boolean' || typeof entry.owner !== 'boolean' ||
+                typeof entry.role !== 'string') {
                 throw new Error('malformed roster');
             }
             cards.push(entry.card);
@@ -132,13 +133,44 @@ const Rooms = (() => {
             }
             seen.add(publicKey);
             if (mine) storedCard = entry.card;
-            roster.push({ card: entry.card, publicKey: publicKey, aura: await ElyrnCrypto.aura(publicKey), mine: mine, owner: entry.owner });
+            roster.push({
+                card: entry.card, publicKey: publicKey, aura: await ElyrnCrypto.aura(publicKey), mine: mine, owner: entry.owner,
+                role: await roleOf(room, entry)
+            });
         }
         // The vault says how many seats exist; a longer list is the server breaking the code's limit
         if (!seen.has(room.member.publicKey) || cards.length > room.maxMembers) {
             throw new Error('roster does not match this room');
         }
         return { cards: cards, roster: roster, skipped: skipped, storedCard: storedCard };
+    }
+
+    // The role an entry's sealed role opens to: '' when it never had one or it was cleared, and
+    // also when it does not open for this room and card or its text breaks the rule (logged
+    // under a code only: the text is other members' data and never reaches the log)
+    async function roleOf(room, entry) {
+        if (entry.role === '') return '';
+        try {
+            const text = await R.openRole({ room: room.keys, card: entry.card, role: entry.role });
+            if (text === '' || isRoleText(text)) return text;
+        } catch (e) {
+            // Falls through to the same answer as a text the rule refuses
+        }
+        Log.warn(Errors.INTERNAL.W_ROLE_UNREADABLE);
+        return '';
+    }
+
+    // Seals text (validated by the caller; '' clears) for the member whose stored card is
+    // entry.card and stores it. Returns the request's result.
+    async function setRole({ api, conv, entry, text }) {
+        const role = await R.sealRole({ room: conv.room.keys, card: entry.card, text });
+        return api('POST', `/conversations/${conv.id}/members`, { card: entry.card, role: role });
+    }
+
+    // Who may change entry's role: the room's owner anyone's, every member its own (the server
+    // enforces the same rule; nobody is shown a control they may not use)
+    function mayEditRole(room, entry) {
+        return room.owner === true || entry.mine === true;
     }
 
     function senderOf(room, publicKey) {
@@ -300,7 +332,7 @@ const Rooms = (() => {
     }
 
     return Object.freeze({
-        adopt, refreshView, expired, loadRoster, senderOf, nameCollisions, seal, open,
+        adopt, refreshView, expired, loadRoster, senderOf, nameCollisions, seal, open, setRole, mayEditRole,
         ttlChoices, create, join, roomIdOf, sameLimits, codeText, befriend, notes, dismissNote, safetyNumber,
         aura: (id) => R.roomAura(id)
     });

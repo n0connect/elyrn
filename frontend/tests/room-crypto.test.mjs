@@ -286,3 +286,100 @@ test('room derivations match Go, and Go-sealed cards, vault, message and note op
     assert.equal(note.text, ROOM_VECTOR.noteText);
     assert.equal(note.sender, ROOM_VECTOR.publicA);
 });
+
+// ---------- member roles ----------
+
+// Produced by backend/internal/e2e (Go, 17 Nov 2026) for the room of ROOM_VECTOR: the browser must
+// open both blobs and make them again byte for byte from their inputs.
+const GO_ROLE = {
+    roleKey: 'xjMx9pc58vaftB45sTasFN4Jj5M1QtdbxC4mIWh8vRE',
+    set: {
+        card: 'tJ2XEYRYXgzKx2Ya5ylCuLQ2_0yhQ-SgYUY0nNlYYTtXyj8AysfLsC3z-hUufz2Cc1ZbaPRcYrtRfklI',
+        nonce: 'YGFiY2RlZmdoaWpr',
+        text: 'Kâşif-7_ü',
+        blob: 'YGFiY2RlZmdoaWprHNSB5aHOmktWWRO1hdgWMgX54i2DUa1374H_1Gic0MlIzRiVDxSWf9TdtYiC5mLsXsJQE7I0e-x7c7nLmtJQsqX-kZB5DKuaizsGS8eZ-TwU'
+    },
+    cleared: {
+        card: 'uJ3NyU9nViUzChYyFBB8Yzu4n7M9hlkXxleAREpT0j5ou6v6kYJO7WXHgdleq8w8JpWhGvhgwzAan-6n',
+        nonce: 'cHFyc3R1dnd4eXp7',
+        text: '',
+        blob: 'cHFyc3R1dnd4eXp7K8j8IGJ442sUVPHFPHappkIBuLR5WO1SXweejr83EIbFBXIwPJBle8p3do13NDQ0jEFUNSVYj_7GjyNsjOjTwVEeYSYIs4UW4fZhaZfDeF4X'
+    }
+};
+
+// K_role computed here independently (node's WebCrypto, spec §1), to seal plaintexts the browser
+// itself never would
+async function independentRoleKey(secret) {
+    const base = await crypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveBits']);
+    return new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256',
+        salt: new TextEncoder().encode('noaddx.v1'), info: new TextEncoder().encode('noaddx/room/role') }, base, 256));
+}
+
+async function sealRawRole(secret, room, card, plain) {
+    const key = await crypto.subtle.importKey('raw', await independentRoleKey(secret), 'AES-GCM', false, ['encrypt']);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const aad = C.concat(new TextEncoder().encode('NADL'), [1], room.idBytes, C.b64urlDecode(card, R.CARD_BYTES));
+    return C.b64urlEncode(C.concat(nonce, new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad }, key, plain))));
+}
+
+test('roles: the Go vectors open in the browser and are made again byte for byte', async () => {
+    const code = R.parseRoomCode(ROOM_VECTOR.code);
+    const room = await R.deriveRoom(code.secret);
+    assert.equal(C.b64urlEncode(await independentRoleKey(code.secret)), GO_ROLE.roleKey);
+    for (const vector of [GO_ROLE.set, GO_ROLE.cleared]) {
+        assert.equal(vector.blob.length, 124);
+        assert.equal(await R.openRole({ room, card: vector.card, role: vector.blob }), vector.text);
+        const nonce = C.b64urlDecode(vector.nonce, 12);
+        assert.equal(await R.sealRoleWithNonce({ room, card: vector.card, text: vector.text, nonce }), vector.blob);
+    }
+    // Bound to its card: the set role served for the other member does not open
+    await assert.rejects(R.openRole({ room, card: GO_ROLE.cleared.card, role: GO_ROLE.set.blob }));
+});
+
+test('roles: sealed set and cleared roles have one size and a fresh nonce each', async () => {
+    const { room } = await fixture();
+    const { member } = await joinAs(room, ACCOUNT_A);
+    const blobs = [];
+    for (const text of ['', 'lider', 'x'.repeat(R.MAX_ROLE_BYTES), 'ü'.repeat(R.MAX_ROLE_BYTES / 2), 'lider']) {
+        const blob = await R.sealRole({ room, card: member.card, text });
+        assert.equal(blob.length, Math.ceil(R.ROLE_BYTES * 4 / 3));
+        assert.equal(await R.openRole({ room, card: member.card, role: blob }), text);
+        blobs.push(blob);
+    }
+    assert.equal(new Set(blobs).size, blobs.length);
+    for (const text of ['x'.repeat(R.MAX_ROLE_BYTES + 1), 'ü'.repeat(R.MAX_ROLE_BYTES / 2 + 1), 5, null, undefined]) {
+        await assert.rejects(R.sealRole({ room, card: member.card, text }));
+    }
+    await assert.rejects(R.sealRoleWithNonce({ room, card: member.card, text: 'a', nonce: new Uint8Array(11) }));
+});
+
+test('roles: another room, another card, an altered byte, a long length, padding or bad UTF-8 never open', async () => {
+    const { code, room } = await fixture();
+    const other = (await fixture()).room;
+    const a = (await joinAs(room, ACCOUNT_A)).member;
+    const b = (await joinAs(room, ACCOUNT_B)).member;
+    const blob = await R.sealRole({ room, card: a.card, text: 'komutan' });
+    await assert.rejects(R.openRole({ room: other, card: a.card, role: blob }));
+    await assert.rejects(R.openRole({ room, card: b.card, role: blob }));
+    for (let i = 0; i < R.ROLE_BYTES; i += 5) {
+        await assert.rejects(R.openRole({ room, card: a.card, role: flip(blob, i) }), `byte ${i}`);
+    }
+    for (const role of ['', 'x', blob + 'A', blob.slice(1), C.b64urlEncode(new Uint8Array(R.ROLE_BYTES))]) {
+        await assert.rejects(R.openRole({ room, card: a.card, role }));
+    }
+    // Authentic, yet not a role: the length byte past 64, a non-zero padding byte, bytes that are not UTF-8
+    const plain = (length, dirty) => {
+        const out = new Uint8Array(R.MAX_ROLE_BYTES + 1);
+        out[0] = length;
+        out.fill(0x61, 1, 1 + Math.min(length, R.MAX_ROLE_BYTES));
+        if (dirty) out[R.MAX_ROLE_BYTES] = 1;
+        return out;
+    };
+    const notUtf8 = plain(2);
+    notUtf8.set([0xc3, 0x28], 1);
+    for (const bad of [plain(R.MAX_ROLE_BYTES + 1), plain(255), plain(3, true), plain(0, true), notUtf8]) {
+        await assert.rejects(R.openRole({ room, card: a.card, role: await sealRawRole(code.secret, room, a.card, bad) }));
+    }
+    // ...while the same independent sealing of a good plaintext opens: the model is right
+    assert.equal(await R.openRole({ room, card: a.card, role: await sealRawRole(code.secret, room, a.card, plain(3)) }), 'aaa');
+});

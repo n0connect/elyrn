@@ -85,6 +85,14 @@ const Errors = (() => {
         E_IDENTITY_DELETE_UNKNOWN: e('no answer — the identity may already be deleted. reload: if you are logged out it is gone, otherwise try again'),
         W_TOO_MANY_ATTEMPTS: w('too many attempts — wait a moment'),
 
+        // content-free alerts (alerts.js)
+        W_ALERTS_DENIED: w('this browser blocks notifications for this site — allow them in its site settings, then turn alerts on'),
+        // The browser's question was dismissed without an answer
+        W_ALERTS_NOT_ALLOWED: w('notifications were not allowed — alerts stay off'),
+        W_ALERTS_REVOKED: w('notifications are no longer allowed for this site — alerts turned off'),
+        // The browser failed to ask (requestPermission threw or rejected)
+        E_ALERTS_UNAVAILABLE: e('this browser could not turn alerts on'),
+
         // conversations and messages
         E_CONVERSATIONS_NOT_LOADED: e('could not load conversations'),
         E_ROOM_DATA_CHANGED: e('room data changed unexpectedly — room hidden'),
@@ -118,6 +126,9 @@ const Errors = (() => {
         // The robot door's challenge cannot run here (no random source, or no SHA-256 outside
         // https). The door is theatre and gates nothing, so the visitor is let through.
         W_DOOR_CHECK_UNAVAILABLE: w('this browser cannot run the door check — come in anyway'),
+        // Shown in place of an authentic message whose payload carries keys this build does not
+        // know (crypto.js decodePayload): a newer elyrn wrote it, nobody tampered with it
+        W_MESSAGE_FROM_NEWER: w('sent by a newer elyrn; reload this page to read it'),
         // Shown in place of a message whose sender counter was already used (counters.js)
         W_MESSAGE_REPLAYED: w('⚠ a message from {who} was replayed or reordered by the server'),
 
@@ -152,6 +163,16 @@ const Errors = (() => {
         E_ROOM_LIMITS_REFUSED: e('the server refused the room\'s settings — reload the page and try again'),
         E_ROOM_NOT_CREATED: e('could not create room'),
         E_ROOM_NOT_LEFT: e('could not leave the room'),
+        // member roles: the text as typed (validation.js validateRoleText), then the server's answer
+        E_ROLE_INVALID: e('invalid role'),
+        E_ROLE_EMPTY: e('type a role first, or clear it'),
+        E_ROLE_TOO_LONG: e('a role is at most {max} characters'),
+        E_ROLE_CHARS: e('a role takes letters, digits, - and _ only'),
+        E_ROLE_RESERVED: e('owner and you are shown by elyrn. itself — choose another role'),
+        E_ROLE_NOT_ALLOWED: e('only the room\'s owner can set another member\'s role'),
+        W_ROLE_MEMBER_GONE: w('that member is no longer in this room'),
+        W_ROLE_RATE_LIMITED: w('too many role changes — wait a moment'),
+        E_ROLE_NOT_SET: e('role not changed'),
         W_FRIEND_REQUEST_PENDING: w('you already have a request waiting with them'),
         W_FRIEND_GONE: w('they are no longer in this room'),
         E_FRIEND_REQUEST_NOT_SENT: e('friend request not sent'),
@@ -170,6 +191,9 @@ const Errors = (() => {
         // A stored identity record gave no identity at load (an engine that cannot read its key
         // back, a damaged record): the page opens logged out, and the next login replaces it
         W_IDENTITY_UNREADABLE: 'W_IDENTITY_UNREADABLE',
+        // Storing, reading back or deleting the throwaway key of Keystore.keepsKeys failed: the
+        // engine counts as one that cannot keep keys, and the sealed form is made
+        W_KEY_PROBE_FAILED: 'W_KEY_PROBE_FAILED',
         W_COUNTERS_UNAVAILABLE: 'W_COUNTERS_UNAVAILABLE',
         E_SYNC_FAILED: 'E_SYNC_FAILED',
         W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT',
@@ -184,7 +208,14 @@ const Errors = (() => {
         W_LIVE_STREAM_SILENT: 'W_LIVE_STREAM_SILENT',
         // The event stream failed MAX_RECONNECT_ATTEMPTS times in a row: it is not retried until
         // the tab is shown again, and polling carries the updates meanwhile (chat.js)
-        W_LIVE_STREAM_GAVE_UP: 'W_LIVE_STREAM_GAVE_UP'
+        W_LIVE_STREAM_GAVE_UP: 'W_LIVE_STREAM_GAVE_UP',
+        // A member's sealed role did not open, or opened to text the rule refuses: shown as no
+        // role (rooms.js); its text is never logged
+        W_ROLE_UNREADABLE: 'W_ROLE_UNREADABLE',
+        // No Notification API: the alerts control is not shown (alerts.js)
+        W_ALERTS_UNSUPPORTED: 'W_ALERTS_UNSUPPORTED',
+        // The browser has the API but refused to show a notification from the page (alerts.js)
+        W_ALERT_NOT_SHOWN: 'W_ALERT_NOT_SHOWN'
     });
 
     // Server error texts we recognise (compared lowercased); anything else is E_REQUEST_FAILED
@@ -202,7 +233,9 @@ const Errors = (() => {
         'unsupported media type': CODES.E_API_INVALID_REQUEST,
         // A send's 409 whose id is held by something else (apperr IDTaken, in JSON): nothing was
         // stored, unlike the plain-text 409 "Conflict" (the earlier attempt is stored)
-        'id taken': CODES.E_MESSAGE_ID_TAKEN
+        'id taken': CODES.E_MESSAGE_ID_TAKEN,
+        // A member who does not own the room set another member's role (apperr RoleNotAllowed, JSON)
+        'role not allowed': CODES.E_ROLE_NOT_ALLOWED
     });
 
     // Used when the answer carries no message
