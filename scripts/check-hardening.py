@@ -130,16 +130,72 @@ NOT_FOUND_PAGE = re.compile(r"NOT_FOUND: '(/[\w-]+\.html)'")
 API_PROXY_INCLUDE = "include /etc/nginx/elyrn/api-proxy.conf;"
 API_ERRORS_INCLUDE = "include /etc/nginx/elyrn/api-errors.conf;"
 API_DEFAULT_DENY = "location /api/ { " + API_ERRORS_INCLUDE + " return 404; }"
-# nginx is the one source of these on every response; the backend's copies are hidden on /api/
+# nginx is the one source of these on every response; the backend's copies are hidden on /api/,
+# so an API answer carries exactly one of each (the two CSPs both stay: they differ on purpose)
 NGINX_OWNED_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "same-origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
 }
+# nginx-owned too, with a value too long to repeat here: nginx's one line is found by name
+NGINX_OWNED_BY_NAME = ("Permissions-Policy",)
+# Every header the backend's security middleware sets must be nginx-owned (hidden on /api/) or
+# one that stays on purpose
+SECURITY_GO = ROOT / "backend/internal/middleware/security.go"
+BACKEND_HEADER_SET = re.compile(r'w\.Header\(\)\.Set\(("[A-Za-z-]+"|utils\.\w+)')
+BACKEND_HEADERS_KEPT = {'"Content-Security-Policy"', "utils.HeaderCacheControl"}
 # The event stream's location: unbuffered here, and an outer proxy is told so (the backend's
 # X-Accel-Buffering passed on); an add_header there would drop the server's security headers
 EVENTS_LOCATION = "location = /api/v2/events {"
 EVENTS_STREAM_LINES = ("proxy_buffering off;", "proxy_pass_header X-Accel-Buffering;")
+# The file parts location: at most as many requests at once as the backend admits (its contract
+# bound), in memory only; the zone is one key for all clients (nginx.conf)
+FILES_LOCATION = re.compile(r"^location [^\n]*/files\(/", re.MULTILINE)
+FILES_GO = ROOT / "backend/internal/handlers/files.go"
+FILES_BOUND = re.compile(r"^const maxConcurrentFileRequests = (\d+)$", re.MULTILINE)
+FILES_ZONES = ("limit_conn_zone $file_requests_key zone=files:1m;",
+               "limit_conn_zone $client_addr zone=files_per_client:10m;")
+# Per client address (as the request-rate zone counts it): small enough that one cannot take the pool
+FILES_PER_CLIENT = re.compile(r"^limit_conn files_per_client (\d+);$")
+FILES_KEY_MAP = re.compile(r"^map \$request_method \$file_requests_key \{\n\s+default all;\n\}", re.MULTILINE)
+FILES_MEMORY_LINES = ("client_body_buffer_size 342k;", "proxy_max_temp_file_size 0;", "limit_conn_status 503;",
+                      "client_body_timeout 5s;")
+# HSTS: one source, nginx's server-level header from $hsts, which nginx-hsts.sh renders at start
+HSTS_RENDERER = ROOT / "nginx-hsts.sh"
+HSTS_OUT_DIR = "HSTS_OUT_DIR"
+HSTS_MAP_FILE = "hsts.map"
+HSTS_HEADER = "Strict-Transport-Security"
+HSTS_ADD_HEADER = "add_header " + HSTS_HEADER + " $hsts always;"
+HSTS_SETTINGS = ("APP_ENV", "HSTS_MAX_AGE", "HSTS_INCLUDE_SUBDOMAINS", "HSTS_PRELOAD")
+HSTS_MAP = re.compile(r'^map "\$proxy_protocol_addr\|\$forwarded_proto" \$hsts \{\n\s+default "";\n\s+'
+                      r'include /etc/nginx/conf\.d/' + re.escape(HSTS_MAP_FILE) + r';\n\}', re.MULTILINE)
+# (settings, the one entry the map must hold, or None for none); the key "|https" is the clearnet
+# listener (no PROXY address) with HTTPS vouched for by a listed edge proxy
+HSTS_CASES = (
+    ({"APP_ENV": "production"}, '"|https" "max-age=31536000";'),
+    ({"APP_ENV": "production", "HSTS_MAX_AGE": ""}, '"|https" "max-age=31536000";'),
+    ({"APP_ENV": "Production", "HSTS_MAX_AGE": "600", "HSTS_INCLUDE_SUBDOMAINS": "true", "HSTS_PRELOAD": "YES"},
+     '"|https" "max-age=600; includeSubDomains; preload";'),
+    ({"APP_ENV": "prod", "HSTS_MAX_AGE": "63072000", "HSTS_PRELOAD": "1"}, '"|https" "max-age=63072000; preload";'),
+    ({"APP_ENV": "production", "HSTS_MAX_AGE": "0"}, None),
+    ({"APP_ENV": "development"}, None),
+    ({"APP_ENV": "development", "HSTS_MAX_AGE": "31536000"}, None),
+    ({"APP_ENV": "test", "HSTS_INCLUDE_SUBDOMAINS": "true"}, None),
+    ({}, None),
+)
+HSTS_MALFORMED = (
+    {"APP_ENV": "production", "HSTS_MAX_AGE": "-1"}, {"APP_ENV": "production", "HSTS_MAX_AGE": "1e3"},
+    {"APP_ENV": "production", "HSTS_MAX_AGE": "63072001"}, {"APP_ENV": "production", "HSTS_MAX_AGE": "01"},
+    {"APP_ENV": "production", "HSTS_MAX_AGE": "one year"}, {"APP_ENV": "production", "HSTS_MAX_AGE": "99999999999"},
+    {"APP_ENV": "development", "HSTS_MAX_AGE": "abc"}, {"APP_ENV": "production", "HSTS_INCLUDE_SUBDOMAINS": "on"},
+    {"APP_ENV": "production", "HSTS_PRELOAD": "maybe"}, {"APP_ENV": "staging"},
+    {"APP_ENV": "production", "HSTS_MAX_AGE": '1"; add_header X 1'},
+)
+# Go sources that answer requests; a second HSTS source there would disagree with nginx's
+BACKEND_SOURCES = ROOT / "backend/internal"
 # Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
 NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
 # Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
@@ -306,6 +362,15 @@ def check_nginx():
             fail("nginx", f"nginx-site.conf must send {header}: {value} on every response")
         if f"proxy_hide_header {header};" not in proxy.splitlines():
             fail("nginx", f"nginx-api-proxy.conf must hide the backend's {header} (one header, never two)")
+    for header in NGINX_OWNED_BY_NAME:
+        if len([line for line in site.splitlines() if line.startswith(f"add_header {header} ")]) != 1:
+            fail("nginx", f"nginx-site.conf must send {header} once, at server level")
+        if f"proxy_hide_header {header};" not in proxy.splitlines():
+            fail("nginx", f"nginx-api-proxy.conf must hide the backend's {header} (one header, never two)")
+    hidden = {f'"{h}"' for h in list(NGINX_OWNED_HEADERS) + list(NGINX_OWNED_BY_NAME)}
+    for header in BACKEND_HEADER_SET.findall(read(SECURITY_GO)):
+        if header not in hidden and header not in BACKEND_HEADERS_KEPT:
+            fail("backend", f"security.go sets {header}, which nginx does not hide: an API answer would carry two")
     if "proxy_intercept_errors off;" not in errors or re.search(r"proxy_intercept_errors\s+on", site + errors):
         fail("nginx", "proxy_intercept_errors must be off: the backend's coded answers pass through")
     # Every location that proxies to the backend answers nginx's own failures in JSON
@@ -325,6 +390,7 @@ def check_nginx():
     check_error_page_statuses(site + "\n" + errors, answers)
     check_status_pages(site)
     check_events_location(site)
+    check_files_location(site, read(NGINX_CONF))
 
 
 def check_events_location(site):
@@ -340,6 +406,34 @@ def check_events_location(site):
             fail("nginx", f"the event stream location must keep '{line}'")
     if any(line.startswith("add_header") for line in lines):
         fail("nginx", "no add_header in the event stream location: it would drop the server's headers")
+
+
+def check_files_location(site, main):
+    """File requests hold about 0.7 MB each in nginx and 2 MB in the backend: the files location
+    admits at most the backend's own bound at once (one zone key for every client), refuses one
+    more with 503 (the registered edge body), and keeps bodies in memory, never in temp files."""
+    blocks = [b for b in re.split(r"\n(?=location )", site) if FILES_LOCATION.match(b)]
+    if len(blocks) != 1:
+        fail("nginx", "nginx-site.conf must have exactly one file parts location")
+        return
+    bound = FILES_BOUND.search(read(FILES_GO))
+    if not bound:
+        fail("nginx", "backend/internal/handlers/files.go no longer states maxConcurrentFileRequests")
+        return
+    lines = {line.strip() for line in blocks[0].splitlines()}
+    for line in (f"limit_conn files {bound.group(1)};",) + FILES_MEMORY_LINES:
+        if line not in lines:
+            fail("nginx", f"the file parts location must keep '{line}'")
+    per_client = [int(m.group(1)) for m in map(FILES_PER_CLIENT.match, lines) if m]
+    if len(per_client) != 1 or not 1 <= per_client[0] < int(bound.group(1)) // 2:
+        fail("nginx", "the file parts location must limit each client address to fewer than half the pool")
+    for zone in FILES_ZONES:
+        if zone not in main.splitlines():
+            fail("nginx", f"nginx.conf must define '{zone}'")
+    if not FILES_KEY_MAP.search(main):
+        fail("nginx", "nginx.conf must key the files zone by one value for every request")
+    if any(line.startswith("add_header") for line in lines):
+        fail("nginx", "no add_header in the file parts location: it would drop the server's headers")
 
 
 def check_error_page_statuses(config, answers):
@@ -450,6 +544,63 @@ def check_edge_proxies(services):
             fail("nginx", f"{EDGE_RENDERER.name} accepts a malformed {EDGE_SETTING}")
 
 
+def rendered_hsts(settings):
+    """(exit code, rendered map or None) for one set of HSTS settings, as the entrypoint runs it."""
+    with tempfile.TemporaryDirectory() as out_dir:
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), HSTS_OUT_DIR: out_dir}
+        env.update(settings)
+        try:
+            code = subprocess.run(["sh", str(HSTS_RENDERER)], env=env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=EDGE_RENDER_TIMEOUT_SEC, check=False).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            return None, None
+        try:
+            return code, Path(out_dir, HSTS_MAP_FILE).read_text(encoding="utf-8")
+        except OSError:
+            return code, None
+
+
+def check_hsts(services):
+    """HSTS has one source: nginx's server-level header from $hsts, on every answer of the
+    clearnet listener in production when a listed edge proxy vouched for HTTPS, never on the
+    onion listener, in development or with a max-age of 0; a malformed setting stops nginx."""
+    conf, site = read(NGINX_CONF), read(NGINX_SITE)
+    server_level = site.split("\nlocation ", 1)[0].splitlines()
+    if site.splitlines().count(HSTS_ADD_HEADER) != 1 or HSTS_ADD_HEADER not in server_level:
+        fail("nginx", f"nginx-site.conf must send '{HSTS_ADD_HEADER}' once, at server level")
+    others = [text for text in (conf, read(NGINX_API_PROXY), read(NGINX_API_ERRORS))
+              if HSTS_HEADER in "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))]
+    directives = [line for line in site.splitlines() if HSTS_HEADER in line and not line.lstrip().startswith("#")]
+    if others or directives != [HSTS_ADD_HEADER]:
+        fail("nginx", f"{HSTS_HEADER} must have no source in nginx but '{HSTS_ADD_HEADER}'")
+    for path in BACKEND_SOURCES.rglob("*.go"):
+        if not path.name.endswith("_test.go") and HSTS_HEADER in path.read_text(encoding="utf-8"):
+            fail("backend", f"{path.relative_to(ROOT)} names {HSTS_HEADER}: nginx is its one source")
+    if not HSTS_MAP.search(conf):
+        fail("nginx", "nginx.conf must decide $hsts by map on the PROXY address and $forwarded_proto, default empty, from hsts.map")
+    env = services.get("frontend", {}).get("environment") or {}
+    for setting in HSTS_SETTINGS:
+        if setting not in env:
+            fail("frontend", f"{setting} must be passed to nginx (nginx-hsts.sh)")
+    backend = services.get("backend", {}).get("environment") or {}
+    for setting in HSTS_SETTINGS[1:]:
+        if setting in backend:
+            fail("backend", f"{setting} belongs to nginx now: the backend sends no HSTS")
+    code, _ = rendered_hsts({k: str(env.get(k) or "") for k in HSTS_SETTINGS})
+    if code is None:
+        fail("nginx", f"{HSTS_RENDERER.name} cannot be run")
+        return
+    if code != 0:
+        fail("frontend", "an HSTS setting is malformed: nginx would refuse to start")
+    for settings, want in HSTS_CASES:
+        code, text = rendered_hsts(settings)
+        if code != 0 or text is None or entries(text) != ([want] if want else []):
+            fail("nginx", f"{HSTS_RENDERER.name} with {settings} must render {want or 'no entry'}")
+    for settings in HSTS_MALFORMED:
+        if rendered_hsts(settings)[0] in (0, None):
+            fail("nginx", f"{HSTS_RENDERER.name} accepts the malformed {settings}")
+
+
 def check_backend_memory(svc):
     env = svc.get("environment") or {}
     kib = as_int(env.get("ARGON2_MEMORY_KIB"), DEFAULT_ARGON2_MEMORY_KIB)
@@ -532,6 +683,7 @@ def main():
     check_trust(services)
     check_nginx()
     check_edge_proxies(services)
+    check_hsts(services)
     if failures:
         for line in failures:
             print(f"[FAIL] {layout}: {line}")

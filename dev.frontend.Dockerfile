@@ -14,6 +14,9 @@ COPY nginx-api-errors.conf /etc/nginx/elyrn/api-errors.conf
 # Run by the image's entrypoint before nginx starts: renders EDGE_TRUSTED_PROXIES into
 # conf.d/edge-proxies.{realip,geo}, or stops the container on a malformed list
 COPY --chmod=755 nginx-edge-proxies.sh /docker-entrypoint.d/25-elyrn-edge-proxies.sh
+# Then the one home of HSTS: validates APP_ENV and HSTS_* and renders conf.d/hsts.map, or stops
+# the container on a malformed value
+COPY --chmod=755 nginx-hsts.sh /docker-entrypoint.d/26-elyrn-hsts.sh
 
 # Unprivileged ports: compose runs nginx as uid 101 with no capability (8080 clearnet, 8081 onion)
 EXPOSE 8080 8081

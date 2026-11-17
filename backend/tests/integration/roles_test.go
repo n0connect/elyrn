@@ -184,10 +184,11 @@ func TestRoles_EveryMemberIsTold(t *testing.T) {
 	a := createRoom(t, alice, 4, 24)
 	b := joinRoom(t, bob, a.code)
 
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	aliceLines := eventLines(t, srv, alice.cookie)
-	bobLines := eventLines(t, srv, bob.cookie)
+	srv := eventServer(t, mux)
+	_, aliceLines := openEvents(t, srv, alice.cookie)
+	_, bobLines := openEvents(t, srv, bob.cookie)
+	waitFor(t, aliceLines, "retry: 3000")
+	waitFor(t, bobLines, "retry: 3000")
 
 	expectStatus(t, b.setRole(b.member.Card, newRole(t)), http.StatusNoContent, "bob sets his own role")
 	waitFor(t, aliceLines, "event: conv")

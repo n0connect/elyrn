@@ -45,8 +45,17 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		logoutLogger.Debug("LogoutHandler: sessions revoked")
 	}
 
+	clearSiteData(w)
 	utils.EncodeJSONResponse(w, models.LoginResponse{
 		Success: true,
 		Message: "Logged out successfully",
 	}, http.StatusOK)
+}
+
+// clearSiteData asks the browser to drop this origin's cookies and stored data (the identity,
+// keys and replay records in IndexedDB) with the answer: belt and braces for a browser whose own
+// wipe failed. Only the two answers that end an identity on this device send it: a successful
+// logout and a successful account deletion.
+func clearSiteData(w http.ResponseWriter) {
+	w.Header().Set(utils.HeaderClearSiteData, utils.ClearCookiesAndStorage)
 }

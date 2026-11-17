@@ -121,6 +121,7 @@ func TestWireAnswers(t *testing.T) {
 		StoreUnavailable:      {503, "Service unavailable"},
 		ShuttingDown:          {503, "Service unavailable"},
 		RequestCancelled:      {503, "Service unavailable"},
+		FileRequestsBusy:      {503, "Service unavailable"},
 		InvalidInput:          {400, "Invalid request"},
 		NotFound:              {404, "Not found"},
 		LimitReached:          {429, "Too many requests"},

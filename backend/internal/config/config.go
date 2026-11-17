@@ -96,18 +96,6 @@ func GetEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func getEnvInt(key string) int {
-	value := strings.TrimSpace(GetEnv(key, ""))
-	if value == "" {
-		return 0
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return 0
-	}
-	return parsed
-}
-
 func getEnvIntDefault(key string, defaultValue int) int {
 	value := strings.TrimSpace(GetEnv(key, ""))
 	if value == "" {
@@ -118,14 +106,6 @@ func getEnvIntDefault(key string, defaultValue int) int {
 		return 0
 	}
 	return parsed
-}
-
-func getEnvBool(key string) bool {
-	value := strings.ToLower(strings.TrimSpace(GetEnv(key, "")))
-	if value == "" {
-		return false
-	}
-	return value == "true" || value == "1" || value == "yes"
 }
 
 // ========================================
@@ -336,21 +316,6 @@ func GetLogLevel() string {
 // GetTrustedProxies returns comma-separated trusted proxy IPs/CIDRs
 func GetTrustedProxies() string {
 	return strings.TrimSpace(GetEnv("TRUSTED_PROXIES", ""))
-}
-
-// GetHSTSMaxAge returns HSTS max-age in seconds
-func GetHSTSMaxAge() int {
-	return getEnvInt("HSTS_MAX_AGE")
-}
-
-// GetHSTSIncludeSubDomains returns whether HSTS includeSubDomains is enabled
-func GetHSTSIncludeSubDomains() bool {
-	return getEnvBool("HSTS_INCLUDE_SUBDOMAINS")
-}
-
-// GetHSTSPreload returns whether HSTS preload is enabled
-func GetHSTSPreload() bool {
-	return getEnvBool("HSTS_PRELOAD")
 }
 
 // ========================================

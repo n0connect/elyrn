@@ -4,106 +4,91 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"elyrn/internal/agent"
+	"elyrn/internal/apperr"
 	"elyrn/internal/e2e"
 	"elyrn/internal/utils"
-
-	"github.com/google/uuid"
 )
 
 // Fuzz targets over the MCP stdio surface: the line reader and JSON-RPC decoder (FuzzServe),
-// every tool's argument validation (FuzzToolArguments) and the room code whitelist
-// (FuzzRoomCodeArgument). The backend below checks what reaches it and refuses every call with
-// a registered code, so no target ever contacts a server.
+// every tool's argument validation (FuzzToolArguments, FuzzRoleArguments) and the room code
+// whitelist (FuzzRoomCodeArgument). The tools run on a real *agent.Agent (no identity yet) that
+// talks to a real local HTTP listener standing in for a server that is down: the listener counts
+// every request that reaches it and answers nginx's registered 503, so a call that passed
+// validation fails as E_AGENT_SERVER_BUSY after reaching it, and one that did not never reaches
+// it. Nothing leaves the machine.
 // Run one with: go test -tags test -run '^$' -fuzz '^FuzzServe$' -fuzztime 30s ./internal/mcp
 
-// checkingBackend is the tools' backend for fuzzing: it fails the test when validation let an
-// out-of-range argument through, counts the calls that reached it, and refuses each one.
-type checkingBackend struct {
-	t       *testing.T
-	mu      sync.Mutex
-	reached int
+// downServer is the listener: every request is counted and answered E_BACKEND_UNAVAILABLE, as
+// nginx answers when the backend is down.
+type downServer struct {
+	srv     *httptest.Server
+	reached atomic.Int64
 }
 
-func (b *checkingBackend) refuse(valid bool, what string) error {
-	if !valid {
-		b.t.Errorf("the backend was reached with an invalid %s", what)
+func newDownServer(tb testing.TB) *downServer {
+	tb.Helper()
+	unavailable := apperr.EdgeAnswers[0]
+	if unavailable.Status != http.StatusServiceUnavailable {
+		tb.Fatal("the first edge answer is no longer the backend's outage")
 	}
-	b.mu.Lock()
-	b.reached++
-	b.mu.Unlock()
-	return agent.Fail(agent.CodeStopped, nil)
+	d := &downServer{}
+	d.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d.reached.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set(utils.HeaderContentType, utils.MIMEJSON)
+		w.WriteHeader(unavailable.Status)
+		_, _ = w.Write([]byte(unavailable.Body()))
+	}))
+	tb.Cleanup(d.srv.Close)
+	return d
 }
 
-func (b *checkingBackend) calls() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.reached
+// fuzzAgent is a real agent on the down server, with an identity directory of its own and no
+// identity yet, so every call that passes validation goes to the network first.
+func fuzzAgent(tb testing.TB, d *downServer) *agent.Agent {
+	tb.Helper()
+	a, err := agent.New(agent.Config{Server: d.srv.URL, IdentityPath: filepath.Join(tb.TempDir(), "elyrn", "agent.json")})
+	if err != nil {
+		tb.Fatalf("agent.New: %v", err)
+	}
+	tb.Cleanup(a.Close)
+	return a
 }
 
-func canonicalRoom(id uuid.UUID) bool {
-	_, ok := utils.ParseCanonicalUUIDv4(id.String())
-	return ok
+// refusedByValidation are the codes an argument the tools or the agent refuse before sending
+// anything is answered with
+var refusedByValidation = map[agent.Code]bool{
+	agent.CodeArgument: true, agent.CodeRoomCode: true, agent.CodeMessageText: true, agent.CodeRoleText: true,
 }
 
-func seqInRange(seq, minimum int64) bool { return seq >= minimum && seq <= maxSeqArg }
-
-func (b *checkingBackend) Identity(context.Context) (*agent.IdentityResult, error) {
-	return nil, b.refuse(true, "call")
-}
-
-func (b *checkingBackend) CreateRoom(_ context.Context, maxMembers, ttlHours int) (*agent.RoomCreated, error) {
-	return nil, b.refuse(maxMembers >= agent.MinRoomMembers && maxMembers <= agent.MaxRoomMembers &&
-		ttlHours >= agent.MinRoomTTLHours && ttlHours <= agent.MaxRoomTTLHours, "room size or lifetime")
-}
-
-func (b *checkingBackend) JoinRoom(_ context.Context, code string) (*agent.RoomJoined, error) {
-	valid := code == strings.TrimSpace(code) && len(code) <= maxRoomCodeChars &&
-		(strings.HasPrefix(code, e2e.RoomCodePrefix) || strings.HasPrefix(code, e2e.LegacyRoomCodePrefix))
-	return nil, b.refuse(valid, "room code")
-}
-
-func (b *checkingBackend) Rooms(context.Context) (*agent.RoomsResult, error) {
-	return nil, b.refuse(true, "call")
-}
-
-func (b *checkingBackend) Members(_ context.Context, id uuid.UUID) (*agent.MembersResult, error) {
-	return nil, b.refuse(canonicalRoom(id), "room")
-}
-
-func (b *checkingBackend) SetRole(_ context.Context, id uuid.UUID, member, role string) (*agent.RoleSet, error) {
-	again, err := agent.ValidateRoleText(role)
-	valid := canonicalRoom(id) && err == nil && again == role && (member == "" || e2e.IsAuraCode(member))
-	return nil, b.refuse(valid, "room, member or role")
-}
-
-func (b *checkingBackend) Send(_ context.Context, id uuid.UUID, text string) (*agent.Sent, error) {
-	again, err := agent.ValidateMessageText(text)
-	return nil, b.refuse(canonicalRoom(id) && err == nil && again == text, "room or text")
-}
-
-func (b *checkingBackend) Read(_ context.Context, id uuid.UUID, after *int64) (*agent.ReadResult, error) {
-	return nil, b.refuse(canonicalRoom(id) && (after == nil || seqInRange(*after, 0)), "room or cursor")
-}
-
-func (b *checkingBackend) ReadBefore(_ context.Context, id uuid.UUID, before int64) (*agent.ReadResult, error) {
-	return nil, b.refuse(canonicalRoom(id) && seqInRange(before, minBeforeSeq), "room or history cursor")
-}
-
-func (b *checkingBackend) Wait(_ context.Context, id uuid.UUID, after int64, timeout time.Duration) (*agent.ReadResult, error) {
-	return nil, b.refuse(canonicalRoom(id) && seqInRange(after, 0) && timeout >= agent.MinWaitTimeout &&
-		timeout <= agent.MaxWaitTimeout, "room, cursor or timeout")
-}
-
-func (b *checkingBackend) Leave(_ context.Context, id uuid.UUID) (*agent.Left, error) {
-	return nil, b.refuse(canonicalRoom(id), "room")
+// expectReachedOnlyIfValid: a call refused by validation reached nothing; any other call reached
+// the server and failed as its outage.
+func expectReachedOnlyIfValid(t *testing.T, code agent.Code, reached int64, what string) {
+	t.Helper()
+	switch {
+	case refusedByValidation[code]:
+		if reached != 0 {
+			t.Fatalf("%s: refused as %s after %d requests reached the server", what, code, reached)
+		}
+	case code == agent.CodeServerBusy:
+		if reached == 0 {
+			t.Fatalf("%s: a server outage reported without a request", what)
+		}
+	default:
+		t.Fatalf("%s: code %s after %d requests", what, code, reached)
+	}
 }
 
 // toolErrorCode decodes a tool error result and checks its sentence is the registered one.
@@ -155,6 +140,7 @@ func checkAnswerLine(t *testing.T, line []byte) {
 }
 
 func FuzzServe(f *testing.F) {
+	backend := fuzzAgent(f, newDownServer(f))
 	for _, seed := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}` + "\n" +
 			`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" + `{"jsonrpc":"2.0","id":"two","method":"tools/list"}` + "\n",
@@ -170,7 +156,6 @@ func FuzzServe(f *testing.F) {
 		f.Add([]byte(seed))
 	}
 	f.Fuzz(func(t *testing.T, input []byte) {
-		backend := &checkingBackend{t: t}
 		var out bytes.Buffer // written under the server's outLock only
 		if err := Serve(context.Background(), bytes.NewReader(input), &out, backend); err != nil {
 			t.Fatalf("Serve: %v", err)
@@ -207,10 +192,12 @@ func FuzzToolArguments(f *testing.F) {
 			f.Add(uint8(i), args)
 		}
 	}
+	down := newDownServer(f)
+	backend := fuzzAgent(f, down)
 	f.Fuzz(func(t *testing.T, which uint8, args string) {
 		tl := tools[int(which)%len(tools)]
 		params := json.RawMessage(`{"name":"` + string(tl.name) + `","arguments":` + args + `}`)
-		backend := &checkingBackend{t: t}
+		before := down.reached.Load()
 		got, err := (&Server{backend: backend}).callTool(context.Background(), params)
 		if err != nil {
 			// arguments that are not one JSON value break the params themselves
@@ -221,24 +208,15 @@ func FuzzToolArguments(f *testing.F) {
 		}
 		result, ok := got.(toolResult)
 		if !ok || !result.IsError {
-			t.Fatalf("%s %s: a backend that refuses everything gave %+v", tl.name, args, got)
+			t.Fatalf("%s %s: an agent whose server is down gave %+v", tl.name, args, got)
 		}
 		code := toolErrorCode(t, result)
-		switch code {
-		case agent.CodeStopped:
-			if backend.calls() != 1 {
-				t.Fatalf("%s %s: refused by a backend reached %d times", tl.name, args, backend.calls())
-			}
+		expectReachedOnlyIfValid(t, code, down.reached.Load()-before, string(tl.name)+" "+args)
+		if !refusedByValidation[code] {
 			return
-		case agent.CodeArgument, agent.CodeRoomCode, agent.CodeMessageText, agent.CodeRoleText:
-			if backend.calls() != 0 {
-				t.Fatalf("%s %s: refused as %s after reaching the backend", tl.name, args, code)
-			}
-		default:
-			t.Fatalf("%s %s: code %s", tl.name, args, code)
 		}
 		// Refused by validation: the same call without any backend must give the same answer,
-		// so nothing of the backend is touched before validation (5bef96f)
+		// so the tool validated before touching the agent at all (5bef96f)
 		bare, err := (&Server{}).callTool(context.Background(), params)
 		if err != nil || !reflect.DeepEqual(bare, got) {
 			t.Fatalf("%s %s: without a backend %+v, %v", tl.name, args, bare, err)
@@ -300,6 +278,8 @@ func FuzzRoleArguments(f *testing.F) {
 		f.Add(seed.role, seed.member, seed.withMember)
 	}
 	shape := regexp.MustCompile(memberCodePattern)
+	down := newDownServer(f)
+	backend := fuzzAgent(f, down)
 	f.Fuzz(func(t *testing.T, role, member string, withMember bool) {
 		if shape.MatchString(member) != e2e.IsAuraCode(member) {
 			t.Fatalf("the schema pattern and the validation disagree on %q", member)
@@ -318,20 +298,21 @@ func FuzzRoleArguments(f *testing.F) {
 		}
 		_, roleErr := agent.ValidateRoleText(*sent.Role)
 		reach := roleErr == nil && (sent.Member == nil || e2e.IsAuraCode(*sent.Member))
-		backend := &checkingBackend{t: t}
 		params := json.RawMessage(`{"name":"` + string(ToolRoomRole) + `","arguments":` + string(raw) + `}`)
+		before := down.reached.Load()
 		got, err := (&Server{backend: backend}).callTool(context.Background(), params)
 		if err != nil {
 			t.Fatalf("protocol error %v", err)
 		}
 		result, ok := got.(toolResult)
 		if !ok || !result.IsError {
-			t.Fatalf("a backend that refuses everything gave %+v", got)
+			t.Fatalf("an agent whose server is down gave %+v", got)
 		}
 		code := toolErrorCode(t, result)
-		if reach != (backend.calls() == 1) || (reach && code != agent.CodeStopped) ||
-			(!reach && code != agent.CodeArgument && code != agent.CodeRoleText) {
-			t.Fatalf("role %q member %q (%v): code %s after %d backend calls", role, member, withMember, code, backend.calls())
+		reached := down.reached.Load() - before
+		expectReachedOnlyIfValid(t, code, reached, fmt.Sprintf("role %q member %q (%v)", role, member, withMember))
+		if reach != (reached > 0) || (!reach && code != agent.CodeArgument && code != agent.CodeRoleText) {
+			t.Fatalf("role %q member %q (%v): code %s after %d requests", role, member, withMember, code, reached)
 		}
 	})
 }

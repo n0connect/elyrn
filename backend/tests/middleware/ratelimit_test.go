@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -216,47 +218,152 @@ func TestRateLimiter_BucketCountIsBoundedAtInsertion(t *testing.T) {
 	}
 }
 
-// The file budgets are bounded like the rate buckets (RATE_LIMIT_MAX_BUCKETS), hold
-// FILE_ACCOUNT_DAILY_BYTES / 262144 parts each, give a refunded part back, and never touch the
-// shared limiter.
-func TestFileBudget_SizeRefundAndBound(t *testing.T) {
+// fileBudgetEnv is a budget of three parts per account and a bound of `bound` budgets, on fresh
+// maps (the shared limiter's included, to show budgets never land there).
+func fileBudgetEnv(t *testing.T, bound int) {
+	t.Helper()
 	testutil.SetupTestEnv(t)
-	defer testutil.TeardownTestEnv(t)
-	t.Setenv("RATE_LIMIT_MAX_BUCKETS", "100")
-	t.Setenv(config.EnvFileAccountDailyBytes, strconv.Itoa(3*utils.FilePartBytes))
+	t.Cleanup(func() { testutil.TeardownTestEnv(t) })
+	t.Setenv("RATE_LIMIT_MAX_BUCKETS", strconv.Itoa(bound))
+	t.Setenv(config.EnvFileAccountDailyBytes, strconv.Itoa(fileBudgetParts*utils.FilePartBytes))
 	middleware.ResetRateLimiterForTesting()
+	middleware.ResetFileBudgetsForTesting()
 	t.Cleanup(middleware.ResetRateLimiterForTesting)
-	shared := middleware.RateLimiterBucketCountForTesting()
+	t.Cleanup(middleware.ResetFileBudgetsForTesting)
+}
 
-	budget := middleware.FileBudget("budget-size:" + strconv.FormatInt(time.Now().UnixNano(), 10))
-	if budget == nil {
-		t.Fatal("no budget under valid settings")
-	}
-	for i := 0; i < 3; i++ {
-		if !budget.Allow() {
-			t.Fatalf("part %d of a 3-part budget refused", i)
+// fileBudgetParts: the budget these tests use; it refills one part per 8 hours, so nothing comes
+// back while a test runs
+const fileBudgetParts = 3
+
+// spend takes n parts of key's budget, each of which must be granted.
+func spend(t *testing.T, key string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if !middleware.FileBudgetOf(key).Allow() {
+			t.Fatalf("%s: part %d of %d refused", key, i+1, n)
 		}
 	}
+}
+
+// A budget holds FILE_ACCOUNT_DAILY_BYTES / 262144 parts, a refund gives exactly one back, a
+// refund for a budget that is not held creates none, an account without a stream tag gets
+// nothing, and budgets never land in the shared limiter.
+func TestFileBudget_SizeAndRefund(t *testing.T) {
+	fileBudgetEnv(t, 100)
+	shared := middleware.RateLimiterBucketCountForTesting()
+	spend(t, "size", fileBudgetParts)
+	budget := middleware.FileBudgetOf("size")
 	if budget.Allow() {
-		t.Fatal("a fourth part passed a 3-part budget")
+		t.Fatal("a part beyond the budget was granted")
 	}
 	budget.Refund()
 	if !budget.Allow() || budget.Allow() {
 		t.Fatal("a refund did not give back exactly one part")
 	}
-	if middleware.FileBudget("") != nil {
-		t.Fatal("a budget without an account")
+	middleware.FileBudgetOf("never-taken").Refund()
+	if _, held := middleware.FileBudgetDeficitForTesting("never-taken"); held {
+		t.Fatal("a refund created a budget")
 	}
-
-	for i := 0; i < 1000; i++ {
-		if b := middleware.FileBudget("budget-flood:" + strconv.Itoa(i)); b == nil || !b.Allow() {
-			t.Fatalf("fresh budget %d refused", i)
-		}
-		if n := middleware.FileBudgetCountForTesting(); n > 100 {
-			t.Fatalf("after %d accounts %d budgets are held, cap is 100", i+1, n)
-		}
+	if middleware.FileBudgetOf("").Allow() {
+		t.Fatal("a part was granted without an account")
 	}
 	if middleware.RateLimiterBucketCountForTesting() != shared {
 		t.Fatal("file budgets landed in the shared limiter")
+	}
+}
+
+// At the bound the budget closest to full goes (ties: the least recently used), never a more
+// spent one while a fuller one exists, and the new account is never refused. The evicted
+// account regains exactly its deficit, the smallest held.
+func TestFileBudget_EvictsTheFullestAtTheBound(t *testing.T) {
+	fileBudgetEnv(t, 4)
+	spend(t, "spent-3", 3)
+	spend(t, "spent-2", 2)
+	spend(t, "spent-1-older", 1)
+	spend(t, "spent-1-newer", 1)
+	deficits := map[string]int{}
+	for _, key := range []string{"spent-3", "spent-2", "spent-1-older", "spent-1-newer"} {
+		d, held := middleware.FileBudgetDeficitForTesting(key)
+		if !held {
+			t.Fatalf("%s is not held below the bound", key)
+		}
+		deficits[key] = d
+	}
+
+	spend(t, "newcomer", 1)
+	if _, held := middleware.FileBudgetDeficitForTesting("spent-1-older"); held {
+		t.Fatal("the least recently used of the fullest budgets survived")
+	}
+	for _, key := range []string{"spent-3", "spent-2", "spent-1-newer", "newcomer"} {
+		if _, held := middleware.FileBudgetDeficitForTesting(key); !held {
+			t.Fatalf("%s was evicted although a fuller or older budget was held", key)
+		}
+	}
+	for key, d := range deficits {
+		if key != "spent-1-older" && d < deficits["spent-1-older"] {
+			t.Fatalf("%s was fuller (deficit %d) than the evicted budget (%d)", key, d, deficits["spent-1-older"])
+		}
+	}
+	if n := middleware.FileBudgetCountForTesting(); n != 4 {
+		t.Fatalf("%d budgets held at the bound of 4", n)
+	}
+
+	// Coming back, the evicted account has a full budget: it gained exactly its deficit
+	spend(t, "spent-1-older", fileBudgetParts)
+	if middleware.FileBudgetOf("spent-1-older").Allow() {
+		t.Fatalf("the evicted account gained more than its deficit of %d", deficits["spent-1-older"])
+	}
+	// The most spent budget is still there and still spent
+	if middleware.FileBudgetOf("spent-3").Allow() {
+		t.Fatal("the most spent budget was replaced by a fresh one")
+	}
+}
+
+// Taking, giving back and evicting all happen under the map's lock: with accounts churning
+// through a full map from many goroutines, the most spent budget is never evicted, never handed
+// a part, and never reset; the bound holds. Run it under -race: no synchronisation by sleeping.
+func TestFileBudget_ConcurrentUseUnderTheLock(t *testing.T) {
+	const bound, churners, rounds, readers = 8, 8, 200, 4
+	fileBudgetEnv(t, bound)
+	spend(t, "exhausted", fileBudgetParts)
+
+	var wg sync.WaitGroup
+	var granted atomic.Int64
+	for g := 0; g < churners; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				budget := middleware.FileBudgetOf("churn:" + strconv.Itoa(g) + ":" + strconv.Itoa(i%(bound/2)))
+				// Take a part and give it back: a churning budget is never more spent than one part,
+				// so the exhausted one stays the least full and must never be the one evicted
+				if budget.Allow() {
+					budget.Refund()
+				}
+			}
+		}(g)
+	}
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < rounds; i++ {
+				exhausted := middleware.FileBudgetOf("exhausted")
+				if exhausted.Allow() {
+					granted.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := granted.Load(); n != 0 {
+		t.Fatalf("the exhausted budget granted %d parts while others churned", n)
+	}
+	if d, held := middleware.FileBudgetDeficitForTesting("exhausted"); !held || d != fileBudgetParts {
+		t.Fatalf("the exhausted budget is held=%v with deficit %d, want %d", held, d, fileBudgetParts)
+	}
+	if n := middleware.FileBudgetCountForTesting(); n > bound {
+		t.Fatalf("%d budgets held, bound is %d", n, bound)
 	}
 }

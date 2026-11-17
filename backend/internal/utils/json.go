@@ -12,6 +12,10 @@ const (
 	CacheNoStore       = "no-store"
 	MIMEJSON           = "application/json"
 	MIMEEventStream    = "text/event-stream"
+	// HeaderClearSiteData with ClearCookiesAndStorage asks the browser to drop this origin's
+	// cookies and stored data: sent with a successful logout and account deletion only
+	HeaderClearSiteData    = "Clear-Site-Data"
+	ClearCookiesAndStorage = `"cookies", "storage"`
 )
 
 // EncodeJSONResponse writes a JSON response with the given status code

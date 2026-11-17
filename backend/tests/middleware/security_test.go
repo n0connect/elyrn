@@ -101,6 +101,39 @@ func TestSecurityHeadersMiddleware_APIResponsesAreInertAndUncached(t *testing.T)
 	}
 }
 
+// The backend never sends Strict-Transport-Security, whatever the mode, the HSTS settings and
+// what a listed proxy says about the protocol: nginx is its one source (nginx-hsts.sh).
+func TestSecurityHeadersMiddleware_NeverSendsHSTS(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("HSTS_MAX_AGE", "31536000")
+	t.Setenv("HSTS_INCLUDE_SUBDOMAINS", "true")
+	t.Setenv("HSTS_PRELOAD", "true")
+	t.Setenv("TRUSTED_PROXIES", "192.0.2.10")
+	middleware.LoadTrustedProxies()
+	t.Cleanup(middleware.LoadTrustedProxies)
+
+	for name, configure := range map[string]func(*http.Request){
+		"plain": func(*http.Request) {},
+		"https from a listed proxy": func(r *http.Request) {
+			r.RemoteAddr = "192.0.2.10:4000"
+			r.Header.Set("X-Forwarded-Proto", "https")
+		},
+		"https from anyone": func(r *http.Request) { r.Header.Set("X-Forwarded-Proto", "https") },
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/api/v2/me", nil)
+		configure(r)
+		rr := httptest.NewRecorder()
+		middleware.SecurityHeadersMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})(rr, r)
+		if got := rr.Header().Values("Strict-Transport-Security"); len(got) != 0 {
+			t.Errorf("%s: the backend sent Strict-Transport-Security %q", name, got)
+		}
+	}
+}
+
 // The cross-origin headers are fixed, the same three nginx sends: the settings of earlier
 // releases (SEC_HEADER_*) can neither turn them off nor change them, in any mode.
 func TestSecurityHeadersMiddleware_CrossOriginHeadersAreFixed(t *testing.T) {

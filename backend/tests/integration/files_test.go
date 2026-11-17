@@ -13,6 +13,8 @@ import (
 	"elyrn/internal/chat"
 	"elyrn/internal/config"
 	"elyrn/internal/database"
+	"elyrn/internal/handlers"
+	"elyrn/internal/middleware"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
 
@@ -365,6 +367,65 @@ func TestFiles_OnlyPartZeroIsRateLimited(t *testing.T) {
 		expectStatus(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "new file "+strconv.Itoa(i))
 	}
 	expectAnswer(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.RateLimited, "one new file too many")
+}
+
+// A file budget is created only for an authenticated account: requests without a session never
+// reach the handler that takes one (the session gate refuses them first), so a flood of them
+// cannot fill the bounded budget map.
+func TestFiles_BudgetsOnlyForAuthenticatedAccounts(t *testing.T) {
+	mux := filesSetup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	before := middleware.FileBudgetCountForTesting()
+	for i := 0; i < 5; i++ {
+		anonymous := newClient(t, mux)
+		expectAnswer(t, anonymous.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.NoSession, "an upload without a session")
+		forged := withCookie(t, mux, "not-a-session")
+		expectAnswer(t, forged.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.NoSession, "an upload with a forged cookie")
+	}
+	if after := middleware.FileBudgetCountForTesting(); after != before {
+		t.Fatalf("requests without a session created %d budgets", after-before)
+	}
+	expectStatus(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice uploads")
+	if after := middleware.FileBudgetCountForTesting(); after != before+1 {
+		t.Fatalf("an authenticated upload created %d budgets, want 1", after-before)
+	}
+}
+
+// A file request slot is taken only by an authenticated caller: with every slot held, a request
+// without a session still gets its 401 (it never waits for or takes a slot), a member's request
+// gets 503 E_FILE_REQUESTS_BUSY at once, and a flood without a session leaves the pool as it was.
+func TestFiles_OnlyAuthenticatedRequestsTakeASlot(t *testing.T) {
+	mux := filesSetup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	file, data := uuid.NewString(), newFilePart(t)
+	expectStatus(t, alice.uploadPart(conv, file, 0, data), http.StatusCreated, "part 0")
+	free := handlers.FileRequestSlotsFreeForTesting()
+	if free != handlers.MaxConcurrentFileRequestsForTesting() {
+		t.Fatalf("%d of %d slots free before the test", free, handlers.MaxConcurrentFileRequestsForTesting())
+	}
+
+	release := handlers.HoldFileRequestSlotsForTesting()
+	anonymous := newClient(t, mux)
+	expectAnswer(t, anonymous.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.NoSession, "an upload without a session, pool full")
+	expectAnswer(t, anonymous.readPart(conv, file, 0), apperr.NoSession, "a read without a session, pool full")
+	expectAnswer(t, alice.readPart(conv, file, 0), apperr.FileRequestsBusy, "a member's read, pool full")
+	expectAnswer(t, alice.uploadPart(conv, file, 1, newFilePart(t)), apperr.FileRequestsBusy, "a member's upload, pool full")
+	release()
+
+	for i := 0; i < 3*handlers.MaxConcurrentFileRequestsForTesting(); i++ {
+		expectAnswer(t, newClient(t, mux).readPart(conv, file, 0), apperr.NoSession, "a read in a flood without a session")
+	}
+	if got := handlers.FileRequestSlotsFreeForTesting(); got != free {
+		t.Fatalf("requests without a session left %d of %d slots free", got, free)
+	}
+	// A refused read gives its slot back, and the pool serves members again
+	expectAnswer(t, bob.readPart(conv, uuid.NewString(), 0), apperr.NotFound, "a refused read")
+	expectPart(t, bob.client, conv, file, 0, data, "a read once the pool is free")
+	if got := handlers.FileRequestSlotsFreeForTesting(); got != free {
+		t.Fatalf("answered member requests left %d of %d slots free", got, free)
+	}
 }
 
 // FILE_ACCOUNT_DAILY_BYTES is one budget per account across all its conversations: every stored

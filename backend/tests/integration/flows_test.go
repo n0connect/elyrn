@@ -1,11 +1,9 @@
 package integration
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -325,27 +323,11 @@ func TestEvents_StreamPokesPeerOnMessage(t *testing.T) {
 	alice, bob := register(t, mux), register(t, mux)
 	convID := pair(t, alice, bob)
 
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	req, _ := http.NewRequest("GET", srv.URL+"/api/v2/events", nil)
-	req.AddCookie(alice.cookie)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("events connect: %v", err)
-	}
-	defer resp.Body.Close()
+	srv := eventServer(t, mux)
+	resp, lines := openEvents(t, srv, alice.cookie)
 	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		t.Fatalf("events status=%d type=%q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
-
-	lines := make(chan string, 16)
-	go func() {
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		close(lines)
-	}()
 	waitFor(t, lines, "retry: 3000")
 
 	send(t, bob, alice, convID, 1)

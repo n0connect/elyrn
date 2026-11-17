@@ -46,7 +46,7 @@ an expired session from none). Three shapes reach the wire:
 | 429 | `Too many requests` | `E_RATE_LIMITED`, `E_POW_RATE_LIMITED`, `E_SUBSCRIBER_LIMIT`, `E_LIMIT_REACHED` | any rate limit, stream share or per-account cap |
 | 429 | `File budget spent` (JSON) | `E_FILE_BUDGET_SPENT` | the account stored `FILE_ACCOUNT_DAILY_BYTES` of file parts within the last day |
 | 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED`, `E_LOGIN_LOOKUP_FAILED` (JSON) | a server fault; on login, a lookup the server could not compute |
-| 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_ARGON2_BUSY`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full; retry later |
+| 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_ARGON2_BUSY`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED`, `E_FILE_REQUESTS_BUSY` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full (for files: 32 file part requests handled at once); retry later |
 | 507 | `File quota reached` (JSON) | `E_FILE_QUOTA_REACHED` | the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of file parts |
 | 507 | `File store full` (JSON) | `E_FILE_STORE_FULL` | the server holds `FILE_STORE_MAX_BYTES` of file parts, or has not counted them yet |
 
@@ -228,7 +228,7 @@ The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_ke
 ### `POST /api/v2/logout`
 Revokes all active sessions for this account across all devices by bumping `session_epoch`.
 
-- **Response (200 OK):** Clears session cookie.
+- **Response (200 OK):** Clears session cookie and carries `Clear-Site-Data: "cookies", "storage"`, so the browser drops this origin's cookies and stored data (the identity and its records in IndexedDB) even if the page's own wipe failed.
 ```json
 {
   "success": true,
@@ -268,7 +268,7 @@ A live session is not enough: the request re-proves the account number with its 
 }
 ```
 - **Errors:** `400` malformed body or key, `403` the key belongs to another account (`E_FORBIDDEN`), `415` body not declared as JSON, `429` too many attempts.
-- **Response (200 OK):**
+- **Response (200 OK):** carries `Clear-Site-Data: "cookies", "storage"`, as a successful logout does. No other answer, a refused deletion included, carries it.
 ```json
 {
   "success": true,
@@ -577,13 +577,14 @@ part).
   - `507` `{"success":false,"message":"File store full"}` (`E_FILE_STORE_FULL`) the server holds `FILE_STORE_MAX_BYTES` of parts (or has not counted them yet: fail closed);
   - `429` `{"success":false,"message":"File budget spent"}` (`E_FILE_BUDGET_SPENT`) the account's daily budget is spent (checked right after membership, before the part's other checks);
   - `429` too many new files.
+  - `503` (`E_FILE_REQUESTS_BUSY`, or `E_BACKEND_UNAVAILABLE` from nginx) 32 file part requests are being handled already; retry.
 - **Response:** `201 Created`, no body.
 
 ### `GET /api/v2/conversations/{id}/files/{file}?part=n`
 One stored part, to a member of the conversation. `part` is required.
 
 - **Response (200 OK):** `{"data": "the sealed part, 349547 base64url characters"}`
-- **Errors:** `400` no or a malformed `part`; `404` (`E_NOT_FOUND`) the part is missing or past its deletion day, the room expired, or the caller is not a member (one answer for all).
+- **Errors:** `400` no or a malformed `part`; `404` (`E_NOT_FOUND`) the part is missing or past its deletion day, the room expired, or the caller is not a member (one answer for all). `503` as for an upload: too many file requests at once.
 
 ---
 

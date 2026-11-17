@@ -120,6 +120,7 @@ being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too
 | Onion listener open to the tor container only, PROXY header required | `nginx.conf` `allow ${TOR_IP}; deny all;` |
 | Forwarding headers set by nginx alone | [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
 | CSP, Trusted Types, isolation headers | `nginx-site.conf` `add_header` (unchanged) |
+| HSTS: one source, every answer of the clearnet listener in production when a listed edge proxy vouched for HTTPS (one year unless `HSTS_MAX_AGE` says otherwise; `0` off); never on the onion listener; the backend sends none | `nginx-site.conf` `add_header Strict-Transport-Security $hsts always;` (server level), `nginx.conf` map `$hsts`, rendered and validated by `nginx-hsts.sh`; `make check-hardening` pins the one directive, the map and the rendering |
 
 **API whitelist.** `/api/` mirrors the [input contract](../api/input-contract.md): one location
 per route group, exact anchored paths (`{id}`, `{note}`, `{file}` as canonical UUIDv4), the contract's
@@ -137,7 +138,7 @@ in `location /api/ { include /etc/nginx/elyrn/api-errors.conf; return 404; }`.
 | `conversations/{id}/read` | POST | 1k (93) |
 | `conversations/{id}/members` | GET, POST | 1k (290) |
 | `conversations/{id}/messages`, `…/notes` | GET, POST | 8k (≤ 7873) |
-| `conversations/{id}/files`, `…/files/{file}` | GET, POST | 342k (≤ 349695); request and response kept in memory (`client_body_buffer_size 342k`, `proxy_buffers 6 64k`, `proxy_max_temp_file_size 0`), never in a temporary file; behind it every stored part spends from the account's in-memory daily budget (`FILE_ACCOUNT_DAILY_BYTES`, 429 `E_FILE_BUDGET_SPENT`) |
+| `conversations/{id}/files`, `…/files/{file}` | GET, POST | 342k (≤ 349695); request and response kept in memory (`client_body_buffer_size 342k`, `proxy_buffers 6 64k`, `proxy_max_temp_file_size 0`), never in a temporary file; at most 4 file requests at once per client address and 32 for all clients together (`limit_conn files_per_client 4`, `limit_conn files 32`, the backend's own bound; one more answers 503 `E_BACKEND_UNAVAILABLE`), and a body stalled 5 s between reads is cut off (`client_body_timeout 5s`); behind it every stored part spends from the account's in-memory daily budget (`FILE_ACCOUNT_DAILY_BYTES`, 429 `E_FILE_BUDGET_SPENT`) |
 | `conversations/{id}`, `conversations/{id}/notes/{note}` | DELETE | 1k (none) |
 
 A method outside the list answers 405, as the backend would; an unknown path 404; a body over

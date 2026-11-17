@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"bufio"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -47,9 +46,9 @@ func TestDeleteAccount_ErasesEverything(t *testing.T) {
 	expectStatus(t, alice.createInvite(), http.StatusCreated, "pending invite")
 	bobAndCarol := pair(t, bob, carol)
 
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close) // after streamEvents' cleanup: Close waits for open streams
-	bobEvents := streamEvents(t, srv, bob.client)
+	srv := eventServer(t, mux)
+	resp, bobEvents := openEvents(t, srv, bob.cookie)
+	expectStatus(t, &httptest.ResponseRecorder{Code: resp.StatusCode}, http.StatusOK, "events")
 	waitFor(t, bobEvents, "retry: 3000")
 
 	expectStatus(t, alice.do("DELETE", "/api/v2/me", models.DeleteAccountRequest{AuthKey: alice.authKey}), http.StatusOK, "delete")
@@ -86,29 +85,4 @@ func TestDeleteAccount_ErasesEverything(t *testing.T) {
 	if users != 2 || invites != 0 || members != 2 || messages != 0 {
 		t.Fatalf("left behind: users=%d invites=%d members=%d messages=%d (want 2/0/2/0)", users, invites, members, messages)
 	}
-}
-
-// streamEvents opens u's event stream and returns its lines.
-func streamEvents(t *testing.T, srv *httptest.Server, u *client) <-chan string {
-	t.Helper()
-	req, err := http.NewRequest("GET", srv.URL+"/api/v2/events", nil)
-	if err != nil {
-		t.Fatalf("events request: %v", err)
-	}
-	req.AddCookie(u.cookie)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("events connect: %v", err)
-	}
-	t.Cleanup(func() { resp.Body.Close() })
-	expectStatus(t, &httptest.ResponseRecorder{Code: resp.StatusCode}, http.StatusOK, "events")
-	lines := make(chan string, 64)
-	go func() {
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		close(lines)
-	}()
-	return lines
 }
