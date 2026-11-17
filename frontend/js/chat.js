@@ -915,12 +915,12 @@ const Chat = (() => {
 
     function sealAttempt(conv, attempt) {
         if (conv.room) {
-            return Rooms.seal(conv, attempt.id, attempt.text, attempt.counter);
+            return Rooms.seal({ conv, id: attempt.id, text: attempt.text, counter: attempt.counter, file: attempt.file });
         }
         return conversationKey(conv).then(key =>
             ElyrnCrypto.encryptMessage({
                 key, conversationId: conv.id, messageId: attempt.id, senderPublicKey: me.publicKey,
-                text: attempt.text, sentAt: Date.now(), counter: attempt.counter
+                text: attempt.text, sentAt: Date.now(), counter: attempt.counter, file: attempt.file
             }));
     }
 

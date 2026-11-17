@@ -33,13 +33,25 @@ const ElyrnCrypto = (() => {
     const INVITE_PREFIXES = Object.freeze([INVITE_PREFIX, LEGACY_INVITE_PREFIX]);
     // Plaintext is framed as len(2) || json || zero padding to a power-of-two size from
     // PAD_BLOCK to MAX_FRAME_BYTES, so ciphertext length reveals one of five size classes.
-    // json = {"t": text, "ts": sender clock (ms), "n": sender's per-conversation counter};
-    // gaps in a peer's "n" reveal messages the server withheld or deleted.
+    // json = {"t": text, "ts": sender clock (ms), "n": sender's per-conversation counter}, and for
+    // a file message also "f" (docs/architecture/files.md); gaps in a peer's "n" reveal messages
+    // the server withheld or deleted.
     const PAD_BLOCK = 256;
     const MAX_FRAME_BYTES = 4096;
     const FRAME_LENGTH_BYTES = 2;
     const MAX_PAYLOAD_BYTES = MAX_FRAME_BYTES - FRAME_LENGTH_BYTES;
     const PAYLOAD_KEYS = Object.freeze(['t', 'ts', 'n']);
+    // A file message's payload also carries FILE_KEY, an object of exactly FILE_FIELDS:
+    // {"i": file id (canonical UUIDv4), "k": file key (32 bytes, base64url), "s": size in bytes
+    // (1..MAX_FILE_BYTES_BOUND), "h": SHA-256 of the file (32 bytes, base64url), "n": display name
+    // (validation.js isFileName)}, written in that order as backend/internal/e2e/file.go reads it
+    const FILE_KEY = 'f';
+    const FILE_FIELDS = Object.freeze(['i', 'k', 's', 'h', 'n']);
+    const KNOWN_KEYS = Object.freeze([...PAYLOAD_KEYS, FILE_KEY]);
+    // The largest file any server may allow (backend/internal/config MaxFileBytesBound): a size
+    // past it is refused whatever this server's file_max_bytes says
+    const MAX_FILE_BYTES_BOUND = 104857600;
+    const FILE_HASH_BYTES = 32;
     // The error name of a payload a newer elyrn wrote (decodePayload): valid t, ts and n plus
     // keys this build does not know. Told apart from tampering, never read.
     const NEWER_PAYLOAD = 'NewerPayload';
@@ -318,22 +330,61 @@ const ElyrnCrypto = (() => {
 
     const MAX_COUNTER = Number.MAX_SAFE_INTEGER;
 
-    function payloadBytes(text, sentAt, counter) {
-        return encoder.encode(JSON.stringify({ t: text, ts: sentAt, n: counter }));
-    }
-
-    // The framed payload both conversation kinds encrypt
-    function encodePayload(text, sentAt, counter) {
-        if (!Number.isSafeInteger(counter) || counter < 1) {
-            throw new Error('invalid counter');
+    // The wire form of a file description ({ id, key, size, hash, name }), checked: an invalid one
+    // is never written
+    function fileWire(file) {
+        const wire = { i: file.id, k: file.key, s: file.size, h: file.hash, n: file.name };
+        if (!fileFrom(wire)) {
+            throw new Error('invalid file');
         }
-        return frame(payloadBytes(text, sentAt, counter));
+        return wire;
     }
 
-    // Accepts exactly the three payload fields; the caller wipes `plain`. A well-formed frame
-    // holding an object with valid t, ts and n plus keys this build does not know was written by a
-    // newer elyrn: it throws a NEWER_PAYLOAD error (isNewerPayload); anything else that fails
-    // throws 'bad payload'.
+    // The file description an "f" value gives ({ id, key, size, hash, name }), or null: exactly the
+    // five fields, each of its shape and range. The name rule is validation.js's isFileName (the
+    // one home of it); without that rule loaded nothing is accepted.
+    function fileFrom(raw) {
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw) ||
+            Object.keys(raw).length !== FILE_FIELDS.length ||
+            !FILE_FIELDS.every(key => Object.prototype.hasOwnProperty.call(raw, key))) {
+            return null;
+        }
+        if (!UUID_V4_RE.test(raw.i) || !isEncoded(raw.k, KEY_BYTES) || !isEncoded(raw.h, FILE_HASH_BYTES) ||
+            !Number.isSafeInteger(raw.s) || raw.s < 1 || raw.s > MAX_FILE_BYTES_BOUND ||
+            typeof isFileName !== 'function' || !isFileName(raw.n)) {
+            return null;
+        }
+        return Object.freeze({ id: raw.i, key: raw.k, size: raw.s, hash: raw.h, name: raw.n });
+    }
+
+    function isEncoded(text, bytes) {
+        try {
+            b64urlDecode(text, bytes);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function payloadBytes({ text, sentAt, counter, file }) {
+        const payload = { t: text, ts: sentAt, n: counter };
+        if (file) payload[FILE_KEY] = fileWire(file);
+        return encoder.encode(JSON.stringify(payload));
+    }
+
+    // The framed payload both conversation kinds encrypt: { text, sentAt, counter, file? }
+    function encodePayload({ text, sentAt, counter, file }) {
+        if (!Number.isSafeInteger(counter) || counter < 1 || typeof text !== 'string') {
+            throw new Error('invalid payload');
+        }
+        return frame(payloadBytes({ text, sentAt, counter, file }));
+    }
+
+    // Accepts exactly {t, ts, n} or exactly {t, ts, n, f} with a valid f; the caller wipes
+    // `plain`. A well-formed frame holding an object with valid t, ts and n plus keys this build
+    // does not know was written by a newer elyrn: it throws a NEWER_PAYLOAD error
+    // (isNewerPayload); anything else that fails, an invalid f included, throws 'bad payload'.
+    // Returns { text, sentAt, counter, file } (file null when there is none).
     function decodePayload(plain) {
         const parsed = JSON.parse(decoder.decode(unframe(plain)));
         const has = (key) => Object.prototype.hasOwnProperty.call(parsed, key);
@@ -342,12 +393,16 @@ const ElyrnCrypto = (() => {
             !Number.isSafeInteger(parsed.n) || parsed.n < 1 || parsed.n > MAX_COUNTER) {
             throw new Error('bad payload');
         }
-        if (Object.keys(parsed).length !== PAYLOAD_KEYS.length) {
+        if (Object.keys(parsed).some(key => !KNOWN_KEYS.includes(key))) {
             const newer = new Error('payload from a newer elyrn');
             newer.name = NEWER_PAYLOAD;
             throw newer;
         }
-        return { text: parsed.t, sentAt: parsed.ts, counter: parsed.n };
+        const file = has(FILE_KEY) ? fileFrom(parsed[FILE_KEY]) : null;
+        if (has(FILE_KEY) && !file) {
+            throw new Error('bad payload');
+        }
+        return { text: parsed.t, sentAt: parsed.ts, counter: parsed.n, file: file };
     }
 
     // Whether error is decodePayload's verdict on a payload a newer elyrn wrote
@@ -355,8 +410,8 @@ const ElyrnCrypto = (() => {
         return error instanceof Error && error.name === NEWER_PAYLOAD;
     }
 
-    async function encryptMessage({ key, conversationId, messageId, senderPublicKey, text, sentAt, counter }) {
-        const plain = encodePayload(text, sentAt, counter);
+    async function encryptMessage({ key, conversationId, messageId, senderPublicKey, text, sentAt, counter, file }) {
+        const plain = encodePayload({ text, sentAt, counter, file });
         const nonce = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
         try {
             const aad = await messageAAD(conversationId, messageId, senderPublicKey);
@@ -386,8 +441,18 @@ const ElyrnCrypto = (() => {
         }
     }
 
-    function payloadFits(text) {
-        return payloadBytes(text, Date.now(), MAX_COUNTER).length <= MAX_PAYLOAD_BYTES;
+    // Whether text (with a file named fileName, if given) fits one frame at the longest ts, counter
+    // and file size; the file's id, key and hash have fixed lengths
+    function payloadFits({ text, fileName }) {
+        const file = fileName === undefined ? null : {
+            id: '00000000-0000-4000-8000-000000000000', key: b64urlEncode(new Uint8Array(KEY_BYTES)),
+            size: MAX_FILE_BYTES_BOUND, hash: b64urlEncode(new Uint8Array(FILE_HASH_BYTES)), name: fileName
+        };
+        try {
+            return payloadBytes({ text, sentAt: Date.now(), counter: MAX_COUNTER, file }).length <= MAX_PAYLOAD_BYTES;
+        } catch (e) {
+            return false;
+        }
     }
 
     // ---------- pairing & verification ----------
@@ -526,6 +591,7 @@ const ElyrnCrypto = (() => {
         UUID_BYTES,
         PAD_BLOCK,
         MAX_FRAME_BYTES,
+        MAX_FILE_BYTES_BOUND,
         INVITE_PREFIX,
         INVITE_PREFIXES,
         // base64 spends four characters per three bytes

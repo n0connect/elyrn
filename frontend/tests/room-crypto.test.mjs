@@ -7,8 +7,12 @@ import vm from 'node:vm';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa });
-const C = vm.runInContext(read('../js/crypto.js') + '\n;ElyrnCrypto', context);
-const R = vm.runInContext(read('../js/room-crypto.js') + '\n;ElyrnRoomCrypto', context);
+// As the page's script tags load them (validation.js holds the file name rule a payload is read with)
+for (const file of ['../js/log.js', '../js/errors.js', '../js/crypto.js', '../js/room-crypto.js', '../validation.js']) {
+    vm.runInContext(read(file), context);
+}
+const C = vm.runInContext('ElyrnCrypto', context);
+const R = vm.runInContext('ElyrnRoomCrypto', context);
 
 const ACCOUNT_A = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 const ACCOUNT_B = 'HxwdHBsaGRgXFhUUExIREA8ODQwLCgkIBwYFBAMCAQA';
@@ -382,4 +386,57 @@ test('roles: another room, another card, an altered byte, a long length, padding
     }
     // ...while the same independent sealing of a good plaintext opens: the model is right
     assert.equal(await R.openRole({ room, card: a.card, role: await sealRawRole(code.secret, room, a.card, plain(3)) }), 'aaa');
+});
+
+// ---------- a file message (Go-made) ----------
+
+// Produced by backend/internal/e2e (Go, 17 Nov 2026), vectors-go.json file_message: a room message
+// in ROOM_VECTOR's room whose payload carries "f"; A sent it, A and B must both open it
+const GO_FILE_MESSAGE = {
+    id: 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f',
+    counter: 7,
+    sentAt: 1729700000000,
+    roster: [
+        'arshIl7gUi16YXFIkiD3uPX1szgpPGSfUca7zM9prD79jt7LMrGLtJFrCCspirjs2zM3kXTIqzGTAr75',
+        'tJ2XEYRYXgzKx2Ya5ylCuLQ2_0yhQ-SgYUY0nNlYYTtXyj8AysfLsC3z-hUufz2Cc1ZbaPRcYrtRfklI'
+    ],
+    file: {
+        id: '6f1e2d3c-4b5a-4968-8776-655443322110', key: 'gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8', size: 19,
+        hash: 'Qf1qQZSwVj77ObdHVoZ3fA9IjpCzJotXNZoKn9TrcbA', name: 'résumé ✓ 2026.pdf'
+    },
+    content: 'elyrn. file vector\n',
+    blob: 'TkFEUgFquyEiXuBSLXphcUiSIPe49fWzOCk8ZJ9RxrvMz2msPv2O3ssysYu0kWsIKymKuOzbMzeRdMirMZMCvvkvYFS79KBE05cX5RgDjCCDI8ZpIVaBdWdr3PYnx_FtQrEjbLY82niKJC--e-SmoX19qlNUFzDdqyn2E4P5G2gurY2XhiNT1PYrt4apDcIl8OomFadeymkaebE4Hsvi2vQCKeXwcIwCj3L6GccJBaOvOIPD_i2Sf2IHp8K_eIVvw006rVPDq4XU-sOkwlbavK9OhT9IoSVPY-LaGtcMqryBkB94B9m_wGLscIaUwFry8bT2VzP7tWp2Jxq9R-dKfu5tToNs3nDkhIn-F1LBUJ8Vf0PWOO8MGfAvXDLtAbg2N3iQeyvqWVtB64aetdsoYKFSFxHoz3YxoN6zEwbWPGfi-ldhTH-ulR_Qzk47nZW0giBj_5Ew0vCP6VvnDHu0NY66lJTmhQGlBPogxhUIajHIow-c4ieUVTgKcpZ7gN7ywEGPCXGsV4fPhc9iWrB7hN4e9BV0S6iWvIKoSauFCT_gAvqghvHSF0yIoIoooOf5eWxfnvJ9RxE1U6KFsF5SFmeCitiUuwgeMWLrvASeCAIlnSBYQvkQ0XZCOCKvWX5CI2PyPd8qRlD8VhC1UEN8mfE3YvWrzgGyBTZk-1MXoPQrkFvdWDVw1VemjgyB8JUH8F8'
+};
+
+test('a Go-made file message opens as A and as B, every field of f read', async () => {
+    const code = R.parseRoomCode(ROOM_VECTOR.code);
+    const room = await R.deriveRoom(code.secret);
+    assert.equal(C.b64urlEncode(await R.rosterDigest(GO_FILE_MESSAGE.roster)).length, 43);
+    for (const account of [ACCOUNT_A, ACCOUNT_B]) {
+        const reader = await joinAs(room, account);
+        const msg = await R.openMessage(room, reader.member, GO_FILE_MESSAGE.id, GO_FILE_MESSAGE.blob);
+        assert.equal(msg.text, '');
+        assert.equal(msg.sentAt, GO_FILE_MESSAGE.sentAt);
+        assert.equal(msg.counter, GO_FILE_MESSAGE.counter);
+        assert.equal(msg.sender, ROOM_VECTOR.publicA);
+        assert.deepEqual({ ...msg.file }, GO_FILE_MESSAGE.file);
+    }
+    // h is the SHA-256 of the file's bytes
+    assert.equal(C.b64urlEncode(await C.sha256(new TextEncoder().encode(GO_FILE_MESSAGE.content))), GO_FILE_MESSAGE.file.hash);
+});
+
+test('a browser-made room message with f opens to the same description for every member', async () => {
+    const { room } = await fixture();
+    const a = await joinAs(room, ACCOUNT_A);
+    const b = await joinAs(room, ACCOUNT_B);
+    const roster = [a.member.card, b.member.card];
+    const { recipients, digest } = await R.recipients(room, a.member, roster);
+    const id = C.newMessageId();
+    const blob = await R.sealMessage({ room, me: a.member, id, recipients, digest, text: '', sentAt: SENT_AT, counter: 2, file: GO_FILE_MESSAGE.file });
+    for (const reader of [a, b]) {
+        assert.deepEqual({ ...(await R.openMessage(room, reader.member, id, blob)).file }, GO_FILE_MESSAGE.file);
+    }
+    // An invalid description is never sealed
+    await assert.rejects(R.sealMessage({ room, me: a.member, id, recipients, digest, text: '', sentAt: SENT_AT, counter: 2,
+        file: { ...GO_FILE_MESSAGE.file, name: '.x' } }));
 });
