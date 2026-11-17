@@ -20,13 +20,13 @@ backend/tests/
 ```
 
 Counts are test functions (`^func Test`, `TestMain` excluded) and fuzz targets, as of 18 Nov 2026.
-Across the whole backend there are 378 test functions and 86 fuzz targets; the fuzz list, the
+Across the whole backend there are 380 test functions and 86 fuzz targets; the fuzz list, the
 frontend tests and how to run everything are in
 [docs/development/testing-and-contributing.md](../../docs/development/testing-and-contributing.md).
 
 Inside `internal/` (no database): `agent` 15, `apperr` 13, `chat` 1, `contract` 12, `cryptoengine` 9
 (known answers on the compiled engine), `cryptoengine/equivalence` 8 (both engines in one binary,
-`-tags 'test openssl'`), `database` 2, `e2e` 36, `handlers` 1, `mcp` 12, `middleware` 3, `pow` 19,
+`-tags 'test openssl'`), `database` 2, `e2e` 38, `handlers` 1, `mcp` 12, `middleware` 3, `pow` 19,
 `realtime` 6, `utils` 2.
 
 ### Integration (`tests/integration/`)

@@ -107,7 +107,7 @@ permission prompt and the notification of `alerts.js`, and typing in the role co
 
 | Suite | Count (13 Nov 2026) | How to count |
 |---|---|---|
-| Go test functions | 378 (137 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
+| Go test functions | 380 (137 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
 | Go fuzz targets | 76 | `python3 -I scripts/check-fuzz-targets.py --list \| wc -l` |
 | Frontend tests | 199 in 22 files (17 Nov 2026) | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
 
