@@ -631,9 +631,18 @@ function createMessageListItem(message) {
     return createMessageElement(message);
 }
 
+// What a message that does not open says instead of its text: one a newer elyrn wrote is not
+// shown as tampered with
+const UNREADABLE_MARK = '⚠ unreadable — integrity check failed';
+
+function unreadableText(message) {
+    return message.newer ? Errors.message(Errors.CODES.W_MESSAGE_FROM_NEWER) : UNREADABLE_MARK;
+}
+
 function createMessageElement(message) {
     const item = document.createElement('li');
-    item.className = 'msg ' + (message.mine ? 'mine' : 'theirs') + (message.broken ? ' broken' : '');
+    const state = !message.broken ? '' : message.newer ? ' newer' : ' broken';
+    item.className = 'msg ' + (message.mine ? 'mine' : 'theirs') + state;
     item.dataset.seq = String(message.seq);
 
     // In a room, every message from someone else says who: glyph, name and code in this room only
@@ -652,7 +661,7 @@ function createMessageElement(message) {
 
     const text = document.createElement('div');
     text.className = 'msg-text';
-    text.textContent = message.broken ? '⚠ unreadable — integrity check failed' : neutralizeReceivedText(message.text);
+    text.textContent = message.broken ? unreadableText(message) : neutralizeReceivedText(message.text);
     item.appendChild(text);
 
     if (!message.broken) {

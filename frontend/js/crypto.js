@@ -39,7 +39,10 @@ const ElyrnCrypto = (() => {
     const MAX_FRAME_BYTES = 4096;
     const FRAME_LENGTH_BYTES = 2;
     const MAX_PAYLOAD_BYTES = MAX_FRAME_BYTES - FRAME_LENGTH_BYTES;
-    const PAYLOAD_FIELDS = 3;
+    const PAYLOAD_KEYS = Object.freeze(['t', 'ts', 'n']);
+    // The error name of a payload a newer elyrn wrote (decodePayload): valid t, ts and n plus
+    // keys this build does not know. Told apart from tampering, never read.
+    const NEWER_PAYLOAD = 'NewerPayload';
     // RFC 8410 PrivateKeyInfo header for an X25519 key (OID 1.3.101.110)
     const PKCS8_X25519_PREFIX = new Uint8Array([
         0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
@@ -327,15 +330,29 @@ const ElyrnCrypto = (() => {
         return frame(payloadBytes(text, sentAt, counter));
     }
 
-    // Accepts exactly the three payload fields; the caller wipes `plain`
+    // Accepts exactly the three payload fields; the caller wipes `plain`. A well-formed frame
+    // holding an object with valid t, ts and n plus keys this build does not know was written by a
+    // newer elyrn: it throws a NEWER_PAYLOAD error (isNewerPayload); anything else that fails
+    // throws 'bad payload'.
     function decodePayload(plain) {
         const parsed = JSON.parse(decoder.decode(unframe(plain)));
-        const keys = Object.keys(parsed);
-        if (keys.length !== PAYLOAD_FIELDS || typeof parsed.t !== 'string' || !Number.isSafeInteger(parsed.ts) || parsed.ts <= 0 ||
+        const has = (key) => Object.prototype.hasOwnProperty.call(parsed, key);
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) || !PAYLOAD_KEYS.every(has) ||
+            typeof parsed.t !== 'string' || !Number.isSafeInteger(parsed.ts) || parsed.ts <= 0 ||
             !Number.isSafeInteger(parsed.n) || parsed.n < 1 || parsed.n > MAX_COUNTER) {
             throw new Error('bad payload');
         }
+        if (Object.keys(parsed).length !== PAYLOAD_KEYS.length) {
+            const newer = new Error('payload from a newer elyrn');
+            newer.name = NEWER_PAYLOAD;
+            throw newer;
+        }
         return { text: parsed.t, sentAt: parsed.ts, counter: parsed.n };
+    }
+
+    // Whether error is decodePayload's verdict on a payload a newer elyrn wrote
+    function isNewerPayload(error) {
+        return error instanceof Error && error.name === NEWER_PAYLOAD;
     }
 
     async function encryptMessage({ key, conversationId, messageId, senderPublicKey, text, sentAt, counter }) {
@@ -524,6 +541,7 @@ const ElyrnCrypto = (() => {
         x25519FromSeed,
         encodePayload,
         decodePayload,
+        isNewerPayload,
         digitGroups,
         deriveAuthKey,
         deriveIdentity,

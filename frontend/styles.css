@@ -1170,6 +1170,12 @@ header {
     color: var(--danger);
 }
 
+/* Authentic, from a newer elyrn: unread, not alarming */
+.msg.newer {
+    border-style: dashed;
+    color: var(--muted);
+}
+
 .msg-text {
     white-space: pre-wrap;
     word-break: break-word;

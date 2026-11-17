@@ -127,6 +127,9 @@ test('wave 2 codes exist with the severity they are reported at', () => {
     assert.match(Errors.REGISTRY.W_IDENTITY_NOT_KEPT.text, /account number/);
     assert.equal(Errors.INTERNAL.W_IDENTITY_UNREADABLE, 'W_IDENTITY_UNREADABLE');
     assert.equal(Errors.INTERNAL.W_KEY_PROBE_FAILED, 'W_KEY_PROBE_FAILED');
+    // An authentic message a newer elyrn wrote is named as such, never as tampered with
+    assert.equal(Errors.REGISTRY.W_MESSAGE_FROM_NEWER.severity, 'warning');
+    assert.equal(Errors.REGISTRY.W_MESSAGE_FROM_NEWER.text, 'sent by a newer elyrn; reload this page to read it');
     // A room judged expired by this device's clock names the clock
     assert.match(Errors.REGISTRY.E_ROOM_CODE_EXPIRED.text, /device clock/);
     assert.match(Errors.REGISTRY.W_ROOM_EXPIRED.text, /device clock/);

@@ -636,12 +636,13 @@ const Chat = (() => {
     }
 
     // Decrypts and authenticates one message: { seq, mine, text, sentAt, sender, counter, from? },
-    // or { seq, mine, broken } when anything fails (shown as unreadable)
+    // or { seq, mine, broken, newer } when anything fails: shown as unreadable, or, for an
+    // authentic payload a newer elyrn wrote (newer), as such (ElyrnCrypto.isNewerPayload)
     async function openMessage(conv, key, raw) {
         try {
             return conv.room ? await openRoomMessage(conv, raw) : await openPairMessage(conv, key, raw);
         } catch (e) {
-            return { seq: raw.seq, mine: raw.mine, broken: true };
+            return { seq: raw.seq, mine: raw.mine, broken: true, newer: ElyrnCrypto.isNewerPayload(e) };
         }
     }
 

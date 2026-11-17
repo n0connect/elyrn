@@ -118,6 +118,9 @@ const Errors = (() => {
         // The robot door's challenge cannot run here (no random source, or no SHA-256 outside
         // https). The door is theatre and gates nothing, so the visitor is let through.
         W_DOOR_CHECK_UNAVAILABLE: w('this browser cannot run the door check — come in anyway'),
+        // Shown in place of an authentic message whose payload carries keys this build does not
+        // know (crypto.js decodePayload): a newer elyrn wrote it, nobody tampered with it
+        W_MESSAGE_FROM_NEWER: w('sent by a newer elyrn; reload this page to read it'),
         // Shown in place of a message whose sender counter was already used (counters.js)
         W_MESSAGE_REPLAYED: w('⚠ a message from {who} was replayed or reordered by the server'),
 

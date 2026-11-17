@@ -213,3 +213,81 @@ test('payload limit is enforced before encryption', async () => {
     await assert.rejects(C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'x'.repeat(7000), sentAt: 1, counter: 1 }));
     await assert.rejects(C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'hi', sentAt: 1, counter: 0 })); // counter must be >= 1
 });
+
+// The frame as crypto.js writes it (big-endian length, JSON, zeros to a power of two from 256),
+// built here independently so payloads this build never writes can be offered to it
+function frameOf(json) {
+    const bytes = new TextEncoder().encode(json);
+    let size = 256;
+    while (size < bytes.length + 2) size *= 2;
+    const out = new Uint8Array(size);
+    out[0] = bytes.length >> 8;
+    out[1] = bytes.length & 0xff;
+    out.set(bytes, 2);
+    return out;
+}
+
+const VALID = '"t":"hi","ts":1729700000000,"n":3';
+
+// What decodePayload threw for one framed payload (null when it threw nothing)
+function decodeFailure(framed) {
+    try {
+        C.decodePayload(framed);
+        return null;
+    } catch (e) {
+        return e;
+    }
+}
+
+test('a payload with valid t, ts and n plus unknown keys is a newer elyrn\'s, told apart from tampering', () => {
+    for (const json of [`{${VALID},"f":{"i":"x"}}`, `{"z":1,${VALID}}`, `{${VALID},"__proto__":{}}`, `{${VALID},"f":null,"g":[]}`]) {
+        const thrown = decodeFailure(frameOf(json));
+        assert.ok(thrown, json);
+        assert.equal(C.isNewerPayload(thrown), true, json);
+    }
+    assert.deepEqual({ ...C.decodePayload(frameOf(`{${VALID}}`)) }, { text: 'hi', sentAt: 1729700000000, counter: 3 });
+});
+
+test('everything else that fails stays a bad payload, never a newer one', () => {
+    const bad = [
+        // a field missing, mistyped or out of range, with or without unknown keys beside it
+        '{"t":"hi","ts":1729700000000}', '{"t":"hi","ts":1729700000000,"f":1,"g":2}',
+        '{"t":1,"ts":1729700000000,"n":3,"f":1}', '{"t":"hi","ts":0,"n":3,"f":1}', '{"t":"hi","ts":1.5,"n":3,"f":1}',
+        '{"t":"hi","ts":1729700000000,"n":0,"f":1}', '{"t":"hi","ts":1729700000000,"n":"3","f":1}',
+        '{"t":"hi","ts":1729700000000,"n":9007199254740992,"f":1}',
+        // not an object
+        '[]', '["hi",1729700000000,3,1]', 'null', '"text"', '7', 'true', '{'
+    ];
+    for (const json of bad) {
+        const thrown = decodeFailure(frameOf(json));
+        assert.ok(thrown, json);
+        assert.equal(C.isNewerPayload(thrown), false, json);
+    }
+    // A frame that is not well formed is never read as JSON at all
+    const tail = frameOf(`{${VALID},"f":1}`);
+    tail[tail.length - 1] = 1;
+    for (const framed of [tail, new Uint8Array(256), new Uint8Array(255)]) {
+        const thrown = decodeFailure(framed);
+        assert.ok(thrown);
+        assert.equal(C.isNewerPayload(thrown), false);
+    }
+    for (const value of [null, undefined, 'NewerPayload', { name: 'NewerPayload' }, new Error('x')]) {
+        assert.equal(C.isNewerPayload(value), false);
+    }
+});
+
+test('a one-to-one message a newer elyrn sealed opens as newer, and as unreadable once altered', async () => {
+    const { a, ab, ba } = await peers();
+    const id = C.newMessageId();
+    // messageAAD, as crypto.js builds it: "NADM" || 1 || conversation || message || SHA-256(sender)
+    const aad = C.concat(new TextEncoder().encode('NADM'), [1], C.uuidBytes(CONV), C.uuidBytes(id),
+        await C.sha256(C.b64urlDecode(a.publicKey, 32)));
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad },
+        ab, frameOf(`{${VALID},"f":{"n":"later"}}`)));
+    const ciphertext = C.b64urlEncode(C.concat(nonce, sealed));
+    await assert.rejects(C.decryptMessage(ba, CONV, id, a.publicKey, ciphertext), (e) => C.isNewerPayload(e));
+    const altered = C.b64urlDecode(ciphertext);
+    altered[20] ^= 1;
+    await assert.rejects(C.decryptMessage(ba, CONV, id, a.publicKey, C.b64urlEncode(altered)), (e) => !C.isNewerPayload(e));
+});
