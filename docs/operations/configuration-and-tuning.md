@@ -406,7 +406,7 @@ This whitelist permits only the background Web Worker script (`js/pow-worker.js`
 | `Cache-Control` | nginx: `no-cache` on the page and static files (`expires epoch`) | the backend: `no-store` |
 | `Clear-Site-Data` | never | the backend, on a successful logout and account deletion only |
 
-API responses from the backend additionally carry `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `Cache-Control: no-store`: they are data, never documents.
+API responses from the backend additionally carry `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` (`backend/internal/middleware/security.go`, `apiCSP`) and `Cache-Control: no-store`: they are data, never documents.
 
 ---
 

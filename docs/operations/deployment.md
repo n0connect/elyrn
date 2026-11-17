@@ -193,6 +193,23 @@ What happens by itself:
 - **Certificates.** `make certs` runs with every `make up` and renews what expires within 30
   days.
 
+### Upgrading to the release with member roles and file sharing
+
+1. **Back up first** (`make backup-accounts`). This release raises the schema version to 2 (the
+   `file_parts` table and `conversation_members.role`). The older server refuses to start
+   against a database stamped 2 (`E_SCHEMA_NEWER`), so there is no starting the previous image
+   again: rolling back means restoring that backup into an empty instance with the previous
+   release (messages and files are never in a backup and are lost on a rollback).
+2. **Add the new settings** if you want other values than the defaults: `MAX_FILE_BYTES`,
+   `FILE_CONVERSATION_QUOTA_BYTES`, `FILE_STORE_MAX_BYTES`, `FILE_ACCOUNT_DAILY_BYTES` (all in
+   `.env.example`). HSTS moved to nginx: in production it is now sent for one year by default on
+   every HTTPS answer a proxy listed in `EDGE_TRUSTED_PROXIES` vouched for (see section 4); set
+   `HSTS_MAX_AGE=0` if your own proxy sends the header.
+3. **Deploy the server before any agent binary.** A new `elyrn-agent` refuses a server whose
+   `/me` lacks `file_max_bytes`, which only this release sends; an older agent keeps working
+   against the new server.
+4. **Browsers** pick up the new page on their next reload; nothing else is needed.
+
 `make setup` never touches an existing `.env`. A release that adds a variable lists it in
 `.env.example` and the changelog; add it to `.env` by hand. Read
 [CHANGELOG.md](../../CHANGELOG.md) before every upgrade.

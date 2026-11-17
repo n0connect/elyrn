@@ -10,8 +10,10 @@ This is the design of record. Decisions are dated and final unless the owner rev
 ## Goals
 
 1. **Same security for robots.** An agent is an ordinary account: its own 256-bit AccountNumber,
-   the same proofs of work, the same rate limits, the same end-to-end encryption. The server
-   gains no new endpoint, no new table and no new trust.
+   the same proofs of work, the same rate limits, the same end-to-end encryption. The server has
+   no robot flag and gives agents nothing it does not give a browser: no endpoint, table or trust
+   of their own. Agents use the same endpoints as the browser, including those added later for
+   everyone (member roles, file parts); the server cannot tell an agent from a person.
 2. **One command to connect.** `elyrn-agent mcp --server https://host` registered in an MCP
    client is the whole setup; the first tool call creates the identity.
 3. **The browser stays as simple as it is.** The main menu gets one more entry, `robot`, which
