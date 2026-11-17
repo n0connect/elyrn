@@ -208,11 +208,12 @@ func getEnvIntDefault(key string, defaultValue int) int {
 	return parsed
 }
 
-// getEnvSecondsDefault reads a whole-seconds setting as a duration: anything that is not a
-// positive integer reads as 0 (fails its bound).
-func getEnvSecondsDefault(key string, defaultSeconds int) time.Duration {
+// getEnvSecondsDefault reads a whole-seconds setting as a duration. The count is range-checked
+// as an integer first: anything that is not a positive integer up to maxSeconds reads as 0
+// (refused at startup), so a huge count can never wrap time.Duration into an accepted value.
+func getEnvSecondsDefault(key string, defaultSeconds, maxSeconds int) time.Duration {
 	seconds := getEnvIntDefault(key, defaultSeconds)
-	if seconds <= 0 {
+	if seconds <= 0 || seconds > maxSeconds {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second
@@ -280,7 +281,7 @@ func GetMaxJSONDepth() int {
 
 // GetInviteTTL returns how long an unredeemed invite stays valid
 func GetInviteTTL() time.Duration {
-	return getEnvSecondsDefault(EnvInviteTTLSeconds, defaultInviteTTLSeconds)
+	return getEnvSecondsDefault(EnvInviteTTLSeconds, defaultInviteTTLSeconds, MaxInviteTTLSeconds)
 }
 
 // GetMaxActiveInvites returns the cap on unredeemed invites per user
@@ -551,12 +552,12 @@ func GetAccountLookupPepper() []byte {
 
 // GetPendingTokenTTL returns pending token TTL
 func GetPendingTokenTTL() time.Duration {
-	return getEnvSecondsDefault(EnvPendingTokenTTLSeconds, defaultPendingTokenTTLSeconds)
+	return getEnvSecondsDefault(EnvPendingTokenTTLSeconds, defaultPendingTokenTTLSeconds, MaxPendingTokenTTLSeconds)
 }
 
 // GetPendingCleanupInterval returns pending store cleanup interval
 func GetPendingCleanupInterval() time.Duration {
-	return getEnvSecondsDefault(EnvPendingCleanupIntervalSeconds, defaultPendingCleanupSeconds)
+	return getEnvSecondsDefault(EnvPendingCleanupIntervalSeconds, defaultPendingCleanupSeconds, MaxPendingCleanupSeconds)
 }
 
 // GetPendingIDBytes returns pending ID length in bytes
@@ -584,22 +585,22 @@ func GetBackendPort() string {
 
 // GetServerReadHeaderTimeout returns read header timeout
 func GetServerReadHeaderTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerReadHeaderTimeoutSeconds, defaultServerReadHeaderTimeout)
+	return getEnvSecondsDefault(EnvServerReadHeaderTimeoutSeconds, defaultServerReadHeaderTimeout, MaxServerReadHeaderTimeoutSeconds)
 }
 
 // GetServerReadTimeout returns read timeout
 func GetServerReadTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerReadTimeoutSeconds, defaultServerReadTimeout)
+	return getEnvSecondsDefault(EnvServerReadTimeoutSeconds, defaultServerReadTimeout, MaxServerReadTimeoutSeconds)
 }
 
 // GetServerWriteTimeout returns write timeout
 func GetServerWriteTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerWriteTimeoutSeconds, defaultServerWriteTimeout)
+	return getEnvSecondsDefault(EnvServerWriteTimeoutSeconds, defaultServerWriteTimeout, MaxServerWriteTimeoutSeconds)
 }
 
 // GetServerIdleTimeout returns idle timeout
 func GetServerIdleTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerIdleTimeoutSeconds, defaultServerIdleTimeout)
+	return getEnvSecondsDefault(EnvServerIdleTimeoutSeconds, defaultServerIdleTimeout, MaxServerIdleTimeoutSeconds)
 }
 
 // GetServerMaxHeaderBytes returns max header bytes
@@ -618,11 +619,7 @@ func GetPoWDifficulty() int {
 
 // GetPoWChallengeTTL returns how long an issued PoW challenge stays valid
 func GetPoWChallengeTTL() time.Duration {
-	seconds := getEnvIntDefault(EnvPoWChallengeTTLSeconds, defaultPoWChallengeTTLSeconds)
-	if seconds <= 0 || seconds > MaxPoWChallengeTTLSeconds {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvPoWChallengeTTLSeconds, defaultPoWChallengeTTLSeconds, MaxPoWChallengeTTLSeconds)
 }
 
 // DefaultPoWDifficulty returns the default PoW difficulty level

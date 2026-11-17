@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -113,6 +114,57 @@ func TestValidateStartupConfig_SessionLifetimeBounds(t *testing.T) {
 				t.Fatalf("JWT_EXPIRATION_MINUTES=%q accepted", value)
 			}
 		})
+	}
+}
+
+// Every whole-seconds setting is range-checked as an integer before it becomes a duration: its
+// maximum is accepted and read exactly, and every count above it is refused, including the
+// largest count whose nanoseconds still fit int64, the first that does not, and a count that
+// would wrap time.Duration to exactly an accepted value (seconds + 2^55: 2^55 s is 2^64 ns times
+// 1953125, so the product wraps to the same nanoseconds).
+func TestValidateStartupConfig_SecondsSettingsNeverWrap(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+
+	const wrapPeriodSeconds = int64(1) << 55
+	maxUnwrapped := int64(math.MaxInt64 / int64(time.Second))
+	settings := []struct {
+		key  string
+		max  int
+		read func() time.Duration
+	}{
+		{config.EnvInviteTTLSeconds, config.MaxInviteTTLSeconds, config.GetInviteTTL},
+		{config.EnvPendingTokenTTLSeconds, config.MaxPendingTokenTTLSeconds, config.GetPendingTokenTTL},
+		{config.EnvPendingCleanupIntervalSeconds, config.MaxPendingCleanupSeconds, config.GetPendingCleanupInterval},
+		{config.EnvServerReadHeaderTimeoutSeconds, config.MaxServerReadHeaderTimeoutSeconds, config.GetServerReadHeaderTimeout},
+		{config.EnvServerReadTimeoutSeconds, config.MaxServerReadTimeoutSeconds, config.GetServerReadTimeout},
+		{config.EnvServerWriteTimeoutSeconds, config.MaxServerWriteTimeoutSeconds, config.GetServerWriteTimeout},
+		{config.EnvServerIdleTimeoutSeconds, config.MaxServerIdleTimeoutSeconds, config.GetServerIdleTimeout},
+		{config.EnvPoWChallengeTTLSeconds, config.MaxPoWChallengeTTLSeconds, config.GetPoWChallengeTTL},
+	}
+	for _, s := range settings {
+		t.Run(s.key+" accepts its maximum", func(t *testing.T) {
+			t.Setenv(s.key, strconv.Itoa(s.max))
+			if err := validate(t); err != nil {
+				t.Fatalf("%s=%d rejected: %v", s.key, s.max, err)
+			}
+			if got, want := s.read(), time.Duration(s.max)*time.Second; got != want {
+				t.Fatalf("%s=%d read as %v, want %v", s.key, s.max, got, want)
+			}
+		})
+		for _, seconds := range []int64{int64(s.max) + 1, maxUnwrapped, maxUnwrapped + 1, int64(s.max) + wrapPeriodSeconds} {
+			value := strconv.FormatInt(seconds, 10)
+			t.Run(s.key+" refuses "+value, func(t *testing.T) {
+				t.Setenv(s.key, value)
+				if got := s.read(); got != 0 {
+					t.Fatalf("%s=%s read as %v, want 0 (refused)", s.key, value, got)
+				}
+				var f *opcode.Failure
+				if err := validate(t); !errors.As(err, &f) || f.Code.ID != opcode.ConfigInvalid.ID {
+					t.Fatalf("%s=%s: %v, want %s", s.key, value, err, opcode.ConfigInvalid.ID)
+				}
+			})
+		}
 	}
 }
 
