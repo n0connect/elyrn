@@ -68,7 +68,7 @@ AccountNumber (256-bit CSPRNG, base64url, 43 chars)
       +-- HKDF-SHA256(salt: "noaddx.v1", info: "noaddx/auth")
       |     \--> auth_key (32 bytes)
       |           Sent to server ONLY during login.
-      |           Server stores HMAC-SHA256(pepper, auth_key) + Argon2id hash.
+      |           Server stores HMAC-SHA256(pepper, auth_key), nothing else of it.
       |
       `-- HKDF-SHA256(salt: "noaddx.v1", info: "noaddx/identity/x25519")
             \--> X25519 Identity Keypair (32 bytes)
@@ -170,7 +170,6 @@ AAD = "NADM" (4 bytes)
                       |        users         |
                       |  - uuid (internal)   |
                       |  - account_lookup    |
-                      |  - account_hash      |
                       |  - public_key        |
                       |  - conv_index_enc    |
                       |  (NO TIMESTAMPS)     |

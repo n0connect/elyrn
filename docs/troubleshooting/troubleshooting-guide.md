@@ -14,7 +14,7 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | `bash: \r: invalid command` | Git on Windows converted script line endings to CRLF. | `dos2unix Makefile` |
 | `bind: address already in use (port 80 or 5432)` | Port occupied by another local service (Apache, local Postgres). | `sudo lsof -i :80` or remap ports in `docker-compose.yaml`. |
 | Backend log: `E_DB_UNREACHABLE ... [connection refused]` | The backend cannot reach PostgreSQL (not running, or `DOCKER_DB_HOST` names another host). | `docker compose ps`; keep `DOCKER_DB_HOST=postgres` in `.env` (section 5). |
-| Backend container exits with code `137` | Linux Out-Of-Memory (OOM) Killer killed backend during Argon2id. | Reduce `ARGON2_MEMORY_KIB=32768` and enable host swap. |
+| Backend container exits with code `137` | Linux Out-Of-Memory (OOM) Killer killed the backend: the host has less memory than the containers' limits. | Enable host swap, or lower `BACKEND_MEM_LIMIT` no further than `make check-hardening` allows; see section 6. |
 | Session lost immediately upon browser reload | Private/Incognito mode blocked IndexedDB storage, or the browser could not keep the identity. | Normal window or save AccountNumber to log in again; see section 7. |
 | New messages appear late (up to about 30 s), then every few seconds | A proxy in front of the stack buffers the event stream (`/api/v2/events`); the console shows `W_LIVE_STREAM_SILENT`. | Turn buffering off for that path in the proxy; see [Deployment](../operations/deployment.md). |
 | Backend restarts in a loop with `E_KEY_CHECK` | `.env` does not belong to this database (regenerated, or an old master key removed too early). | Restore the original `.env`; see section 9. |
@@ -25,7 +25,7 @@ This guide details real-world pitfalls, diagnostic commands, and immediate copy-
 | `pool overlaps` after adding `BACKEND_IP` or changing `COMPOSE_SUBNET` | `PROXY_IP` and `BACKEND_IP` must lie inside `COMPOSE_SUBNET`, `TOR_IP` inside `EDGE_SUBNET`. | Move each range with its addresses in `.env`. |
 | `make onion`: `Invalid address 172.29.73.11` for tor | `.env` still sets the pre-split `TOR_IP`; tor now lives on `edge`. | `TOR_IP=172.29.72.11` (or delete the line). |
 | `curl localhost:8080` or `psql -p $DB_HOST_PORT` refused | Production layout: only nginx is published. | Use `http://localhost/api/...`, or `make shell-db` (psql inside the database container as `DB_USER` on `DB_NAME`); or run development (`APP_ENV=development`). See [Hardening](../operations/hardening.md#layouts). |
-| Backend killed with code `137` after raising Argon2id settings | `BACKEND_MEM_LIMIT` no longer holds `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. | Raise `BACKEND_MEM_LIMIT` (and `BACKEND_GOMEMLIMIT`); `make check-hardening` names the size. |
+| Backend killed with code `137` after lowering `BACKEND_MEM_LIMIT` | The limit no longer holds the file-request pool plus 128 MiB. | Raise `BACKEND_MEM_LIMIT` (and `BACKEND_GOMEMLIMIT`); `make check-hardening` names the size. |
 
 ---
 
@@ -153,16 +153,10 @@ Out of memory: Killed process 1234 (main) total-vm:854320kB, anon-rss:524100kB
 ```
 
 ### Cause
-Argon2id hashing allocates `64 MiB` of RAM per concurrent registration (phase 2; login runs no Argon2id). On a 512MB or 1GB VPS, a burst of 3-4 concurrent users can exhaust system memory.
+On a 512MB or 1GB VPS the containers' memory limits together (the backend's `BACKEND_MEM_LIMIT` is 512 MiB by default) can exceed what the host has.
 
 ### Fix
-Adjust Argon2id settings in `.env` for low-memory environments:
-```ini
-ARGON2_MEMORY_KIB=32768
-ARGON2_TIME=2
-ARGON2_PARALLELISM=1
-```
-Add a 2GB swap file to prevent kernel kills:
+Lower `BACKEND_MEM_LIMIT` (and `BACKEND_GOMEMLIMIT` with it), never below what `make check-hardening` names (the file-request pool plus 128 MiB, 177 MiB). Add a 2GB swap file to prevent kernel kills:
 ```bash
 sudo fallocate -l 2G /swapfile
 sudo chmod 600 /swapfile

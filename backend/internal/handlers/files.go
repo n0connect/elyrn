@@ -17,9 +17,9 @@ import (
 // handled at once. Past the gate one such request holds about 1.6 MB: the decoded body (the
 // 342 KiB data string bound into the request), the 256 KiB raw part, the driver's copy of the
 // bytea and, on a read, the base64 answer and its JSON encoding (about 342 KiB each). The backend
-// container keeps 128 MiB beside the Argon2id slots (scripts/check-hardening.py
-// BACKEND_HEADROOM_BYTES) for the runtime, 20 database connections, event streams and the GC;
-// 32 x 1.6 MB = 51 MB stays well under half of it.
+// container's memory limit holds this pool at its bound (32 x 1.6 MB = 51 MB) on top of 128 MiB
+// for the runtime, 20 database connections, event streams and the GC (scripts/check-hardening.py
+// check_backend_memory: FILE_REQUEST_BYTES, BACKEND_HEADROOM_BYTES).
 //
 // Before authentication (the gate reads and checks the body first) memory is bounded by nginx,
 // the only way in: it buffers a whole body (at most 342k) before it opens the upstream request,

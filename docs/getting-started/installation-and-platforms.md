@@ -153,24 +153,13 @@ make check-hardening            # the rendered config keeps every container cont
 
 ---
 
-## Memory Sizing & VPS Optimization (Argon2id)
+## Memory Sizing & VPS Optimization
 
-`elyrn.` runs memory-hard Argon2id on the server once per account, in registration phase 2, to hash the derived auth key (login proves the key by its keyed lookup and runs no Argon2id):
-- **Default configuration:** `ARGON2_MEMORY_KIB=65536` (64 MiB per hash), `ARGON2_PARALLELISM=2` (`.env.example`; `4` when unset), at most `ARGON2_MAX_CONCURRENT=4` at once.
-- **RAM Impact:** each concurrent registration phase 2 allocates `ARGON2_MEMORY_KIB`; the peak is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` (256 MiB with the defaults), which the backend container's 512 MiB limit (`BACKEND_MEM_LIMIT`) is sized for.
+`elyrn.` runs no memory-hard hashing on the server (registration stores no hash of the key; login proves it by its keyed lookup). The backend's memory is bounded by its file-request pool (at most 32 file part requests of about 1.6 MB at once) plus 128 MiB for the runtime, 20 database connections, event streams and the garbage collector: 177 MiB in all. The backend container's default limit (`BACKEND_MEM_LIMIT`) is 512 MiB.
 
 ### Low-RAM Budget VPS Profile (512 MB - 1 GB RAM)
 
-If deploying to a minimal VPS (e.g., a $4/month VPS with 1 GB RAM), concurrent registration spikes can trigger the Linux Out-Of-Memory (OOM) Killer.
-
-Tune `.env` with these hardened low-memory parameters:
-
-```ini
-# Safe for 1GB RAM machines (prevents OOM crashes while maintaining high security)
-ARGON2_MEMORY_KIB=32768
-ARGON2_TIME=2
-ARGON2_PARALLELISM=1
-```
+On a minimal VPS (e.g., a $4/month VPS with 1 GB RAM) the containers' limits together can exceed the host's memory. `BACKEND_MEM_LIMIT` can be lowered, never below what `make check-hardening` names (the file-request pool plus 128 MiB); lower `BACKEND_GOMEMLIMIT` with it.
 
 And add a 2GB swapfile on your Linux host:
 ```bash

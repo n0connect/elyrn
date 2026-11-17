@@ -9,30 +9,31 @@
 
 ```
 backend/tests/
-|-- auth/                # Auth key, sessions, pending registrations, Argon2id hash format (24 tests, 4 fuzz)
-|-- database/            # Migration, schema version, instance lock, startup validation, connection bounds (20 tests, 1 fuzz)
+|-- auth/                # Auth key, sessions, pending registrations (19 tests, 3 fuzz)
+|-- database/            # Migration, schema version, instance lock, startup validation, connection bounds (24 tests, 1 fuzz)
 |-- encryption/          # Stored-record encryption, key ids, AAD (12 tests, 2 fuzz)
 |-- identity/            # HKDF / X25519 RFC vectors, derivations, tag separation (5 tests, 2 fuzz)
-|-- integration/         # End-to-end flows over the real route table (114 tests)
-|-- middleware/          # JWT, rate limits, trusted proxy, CORS, security headers, recover (25 tests, 3 fuzz)
+|-- integration/         # End-to-end flows over the real route table (137 tests)
+|-- middleware/          # JWT, rate limits, trusted proxy, CORS, security headers, recover (30 tests, 3 fuzz)
 |-- testutil/            # Shared helpers (below)
 `-- utils/               # Validation, SafeMutex, supervised goroutines, logger (12 tests, 3 fuzz)
 ```
 
-Counts are test functions (`^func Test`, `TestMain` excluded) and fuzz targets, as of 13 Nov 2026.
-Across the whole backend there are 330 test functions and 76 fuzz targets; the fuzz list, the
+Counts are test functions (`^func Test`, `TestMain` excluded) and fuzz targets, as of 18 Nov 2026.
+Across the whole backend there are 378 test functions and 86 fuzz targets; the fuzz list, the
 frontend tests and how to run everything are in
 [docs/development/testing-and-contributing.md](../../docs/development/testing-and-contributing.md).
 
-Inside `internal/` (no database): `agent` 10, `apperr` 13, `contract` 12, `cryptoengine` 10
-(known answers on the compiled engine), `cryptoengine/equivalence` 9 (both engines in one binary,
-`-tags 'test openssl'`), `database` 2, `e2e` 25, `mcp` 10, `pow` 19, `realtime` 6, `utils` 2.
+Inside `internal/` (no database): `agent` 15, `apperr` 13, `chat` 1, `contract` 12, `cryptoengine` 9
+(known answers on the compiled engine), `cryptoengine/equivalence` 8 (both engines in one binary,
+`-tags 'test openssl'`), `database` 2, `e2e` 36, `handlers` 1, `mcp` 12, `middleware` 3, `pow` 19,
+`realtime` 6, `utils` 2.
 
 ### Integration (`tests/integration/`)
 
 | File | What it covers |
 |---|---|
-| `flows_test.go` (17) | registration with PoW, login by the derived key, invites, messages, burn, sessions, SSE, input whitelist, IDOR |
+| `flows_test.go` (16) | registration with PoW, login by the derived key, invites, messages, burn, sessions, SSE, input whitelist, IDOR |
 | `rooms_test.go` (17) | joining by code (`404` without it, other limits refused), seats, late joiners, `412` on a stale roster, notes, leave and burn, expiry |
 | `resilience_test.go` (14) | database outages answer `503` (never "invalid credentials", never a logout), stalled and slow requests keep their `503`, a failed sign-up keeps its number, lowered caps and TTLs, clock jumps, expired rows never served, burn racing sends, no driver text in the log |
 | `agent_test.go` (13), `agent_send_test.go` (3), `mcp_test.go` (3) | the real `elyrn-agent` and its MCP server against the real server; two agents and a browser-style user in one room |

@@ -50,7 +50,7 @@ defenses stay layered and none of them needs an identity:
 |---|---|
 | Tor | `HiddenServicePoWDefensesEnabled` (client puzzles when the service is under load), `HiddenServiceEnableIntroDoSDefense` (rate-limited introductions), `HiddenServiceMaxStreams 32` (a circuit asking for more open connections is torn down: rate limits count requests, not idle connections) |
 | nginx | 20 req/s per circuit, onion listener open to the tor container only |
-| backend | Per-circuit rate limits and PoW challenge budget, PoW for registration, invites and rooms, per-circuit share of live event streams (16), bounded Argon2id concurrency, every input validated as for clearnet traffic. The PoW issuer forgets a client once it has been idle for a whole window (its budget has refilled by then), so filling its client cap takes 50,000 circuits within a minute, not within an hour |
+| backend | Per-circuit rate limits and PoW challenge budget, PoW for registration, invites and rooms, per-circuit share of live event streams (16), every input validated as for clearnet traffic. The PoW issuer forgets a client once it has been idle for a whole window (its budget has refilled by then), so filling its client cap takes 50,000 circuits within a minute, not within an hour |
 
 A client can open new circuits, but each one costs a Tor rendezvous, and under load also the
 Tor-layer puzzle. Registration, invites and rooms still cost an application-level proof of work per

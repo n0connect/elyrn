@@ -59,12 +59,12 @@ HOST_NAMESPACE_KEYS = ("network_mode", "pid", "ipc", "uts", "userns_mode", "cgro
 FORBIDDEN_SECURITY_OPTS = ("seccomp", "apparmor", "label")
 DOCKER_SOCKET = "docker.sock"
 ROOT_USERS = {"", "0", "root", "0:0", "root:root"}
-# The backend's memory limit must hold every Argon2id computation at once plus this much
+# The backend's memory limit must hold the runtime, 20 database connections, event streams and
+# the GC's headroom (BACKEND_HEADROOM_BYTES) plus the file-request pool at its bound:
+# maxConcurrentFileRequests (backend/internal/handlers/files.go) requests of about
+# FILE_REQUEST_BYTES each, as that file's comment counts them
 BACKEND_HEADROOM_BYTES = 128 << 20
-KIB = 1024
-# Backend defaults (backend/internal/config) when .env leaves a value empty
-DEFAULT_ARGON2_MEMORY_KIB = 65536
-DEFAULT_ARGON2_MAX_CONCURRENT = 4
+FILE_REQUEST_BYTES = 1_600_000
 
 # Every service logs through the rotating "local" driver (docker-compose.yaml x-logging)
 LOG_DRIVER = "local"
@@ -602,12 +602,13 @@ def check_hsts(services):
 
 
 def check_backend_memory(svc):
-    env = svc.get("environment") or {}
-    kib = as_int(env.get("ARGON2_MEMORY_KIB"), DEFAULT_ARGON2_MEMORY_KIB)
-    slots = as_int(env.get("ARGON2_MAX_CONCURRENT"), DEFAULT_ARGON2_MAX_CONCURRENT)
-    need = slots * kib * KIB + BACKEND_HEADROOM_BYTES
+    bound = FILES_BOUND.search(read(FILES_GO))
+    if not bound:
+        fail("backend", "backend/internal/handlers/files.go no longer states maxConcurrentFileRequests")
+        return
+    need = int(bound.group(1)) * FILE_REQUEST_BYTES + BACKEND_HEADROOM_BYTES
     if as_int(svc.get("mem_limit"), 0) < need:
-        fail("backend", "mem_limit (BACKEND_MEM_LIMIT) is below ARGON2_MAX_CONCURRENT x ARGON2_MEMORY_KIB "
+        fail("backend", "mem_limit (BACKEND_MEM_LIMIT) is below maxConcurrentFileRequests x file request "
              f"+ {BACKEND_HEADROOM_BYTES >> 20} MiB ({-(-need // (1 << 20))} MiB needed)")
 
 
