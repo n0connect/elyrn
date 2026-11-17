@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"elyrn/internal/apperr/opcode"
-	"elyrn/internal/encryption"
 	"elyrn/internal/models"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,20 +27,6 @@ const (
 	// connectMaxAttempts bounds the loop (RULES.md §8.1); connectWait ends it long before
 	connectMaxAttempts = 64
 )
-
-// Start connects (bounded wait), loads the master keys and migrates, and returns the failure
-// instead of exiting: tests and drills call it (tests/testutil StartDatabase) and fail the test.
-// cmd/server runs the steps itself so the single-instance lock is held before the schema is
-// touched, and it alone exits (utils.ExitStartup).
-func Start() *opcode.Failure {
-	if f := Connect(); f != nil {
-		return f
-	}
-	if err := encryption.InitMasterKeys(); err != nil {
-		return opcode.As(err, opcode.ConfigInvalid)
-	}
-	return Migrate(DB)
-}
 
 // Connect builds the pool with its two handles (DB, BackgroundDB) and proves one connection
 // within the startup wait.
