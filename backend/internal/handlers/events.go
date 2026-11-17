@@ -17,8 +17,9 @@ const (
 	sseWriteTimeout = 10 * time.Second
 	// sseKeepAlive keeps proxies from reaping idle streams, and tells the browser the stream is
 	// delivering (frontend chat.js STREAM_SILENCE_LIMIT_MS allows two of them and some slack; one
-	// more is sent right after the preamble, for STREAM_FIRST_PROOF_MS)
-	sseKeepAlive = 25 * time.Second
+	// more is sent right after the preamble, for STREAM_FIRST_PROOF_MS). Short, so a page behind a
+	// proxy that holds the stream notices within seconds and fetches its updates instead.
+	sseKeepAlive = 10 * time.Second
 	// sseMaxLifetime forces periodic reconnects, which re-run JWT + session-epoch checks
 	sseMaxLifetime = 10 * time.Minute
 	// sseMaxIterations bounds the event loop (RULES.md §8.1); lifetime normally ends it first

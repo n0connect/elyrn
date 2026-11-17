@@ -241,6 +241,8 @@ test('the stream limits match the server\'s named heartbeats', () => {
     const poll = seconds(chat, /const POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
     const keepAlive = seconds(events, /sseKeepAlive = (\d+) \* time\.Second/);
     assert.ok(limit >= 2 * keepAlive, 'silence limit shorter than two heartbeats');
+    // ...and shorter than three: a held stream is noticed as soon as two heartbeats are missing
+    assert.ok(limit < 3 * keepAlive, 'silence limit waits past a third heartbeat before polling');
     assert.ok(firstProof > 0 && firstProof < keepAlive, 'the first proof must not wait for a periodic heartbeat');
     assert.ok(poll > 0 && poll <= firstProof, 'the watchdog looks less often than the first-proof limit');
     // The heartbeat is a named event the page listens to, never a comment it cannot see, and the

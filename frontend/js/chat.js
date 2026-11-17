@@ -18,9 +18,9 @@ const Chat = (() => {
     // a (re)connected stream that has not shown it this long is not delivering (a proxy buffers
     // or holds it), and the page polls instead of waiting longer
     const STREAM_FIRST_PROOF_MS = 5 * SECOND_MS;
-    // ...and one every 25 s after (sseKeepAlive): a stream that proved itself and then went silent
+    // ...and one every 10 s after (sseKeepAlive): a stream that proved itself and then went silent
     // for two of them and some slack has stopped delivering
-    const STREAM_SILENCE_LIMIT_MS = 60 * SECOND_MS;
+    const STREAM_SILENCE_LIMIT_MS = 25 * SECOND_MS;
     // How often the watchdog looks, and so how often a silent stream's page fetches its updates:
     // at most 5 requests per poll per visible tab (1 when no conversation is open), so 4 visible
     // tabs stay at 4 r/s, inside nginx's 20 r/s with burst 40 per client
