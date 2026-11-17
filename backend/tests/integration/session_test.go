@@ -7,6 +7,7 @@ import (
 
 	"elyrn/internal/auth"
 	"elyrn/internal/models"
+	"elyrn/internal/utils"
 )
 
 // The session token lives only in the HttpOnly cookie: no response body ever carries it,
@@ -101,6 +102,45 @@ func TestCSRF_CrossOriginWritesAreRejected(t *testing.T) {
 	// Reads are not state-changing: CORS (no credentials) already keeps their bodies same-origin
 	expectStatus(t, alice.doWithHeaders("GET", "/api/v2/me", nil,
 		map[string]string{"Sec-Fetch-Site": "cross-site"}), http.StatusOK, "cross-site read")
+}
+
+// expectClearSiteData insists rr asks the browser to drop this origin's cookies and storage
+// (exactly once), or does not ask it at all.
+func expectClearSiteData(t *testing.T, rr *httptest.ResponseRecorder, want bool, what string) {
+	t.Helper()
+	got := rr.Header().Values(utils.HeaderClearSiteData)
+	if want && (len(got) != 1 || got[0] != utils.ClearCookiesAndStorage) || !want && len(got) != 0 {
+		t.Fatalf("%s: Clear-Site-Data %q (want it: %v)", what, got, want)
+	}
+}
+
+// Clear-Site-Data goes with exactly two answers, the ones that end an identity on this device:
+// a successful logout and a successful account deletion. Every other answer, refusals of those
+// two included, leaves the browser's data alone.
+func TestSession_ClearSiteDataOnlyWithLogoutAndAccountDeletion(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+
+	for what, rr := range map[string]*httptest.ResponseRecorder{
+		"me":                       alice.do(http.MethodGet, models.PathMe, nil),
+		"conversations":            alice.do(http.MethodGet, models.PathConversations, nil),
+		"messages":                 alice.do(http.MethodGet, models.PathConversations+"/"+conv+"/"+models.SubMessages, nil),
+		"login":                    newClient(t, mux).do(http.MethodPost, models.PathLogin, models.LoginRequest{AuthKey: bob.authKey}),
+		"a refused deletion (403)": alice.do(http.MethodDelete, models.PathMe, models.DeleteAccountRequest{AuthKey: bob.authKey}),
+		"a malformed deletion":     alice.do(http.MethodDelete, models.PathMe, models.DeleteAccountRequest{AuthKey: "short"}),
+		"an unknown route":         alice.do(http.MethodGet, "/api/v2/unknown", nil),
+	} {
+		expectClearSiteData(t, rr, false, what)
+	}
+
+	rr := bob.do(http.MethodPost, models.PathLogout, nil)
+	expectStatus(t, rr, http.StatusOK, "logout")
+	expectClearSiteData(t, rr, true, "a successful logout")
+
+	rr = alice.do(http.MethodDelete, models.PathMe, models.DeleteAccountRequest{AuthKey: alice.authKey})
+	expectStatus(t, rr, http.StatusOK, "account deletion")
+	expectClearSiteData(t, rr, true, "a successful account deletion")
 }
 
 func assertNoTokenField(t *testing.T, rr *httptest.ResponseRecorder, what string) {

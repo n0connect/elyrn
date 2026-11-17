@@ -228,7 +228,7 @@ The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_ke
 ### `POST /api/v2/logout`
 Revokes all active sessions for this account across all devices by bumping `session_epoch`.
 
-- **Response (200 OK):** Clears session cookie.
+- **Response (200 OK):** Clears session cookie and carries `Clear-Site-Data: "cookies", "storage"`, so the browser drops this origin's cookies and stored data (the identity and its records in IndexedDB) even if the page's own wipe failed.
 ```json
 {
   "success": true,
@@ -268,7 +268,7 @@ A live session is not enough: the request re-proves the account number with its 
 }
 ```
 - **Errors:** `400` malformed body or key, `403` the key belongs to another account (`E_FORBIDDEN`), `415` body not declared as JSON, `429` too many attempts.
-- **Response (200 OK):**
+- **Response (200 OK):** carries `Clear-Site-Data: "cookies", "storage"`, as a successful logout does. No other answer, a refused deletion included, carries it.
 ```json
 {
   "success": true,
