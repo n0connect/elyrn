@@ -661,10 +661,14 @@ function createMessageElement(message) {
         item.appendChild(sender);
     }
 
-    const text = document.createElement('div');
-    text.className = 'msg-text';
-    text.textContent = message.broken ? unreadableText(message) : neutralizeReceivedText(message.text);
-    item.appendChild(text);
+    // A file message shows its file (file-card.js) and its caption, if it has one
+    if (message.file && !message.broken) item.appendChild(FileCard.create(message));
+    if (message.broken || !message.file || message.text !== '') {
+        const text = document.createElement('div');
+        text.className = 'msg-text';
+        text.textContent = message.broken ? unreadableText(message) : neutralizeReceivedText(message.text);
+        item.appendChild(text);
+    }
 
     if (!message.broken) {
         const time = document.createElement('div');

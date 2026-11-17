@@ -165,6 +165,7 @@ const Chat = (() => {
         };
         renderMe(me.aura);
         await Alerts.start();
+        FileComposer.start({ maxBytes: limits.fileMaxBytes, activeConversation: () => activeId });
         setComposerHint(ttlDays);
         setRoomLimits(limits.maxMembers, Rooms.ttlChoices(limits.maxTTLHours));
         showHome();
@@ -181,6 +182,7 @@ const Chat = (() => {
         cancelProofsOfWork();
         Alerts.stop();
         RoleControl.reset();
+        FileComposer.stop();
         closeEvents();
         clearTimeout(pollTimer);
         polling = false;
@@ -471,9 +473,12 @@ const Chat = (() => {
         return document.getElementById('messageInput');
     }
 
+    // The composer is reset for another conversation (or emptied after a send): a chosen file
+    // belongs to the conversation it was chosen in, so it goes too, its upload cancelled
     function setComposer(text) {
         composer().value = text;
         updateComposerMeta();
+        FileComposer.clear();
     }
 
     // Keeps what is typed for the open conversation until it is opened again
@@ -661,7 +666,16 @@ const Chat = (() => {
     async function openPairMessage(conv, key, raw) {
         const sender = raw.mine ? me.publicKey : conv.peerPublicKey;
         const plain = await ElyrnCrypto.decryptMessage(key, conv.id, raw.id, sender, raw.ciphertext);
-        return { seq: raw.seq, mine: raw.mine, text: plain.text, sentAt: plain.sentAt, sender: sender, counter: plain.counter };
+        return withFile(conv, { seq: raw.seq, mine: raw.mine, text: plain.text, sentAt: plain.sentAt, sender: sender, counter: plain.counter }, plain.file);
+    }
+
+    // A message announcing a file can fetch it on request (file-card.js; nothing before)
+    function withFile(conv, message, file) {
+        if (!file) return message;
+        return Object.assign(message, {
+            file: file,
+            fetchFile: ({ onProgress, cancelled }) => FileTransfer.download({ api, conversationId: conv.id, file, onProgress, cancelled })
+        });
     }
 
     // Verifies a room message's sender against the server's `mine` and names who sent it
@@ -671,7 +685,7 @@ const Chat = (() => {
         if (mine !== raw.mine) {
             throw new Error('the server misattributes a message');
         }
-        const message = { seq: raw.seq, mine: mine, text: plain.text, sentAt: plain.sentAt, sender: plain.sender, counter: plain.counter };
+        const message = withFile(conv, { seq: raw.seq, mine: mine, text: plain.text, sentAt: plain.sentAt, sender: plain.sender, counter: plain.counter }, plain.file);
         if (mine) return message;
         const entry = Rooms.senderOf(conv.room, plain.sender);
         const aura = entry ? entry.aura : await ElyrnCrypto.aura(plain.sender);
@@ -805,7 +819,10 @@ const Chat = (() => {
 
         // What the composer held when sent: it is cleared later only if it still holds exactly this
         const typed = input.value;
-        const validation = validateMessageText(typed);
+        // A chosen file still being read or cleaned waits (the send control is off meanwhile)
+        const attached = FileComposer.attached(conv.id);
+        if (attached && !attached.ready) return;
+        const validation = attached ? validateCaption(typed, attached.name) : validateMessageText(typed);
         if (!validation.valid) {
             if (validation.error !== Errors.CODES.E_MESSAGE_EMPTY) Errors.report(validation.error, validation.params);
             // An account number pasted here is not kept: not in the composer, not as a draft
@@ -821,7 +838,13 @@ const Chat = (() => {
         sendBtn.disabled = true;
         try {
             if (conv.room && !conv.room.roster && !(await loadRoster(conv))) return;
-            await deliver(conv, typed, validation.sanitized);
+            // A file's parts go first; its message is sent like any other (412, 409, counters)
+            const owner = me;
+            const file = attached
+                ? await FileComposer.upload({ api, conv, cancelled: () => me !== owner || activeId !== conv.id })
+                : null;
+            if (attached && !file) return;
+            await deliver(conv, typed, validation.sanitized, file);
         } catch (e) {
             Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, e);
         } finally {
@@ -836,11 +859,12 @@ const Chat = (() => {
     // delivering the message twice. A 409 counts as stored only then: a fresh id cannot exist yet.
     // A 409 "Id taken" (Errors.idTaken) is never stored: the id is held by something else, so the
     // text goes again under a fresh id and counter, MAX_ID_REDRAWS times at most.
-    async function deliver(conv, typed, text) {
-        const resumed = unsent && unsent.convId === conv.id && unsent.text === text ? unsent : null;
-        let outcome = await exchange(conv, resumed || await freshAttempt(conv, text));
+    async function deliver(conv, typed, text, file) {
+        const sameFile = (attempt) => (attempt.file ? Boolean(file) && attempt.file.id === file.id : !file);
+        const resumed = unsent && unsent.convId === conv.id && unsent.text === text && sameFile(unsent) ? unsent : null;
+        let outcome = await exchange(conv, resumed || await freshAttempt(conv, text, file));
         for (let redraw = 0; !outcome.rosterLost && Errors.idTaken(outcome.result) && redraw < MAX_ID_REDRAWS; redraw++) {
-            outcome = await exchange(conv, await freshAttempt(conv, text));
+            outcome = await exchange(conv, await freshAttempt(conv, text, file));
         }
         // The roster could not be fetched again: that failure was shown
         if (outcome.rosterLost) return;
@@ -856,6 +880,7 @@ const Chat = (() => {
         unsent = pending ? attempt : null;
 
         if (stored) {
+            if (file) FileComposer.sent(file);
             clearSent(conv.id, typed);
             bump(conv.id);
             await sync(conv);
@@ -872,9 +897,9 @@ const Chat = (() => {
         }
     }
 
-    // A new send of text: a fresh id and the next counter, sealed on its first post
-    async function freshAttempt(conv, text) {
-        const attempt = { convId: conv.id, text: text, id: ElyrnCrypto.newMessageId(), counter: 0, ciphertext: null, lost: false };
+    // A new send of text (and file, if any): a fresh id and the next counter, sealed on its first post
+    async function freshAttempt(conv, text, file) {
+        const attempt = { convId: conv.id, text: text, file: file || null, id: ElyrnCrypto.newMessageId(), counter: 0, ciphertext: null, lost: false };
         attempt.counter = await allocateCounter(conv);
         return attempt;
     }
