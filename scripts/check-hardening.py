@@ -143,11 +143,15 @@ EVENTS_STREAM_LINES = ("proxy_buffering off;", "proxy_pass_header X-Accel-Buffer
 # The file parts location: at most as many requests at once as the backend admits (its contract
 # bound), in memory only; the zone is one key for all clients (nginx.conf)
 FILES_LOCATION = re.compile(r"^location [^\n]*/files\(/", re.MULTILINE)
-TABLE_GO = ROOT / "backend/internal/contract/table.go"
+FILES_GO = ROOT / "backend/internal/handlers/files.go"
 FILES_BOUND = re.compile(r"^const maxConcurrentFileRequests = (\d+)$", re.MULTILINE)
-FILES_ZONE = "limit_conn_zone $file_requests_key zone=files:1m;"
+FILES_ZONES = ("limit_conn_zone $file_requests_key zone=files:1m;",
+               "limit_conn_zone $client_addr zone=files_per_client:10m;")
+# Per client address (as the request-rate zone counts it): small enough that one cannot take the pool
+FILES_PER_CLIENT = re.compile(r"^limit_conn files_per_client (\d+);$")
 FILES_KEY_MAP = re.compile(r"^map \$request_method \$file_requests_key \{\n\s+default all;\n\}", re.MULTILINE)
-FILES_MEMORY_LINES = ("client_body_buffer_size 342k;", "proxy_max_temp_file_size 0;", "limit_conn_status 503;")
+FILES_MEMORY_LINES = ("client_body_buffer_size 342k;", "proxy_max_temp_file_size 0;", "limit_conn_status 503;",
+                      "client_body_timeout 5s;")
 # Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
 NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
 # Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
@@ -359,16 +363,22 @@ def check_files_location(site, main):
     if len(blocks) != 1:
         fail("nginx", "nginx-site.conf must have exactly one file parts location")
         return
-    bound = FILES_BOUND.search(TABLE_GO.read_text(encoding="utf-8"))
+    bound = FILES_BOUND.search(read(FILES_GO))
     if not bound:
-        fail("nginx", "backend/internal/contract/table.go no longer states maxConcurrentFileRequests")
+        fail("nginx", "backend/internal/handlers/files.go no longer states maxConcurrentFileRequests")
         return
     lines = {line.strip() for line in blocks[0].splitlines()}
     for line in (f"limit_conn files {bound.group(1)};",) + FILES_MEMORY_LINES:
         if line not in lines:
             fail("nginx", f"the file parts location must keep '{line}'")
-    if FILES_ZONE not in main.splitlines() or not FILES_KEY_MAP.search(main):
-        fail("nginx", f"nginx.conf must define '{FILES_ZONE}' keyed by one value for every request")
+    per_client = [int(m.group(1)) for m in map(FILES_PER_CLIENT.match, lines) if m]
+    if len(per_client) != 1 or not 1 <= per_client[0] < int(bound.group(1)) // 2:
+        fail("nginx", "the file parts location must limit each client address to fewer than half the pool")
+    for zone in FILES_ZONES:
+        if zone not in main.splitlines():
+            fail("nginx", f"nginx.conf must define '{zone}'")
+    if not FILES_KEY_MAP.search(main):
+        fail("nginx", "nginx.conf must key the files zone by one value for every request")
     if any(line.startswith("add_header") for line in lines):
         fail("nginx", "no add_header in the file parts location: it would drop the server's headers")
 

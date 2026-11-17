@@ -217,7 +217,7 @@ var registry = map[Code]entry{
 	// (an in-memory budget); JSON, so it is told apart from the other 429s
 	FileBudgetSpent: {"E_FILE_BUDGET_SPENT", http.StatusTooManyRequests, sayFileBudgetSpent, utils.LogLevelINFO, shapeJSON},
 	// MERGE (503 "Service unavailable"): as many file part requests as memory allows are being
-	// handled already (contract.maxConcurrentFileRequests); retry later, like any outage
+	// handled already (handlers.maxConcurrentFileRequests); retry later, like any outage
 	FileRequestsBusy: {"E_FILE_REQUESTS_BUSY", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
 
 	// Login answers in JSON (shapeJSON); a body that is not JSON is its InvalidRequest twin

@@ -537,49 +537,6 @@ func TestBodyBoundsBelowGlobalCap(t *testing.T) {
 	})
 }
 
-// TestFileRequestsAreBounded: the file operations share one bound of maxConcurrentFileRequests.
-// One request more is refused at once with the bound's 503, before its body is read; a slot is
-// given back when its handler returns (also when the gate refuses the body), so the bound never
-// leaks; operations without a bound are never refused by it.
-func TestFileRequestsAreBounded(t *testing.T) {
-	var upload, read, list *Op
-	var uploadEndpoint, readEndpoint, listEndpoint *Endpoint
-	forEachOp(func(e *Endpoint, op *Op) {
-		switch op.ID {
-		case OpFileUpload:
-			upload, uploadEndpoint = op, e
-		case OpFileRead:
-			read, readEndpoint = op, e
-		case OpMessageList:
-			list, listEndpoint = op, e
-		}
-		if op.Bound != nil && op.Bound != fileRequests {
-			t.Errorf("%s %s: a bound other than the file operations'", op.Method, e.Template)
-		}
-	})
-	if upload.Bound != fileRequests || read.Bound != fileRequests || fileRequests.Max != maxConcurrentFileRequests {
-		t.Fatal("the file operations do not share the file bound")
-	}
-	// Requests handled in turn never run out of slots: each gives its slot back
-	for i := 0; i < 3*maxConcurrentFileRequests; i++ {
-		expectAdmitted(t, requestFor(readEndpoint, read, "", ""), "read in turn")
-		expectRefused(t, requestFor(uploadEndpoint, upload, "{}", ""), apperr.InvalidRequest, "a refused body in turn")
-	}
-	for i := 0; i < maxConcurrentFileRequests; i++ {
-		if err := fileRequests.slots.Acquire(noWait); err != nil {
-			t.Fatalf("slot %d of %d unavailable", i+1, maxConcurrentFileRequests)
-		}
-	}
-	expectRefused(t, requestFor(readEndpoint, read, "", ""), apperr.FileRequestsBusy, "a read over the bound")
-	expectRefused(t, requestFor(uploadEndpoint, upload, canonicalBody(t, upload), ""), apperr.FileRequestsBusy, "an upload over the bound")
-	expectAdmitted(t, requestFor(listEndpoint, list, "", ""), "an unbounded operation while the bound is full")
-	fileRequests.slots.Release()
-	expectAdmitted(t, requestFor(readEndpoint, read, "", ""), "a read once a slot is free")
-	for i := 1; i < maxConcurrentFileRequests; i++ {
-		fileRequests.slots.Release()
-	}
-}
-
 // TestDocMatchesTable: the committed document is exactly what the table renders.
 func TestDocMatchesTable(t *testing.T) {
 	committed, err := os.ReadFile(DocPath)
