@@ -767,6 +767,22 @@ function updateComposerMeta() {
 
 // ---------- formatting ----------
 
+// A file's size for people: whole bytes below one KiB, else one decimal in the largest unit
+const SIZE_STEP = 1024;
+const SIZE_UNITS = ['KB', 'MB', 'GB'];
+
+function formatFileSize(bytes) {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) return '';
+    if (bytes < SIZE_STEP) return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`;
+    let value = bytes / SIZE_STEP;
+    let unit = 0;
+    while (value >= SIZE_STEP && unit < SIZE_UNITS.length - 1) {
+        value /= SIZE_STEP;
+        unit++;
+    }
+    return `${value.toFixed(1).replace(/\.0$/, '')} ${SIZE_UNITS[unit]}`;
+}
+
 function formatTime(ms) {
     const date = new Date(ms);
     // A sender's clock past what a Date holds (a modified client can seal any safe integer):
