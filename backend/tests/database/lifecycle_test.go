@@ -137,6 +137,13 @@ func TestInstanceLock_LostConnectionIsReported(t *testing.T) {
 		t.Fatalf("acquire: %s", f.Error())
 	}
 	defer lock.Release()
+	expectLostOnSessionEnd(t, lost, 30*time.Second, "the lost lock was never reported")
+}
+
+// expectLostOnSessionEnd checks that ending the session holding the advisory lock is reported
+// to the holder as E_INSTANCE_LOCK_LOST within within (never fails the test when it is not).
+func expectLostOnSessionEnd(t *testing.T, lost <-chan *opcode.Failure, within time.Duration, never string) {
+	t.Helper()
 	if err := database.DB.Exec("SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND pid <> pg_backend_pid()").Error; err != nil {
 		t.Fatalf("terminate the lock's connection: %v", err)
 	}
@@ -145,8 +152,8 @@ func TestInstanceLock_LostConnectionIsReported(t *testing.T) {
 		if f.Code.ID != opcode.InstanceLockLost.ID {
 			t.Fatalf("lost lock reported as %s", f.Code.ID)
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("the lost lock was never reported")
+	case <-time.After(within):
+		t.Fatal(never)
 	}
 }
 
@@ -218,15 +225,5 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 		t.Fatal("the lock did not survive the outage")
 	}
 
-	if err := database.DB.Exec("SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND pid <> pg_backend_pid()").Error; err != nil {
-		t.Fatalf("terminate the lock's connection: %v", err)
-	}
-	select {
-	case f := <-lost:
-		if f.Code.ID != opcode.InstanceLockLost.ID {
-			t.Fatalf("lost lock reported as %s", f.Code.ID)
-		}
-	case <-time.After(lostWithin):
-		t.Fatal("after the outage, a lost lock was never reported")
-	}
+	expectLostOnSessionEnd(t, lost, lostWithin, "after the outage, a lost lock was never reported")
 }
