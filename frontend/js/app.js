@@ -207,6 +207,7 @@ function setupRegisterListeners() {
 // App header: logging out and deleting the identity
 function setupAccountListeners() {
     document.getElementById('logoutBtn').addEventListener('click', logout);
+    document.getElementById('alertsBtn').addEventListener('click', Alerts.toggle);
     document.getElementById('deleteIdentityBtn').addEventListener('click', () => {
         Chat.backToList();
         togglePairPanel('deletePanel');
@@ -295,8 +296,11 @@ function setupGlobalListeners() {
         }
     });
 
-    // Catch up after the tab was hidden or the machine slept
-    document.addEventListener('visibilitychange', () => Chat.onVisible());
+    // Catch up after the tab was hidden or the machine slept; a content-free alert is done with
+    document.addEventListener('visibilitychange', () => {
+        Alerts.onVisible();
+        Chat.onVisible();
+    });
 
     // Back from the back-forward cache: the session is checked again before anything is trusted
     window.addEventListener('pageshow', event => {

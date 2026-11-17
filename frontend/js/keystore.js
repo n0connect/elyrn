@@ -18,16 +18,18 @@
 // every wipe removes either. When nothing reads back, nothing is kept and the user is told once
 // (W_IDENTITY_NOT_KEPT).
 //
-// It also remembers which conversations the user verified (safety number compared),
-// bound to the peer key that was verified, and, per conversation, the counter record that
+// It also keeps whether content-free alerts are on (alerts.js), remembers which conversations
+// the user verified (safety number compared), bound to the peer key that was verified, and, per
+// conversation, the counter record that
 // exposes replays after a reload (counters.js: highest seq and counters, a use stamp that only
 // counts, and a room's own expiry hour from its code; never text, ids or the time of any
 // activity). Which records are kept and for how long: counters.js KEEPING RECORDS. None of this
 // ever reaches the server.
 //
 // Two ways to forget. wipeIdentity() is for what the server decides (a 401, a refused /me): it
-// removes the identity record only, so the counter records and verification marks survive and a
-// server cannot erase replay protection by ending a session once. wipeAll() is the user's own
+// removes the identity record (and the alerts preference) only, so the counter records and
+// verification marks survive and a server cannot erase replay protection by ending a session
+// once. wipeAll() is the user's own
 // logout or identity deletion: the whole database goes.
 // Those records are keyed by conversation id, and one conversation id is shared by both of its
 // members, so the records left behind belong to the account that wrote them (OWNER, its public
@@ -60,6 +62,10 @@ const Keystore = (() => {
     const COUNTER_LOCK_PREFIX = 'elyrn-counter-';
     // Where keepsKeys() puts its throwaway key for the moment of the test
     const PROBE = 'keyProbe';
+    // The content-free alerts preference (alerts.js): present (true) only while alerts are on.
+    // It belongs to the identity: every way the identity goes (wipeIdentity, wipeAll, another
+    // account's save) takes it along.
+    const ALERTS = 'alerts';
 
     // A storage that refuses once (private window) refuses every time: say it once, not per sync
     let storageWarned = false;
@@ -225,6 +231,7 @@ const Keystore = (() => {
                 if (holder && holder !== publicKey) {
                     tx.objectStore(VERIFIED_STORE).clear();
                     tx.objectStore(COUNTERS_STORE).clear();
+                    keys.delete(ALERTS);
                 }
                 keys.put(publicKey, OWNER);
                 keys.put(form, RECORD);
@@ -275,6 +282,27 @@ const Keystore = (() => {
         } catch (e) {
             unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return null;
+        }
+    }
+
+    // Whether alerts were turned on on this device for the identity kept here
+    async function loadAlerts() {
+        try {
+            return (await transact('readonly', store => store.get(ALERTS))) === true;
+        } catch (e) {
+            unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
+            return false;
+        }
+    }
+
+    // Remembers alerts on, or forgets the preference; resolves to whether storage took it
+    async function saveAlerts(on) {
+        try {
+            await transact('readwrite', store => (on === true ? store.put(true, ALERTS) : store.delete(ALERTS)));
+            return true;
+        } catch (e) {
+            unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
+            return false;
         }
     }
 
@@ -384,10 +412,14 @@ const Keystore = (() => {
         return done === true && evicted;
     }
 
-    // A session the server ended: the identity goes, the replay records stay with their owner
+    // A session the server ended: the identity and its alerts preference go, the replay records
+    // stay with their owner
     async function wipeIdentity() {
         try {
-            await transact('readwrite', store => store.delete(RECORD));
+            await transact('readwrite', store => {
+                store.delete(ALERTS);
+                return store.delete(RECORD);
+            });
         } catch (e) {
             unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
         }
@@ -411,7 +443,7 @@ const Keystore = (() => {
     }
 
     return Object.freeze({
-        keepsKeys, save, load, wipeIdentity, wipeAll, setVerified, isVerified,
+        keepsKeys, save, load, wipeIdentity, wipeAll, setVerified, isVerified, loadAlerts, saveAlerts,
         loadCounters, saveCounters, forgetCounters, pruneCounters, withCounterLock
     });
 })();

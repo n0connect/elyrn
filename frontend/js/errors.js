@@ -85,6 +85,14 @@ const Errors = (() => {
         E_IDENTITY_DELETE_UNKNOWN: e('no answer — the identity may already be deleted. reload: if you are logged out it is gone, otherwise try again'),
         W_TOO_MANY_ATTEMPTS: w('too many attempts — wait a moment'),
 
+        // content-free alerts (alerts.js)
+        W_ALERTS_DENIED: w('this browser blocks notifications for this site — allow them in its site settings, then turn alerts on'),
+        // The browser's question was dismissed without an answer
+        W_ALERTS_NOT_ALLOWED: w('notifications were not allowed — alerts stay off'),
+        W_ALERTS_REVOKED: w('notifications are no longer allowed for this site — alerts turned off'),
+        // The browser failed to ask (requestPermission threw or rejected)
+        E_ALERTS_UNAVAILABLE: e('this browser could not turn alerts on'),
+
         // conversations and messages
         E_CONVERSATIONS_NOT_LOADED: e('could not load conversations'),
         E_ROOM_DATA_CHANGED: e('room data changed unexpectedly — room hidden'),
@@ -190,7 +198,11 @@ const Errors = (() => {
         W_LIVE_STREAM_SILENT: 'W_LIVE_STREAM_SILENT',
         // The event stream failed MAX_RECONNECT_ATTEMPTS times in a row: it is not retried until
         // the tab is shown again, and polling carries the updates meanwhile (chat.js)
-        W_LIVE_STREAM_GAVE_UP: 'W_LIVE_STREAM_GAVE_UP'
+        W_LIVE_STREAM_GAVE_UP: 'W_LIVE_STREAM_GAVE_UP',
+        // No Notification API: the alerts control is not shown (alerts.js)
+        W_ALERTS_UNSUPPORTED: 'W_ALERTS_UNSUPPORTED',
+        // The browser has the API but refused to show a notification from the page (alerts.js)
+        W_ALERT_NOT_SHOWN: 'W_ALERT_NOT_SHOWN'
     });
 
     // Server error texts we recognise (compared lowercased); anything else is E_REQUEST_FAILED

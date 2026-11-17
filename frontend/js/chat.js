@@ -141,6 +141,12 @@ const Chat = (() => {
         updateTitle();
     }
 
+    // A message newer than any known in conv was found (a poll, or a sync): on a hidden page that
+    // is worth a content-free alert (Alerts.raise decides)
+    function noteNewer(conv, seq) {
+        if (listLoaded && seq > conv.lastSeq) Alerts.raise();
+    }
+
     function bump(id) {
         recent = [id].concat(recent.filter(other => other !== id));
     }
@@ -158,6 +164,7 @@ const Chat = (() => {
             pageLimit: limits.pageLimit  // 0: the server did not say, so no paging back
         };
         renderMe(me.aura);
+        await Alerts.start();
         setComposerHint(ttlDays);
         setRoomLimits(limits.maxMembers, Rooms.ttlChoices(limits.maxTTLHours));
         showHome();
@@ -172,6 +179,7 @@ const Chat = (() => {
         listGeneration++;
         // A proof of work still running belongs to this session: end it, which releases its lock
         cancelProofsOfWork();
+        Alerts.stop();
         closeEvents();
         clearTimeout(pollTimer);
         polling = false;
@@ -284,6 +292,7 @@ const Chat = (() => {
                     forget(item.id);
                     continue;
                 }
+                noteNewer(existing, item.last_seq);
                 existing.lastSeq = Math.max(existing.lastSeq, item.last_seq);
                 existing.readSeq = Math.max(existing.readSeq, item.read_seq);
                 continue;
@@ -549,6 +558,7 @@ const Chat = (() => {
         renderEmptyConversation(me.ttlDays, conv.room);
         if (first) setEarlierControl(conv.earlier, false);
         if (conv.room) checkLookalikes(conv);
+        noteNewer(conv, conv.maxSeq);
         conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
         await markRead(conv);
         return true;
@@ -1424,6 +1434,7 @@ const Chat = (() => {
             return;
         }
         if (!data || Object.keys(data).length !== 1 || !validateConversationId(data.c)) return;
+        Alerts.raise();
         const conv = conversations.get(data.c);
         if (!conv) {
             scheduleRefresh();
