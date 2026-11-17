@@ -31,6 +31,18 @@ func FileBudgetCountForTesting() int {
 	return len(fileBudgets.buckets)
 }
 
+// FileBudgetDeficitForTesting reports how many parts the budget of streamTag lacks now (refill
+// included) and whether that budget is held at all.
+func FileBudgetDeficitForTesting(streamTag string) (int, bool) {
+	fileBudgets.mu.RLock()
+	defer fileBudgets.mu.RUnlock()
+	bucket, ok := fileBudgets.buckets[streamTag]
+	if !ok {
+		return 0, false
+	}
+	return bucket.deficit(time.Now()), true
+}
+
 // RateLimiterBucketCountForTesting reports how many buckets the global limiter holds.
 func RateLimiterBucketCountForTesting() int {
 	globalRateLimiter.mu.RLock()

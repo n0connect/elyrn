@@ -18,5 +18,5 @@ func AllowKey(key string) bool {
 	if key == "" {
 		return false
 	}
-	return globalRateLimiter.getBucket(key).Allow()
+	return globalRateLimiter.take(key)
 }

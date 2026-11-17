@@ -25,14 +25,7 @@ func uploadFilePart(w http.ResponseWriter, r *http.Request, svc *chat.Service, m
 		return
 	}
 	// Every stored part also spends one part of the account's in-memory daily budget
-	budget := middleware.FileBudget(me.StreamTag)
-	if budget == nil {
-		// No budget can be held for this account now (every budget still spent and the bound
-		// reached, or unusable settings): fail closed rather than hand out a fresh budget
-		apperr.Write(w, "uploadFilePart: budget", apperr.FileBudgetSpent)
-		return
-	}
-	if err := svc.UploadFilePart(me, id, req.ID, req.Part, req.Data, budget); err != nil {
+	if err := svc.UploadFilePart(me, id, req.ID, req.Part, req.Data, middleware.FileBudgetOf(me.StreamTag)); err != nil {
 		apperr.WriteError(w, "UploadFilePart", err)
 		return
 	}
