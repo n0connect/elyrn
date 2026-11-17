@@ -46,10 +46,7 @@ func expectRole(t *testing.T, viewer *roomSide, card, want, what string) {
 
 func TestRoles_OwnerSetsAnyRoleAMemberOnlyItsOwn(t *testing.T) {
 	mux := setup(t)
-	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-	a := createRoom(t, alice, 4, 24)
-	b := joinRoom(t, bob, a.code)
-	c := joinRoom(t, carol, a.code)
+	a, b, c := roomOfThree(t, mux)
 
 	for _, card := range []string{a.member.Card, b.member.Card, c.member.Card} {
 		expectRole(t, b, card, "", "a member that never had a role")
@@ -124,10 +121,8 @@ func TestRoles_RefusalsAnswerLikeAMissingConversation(t *testing.T) {
 // account is deleted, and a member who rejoins starts with none.
 func TestRoles_GoWithTheMembership(t *testing.T) {
 	mux := setup(t)
-	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-	a := createRoom(t, alice, 4, 24)
-	b := joinRoom(t, bob, a.code)
-	c := joinRoom(t, carol, a.code)
+	a, b, c := roomOfThree(t, mux)
+	alice, bob, carol := a.u, b.u, c.u
 	expectStatus(t, a.setRole(b.member.Card, newRole(t)), http.StatusNoContent, "bob's role")
 	expectStatus(t, a.setRole(c.member.Card, newRole(t)), http.StatusNoContent, "carol's role")
 

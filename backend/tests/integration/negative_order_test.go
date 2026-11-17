@@ -373,10 +373,8 @@ func TestNegative_AccountDeletedWrongly(t *testing.T) {
 
 func TestNegative_NotesMisaddressed(t *testing.T) {
 	mux := setup(t)
-	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-	a := createRoom(t, alice, 4, 24)
-	b := joinRoom(t, bob, a.code)
-	c := joinRoom(t, carol, a.code)
+	a, b, c := roomOfThree(t, mux)
+	carol := c.u
 	noteID, note := a.note(t, b, "noaddx:x")
 	expectStatus(t, a.postNote(noteID, b.member.Card, note), http.StatusCreated, "a note for bob")
 	outsider := sideOf(t, register(t, mux), a.code)

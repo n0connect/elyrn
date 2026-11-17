@@ -200,10 +200,8 @@ func TestNegative_AnotherConversationsMessageID(t *testing.T) {
 			expectRowsUnchanged(t, before, "the resend after a join")
 		}},
 		{"a note id: the same note is waiting, any other holder is taken", func(t *testing.T, mux http.Handler) {
-			alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-			a := createRoom(t, alice, 4, 24)
-			b := joinRoom(t, bob, a.code)
-			c := joinRoom(t, carol, a.code)
+			a, b, c := roomOfThree(t, mux)
+			alice, bob := a.u, b.u
 			other := createRoom(t, alice, 2, 24)
 			otherB := joinRoom(t, bob, other.code)
 			noteID, note := a.note(t, b, "noaddx:first")
