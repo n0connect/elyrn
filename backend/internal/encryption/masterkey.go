@@ -105,22 +105,12 @@ var (
 	closed bool
 )
 
-// ActiveMasterKey returns the active master key, for inspection only (tests, its length):
-// sealing goes through SealWithActiveKey, which holds the key for the whole operation.
-func ActiveMasterKey() []byte {
-	if err := InitMasterKeys(); err != nil {
-		// Unreachable in a running server: the result is cached once and startup refuses to run
-		// on it (ValidateStartupConfig); getting here means encrypting without a key, so abort
-		panic(err)
-	}
-	return masterKeys.active
-}
-
 // withActiveKey runs fn with the active key and its id while holding the key, or answers
 // ErrClosing once Close has begun.
 func withActiveKey(fn func(id string, key []byte) error) error {
 	if err := InitMasterKeys(); err != nil {
-		// Unreachable in a running server (see ActiveMasterKey): a record must never be
+		// Unreachable in a running server: the result is cached once and startup refuses to run on
+		// it (ValidateStartupConfig). A record must never be
 		// labelled with an empty key id or sealed without a key, so abort
 		panic(err)
 	}
@@ -178,7 +168,8 @@ func OpenWithKeyID(id, text string, aad []byte) (plain string, ok bool, err erro
 
 func ActiveMasterKeyID() string {
 	if err := InitMasterKeys(); err != nil {
-		// Unreachable in a running server (see ActiveMasterKey): a record must never be
+		// Unreachable in a running server: the result is cached once and startup refuses to run on
+		// it (ValidateStartupConfig). A record must never be
 		// labelled with an empty key id, so abort
 		panic(err)
 	}

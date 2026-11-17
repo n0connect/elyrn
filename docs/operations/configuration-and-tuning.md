@@ -87,7 +87,7 @@ At startup the backend checks these keys against the database before it serves a
 | `TOR_IP` | IP | `172.29.72.11` | The tor container's fixed address on `edge` (`make onion`): the only peer nginx's onion listener accepts. Keep it inside `EDGE_SUBNET` (it was `172.29.73.11` before the split networks). |
 | `HTTP_PORT` | int | `80` | Loopback port nginx is published on (nginx listens on 8080 inside its container). |
 | `DB_HOST_PORT` | int | `5432` | Loopback port PostgreSQL is published on, in development only (`docker-compose.dev.yaml`). The backend's 8080 likewise. |
-| `BACKEND_MEM_LIMIT` | size | `512m` | The backend container's memory (no swap). Keep it at least `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` + 128 MiB; `make check-hardening` checks it. |
+| `BACKEND_MEM_LIMIT` | size | `512m` | The backend container's memory (no swap). Keep it at least the file-request pool at its bound (32 × 1.6 MB) + 128 MiB; `make check-hardening` checks it. |
 | `BACKEND_GOMEMLIMIT` | size | `448MiB` | Go runtime soft limit; keep it about 64 MiB under `BACKEND_MEM_LIMIT`. |
 | `EDGE_TRUSTED_PROXIES` | list | *empty* | Read by nginx, not the backend: your own TLS reverse proxies in front of nginx (comma-separated IPs/CIDRs, prefix 1 or more). Only a request whose TCP peer is listed may name the client (`X-Forwarded-For`) and the protocol (`X-Forwarded-Proto`, `http` or `https`). A proxy on the same host is seen from the gateway of `EDGE_SUBNET` (`172.29.72.1` by default): list exactly that address. A malformed list stops nginx at start. See [Deployment](deployment.md#4-tls-in-front-of-the-stack). |
 | `HSTS_MAX_AGE` | int | *empty* (one year in production) | Read by nginx, not the backend (`nginx-hsts.sh`, at every nginx start): the `max-age` of the `Strict-Transport-Security` header nginx sends on every answer of the clearnet listener (page, static files, API answers, its own error answers) when `APP_ENV=production` and a proxy listed in `EDGE_TRUSTED_PROXIES` said the request came over HTTPS. Empty or unset: 31536000 (one year); `0`: off; at most 63072000 (two years). Never on the onion listener, never in development. A malformed value stops nginx at start. |
@@ -186,11 +186,6 @@ variable's **name** and its rule, never its value, and the process exits with st
 | `POW_CHALLENGE_TTL_SEC` | 1-3600 |
 | `POW_DIFFICULTY` | 18-24 |
 | `INTERNAL_ID_LENGTH` | 16-24 |
-| `ARGON2_MEMORY_KIB` | 8192-1048576 (production: from 19456) |
-| `ARGON2_TIME` | 1-16 |
-| `ARGON2_PARALLELISM` | 1-255 |
-| `ARGON2_SALT_LENGTH`, `ARGON2_HASH_LENGTH` | 16-64 |
-| `ARGON2_MAX_CONCURRENT` | 1-64 |
 | `PENDING_TOKEN_TTL_SEC` | 30-3600 |
 | `PENDING_CLEANUP_INTERVAL_SEC` | 1-3600 |
 | `PENDING_ID_BYTES` | 16-64 |
@@ -232,24 +227,6 @@ backend's code runs. Every other startup failure has its own code too (`E_SELFTE
 
 ---
 
-### 7. Argon2id Key Derivation Tuning
-
-Argon2id runs only in registration phase 2: it hashes the auth key into `account_hash`. Login does not run it (the keyed lookup proves the key), so these settings size sign-up capacity only.
-
-Bounds: memory 8192-1048576 KiB (production floor 19456 KiB, the OWASP minimum), time 1-16, parallelism 1-255, salt and hash 16-64 bytes.
-
-
-| Variable | Type | Default | High-Security (Default) | Low-RAM VPS (1 GB RAM) |
-|---|---|---|---|---|
-| `ARGON2_MEMORY_KIB` | int | `65536` | 64 MiB (`65536`) | 32 MiB (`32768`) |
-| `ARGON2_TIME` | int | `3` | 3 iterations | 2 iterations |
-| `ARGON2_PARALLELISM` | int | `2` (`.env.example`; `4` when unset) | 2 threads | 1 thread |
-| `ARGON2_SALT_LENGTH` | int | `16` | 16 bytes | 16 bytes |
-| `ARGON2_HASH_LENGTH` | int | `32` | 32 bytes | 32 bytes |
-| `ARGON2_MAX_CONCURRENT` | int | `4` | 4 (256 MiB peak) | 2 (64 MiB peak) |
-
-Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT` (1-64) bounds how many run at once, so peak memory is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB`. The backend container's memory limit (`BACKEND_MEM_LIMIT`, 512 MiB) must hold that peak plus at least 128 MiB. A registration phase 2 that cannot get a slot within 3 seconds is answered with `503 Service Unavailable` (its pending registration stays redeemable) instead of growing memory without limit; logins are unaffected.
-
 ---
 
 ## Production Mode
@@ -259,7 +236,7 @@ Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT`
 | | development | production |
 |---|---|---|
 | Session cookie | `noaddx_session`, no `Secure` | `__Host-Session`, `Secure`, `HttpOnly`, `SameSite=Strict` |
-| Startup checks | ranges and whitelists | the same, plus `DB_SSL_MODE` `verify-ca`/`verify-full`, `DB_PASSWORD` >= 16 characters, `LOG_LEVEL` not `debug`, `ARGON2_MEMORY_KIB` >= 19456 |
+| Startup checks | ranges and whitelists | the same, plus `DB_SSL_MODE` `verify-ca`/`verify-full`, `DB_PASSWORD` >= 16 characters, `LOG_LEVEL` not `debug` |
 | Published ports | nginx, backend (8080) and PostgreSQL (`DB_HOST_PORT`) on loopback | nginx only ([Hardening](hardening.md#layouts)) |
 | HSTS (sent by nginx) | never | on every answer of the clearnet listener whose request a proxy listed in `EDGE_TRUSTED_PROXIES` said came over HTTPS, unless `HSTS_MAX_AGE=0` (one year by default); never on the onion listener |
 | Startup log | `Starting elyrn. backend (development)` | `Starting elyrn. backend (production)` and `Production mode validation passed` |

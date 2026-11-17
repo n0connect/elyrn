@@ -142,7 +142,6 @@ jobs:
           fuzz ./internal/utils FuzzParseRoomBlob
           fuzz ./internal/utils FuzzScrubPeerAddresses
           fuzz ./tests/auth FuzzAccountLookup
-          fuzz ./tests/auth FuzzVerifyAccountNumberHash
           fuzz ./tests/auth FuzzVerifyPendingToken
           fuzz ./tests/auth FuzzVerifyToken
           fuzz ./tests/database FuzzValidateStartupConfig

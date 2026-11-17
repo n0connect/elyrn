@@ -72,20 +72,6 @@ func TestEquivalence_HKDFSHA256(t *testing.T) {
 	}
 }
 
-// Small memory keeps this fast; odd sizes exercise the RFC 9106 rounding to 4*lanes blocks.
-func TestEquivalence_Argon2id(t *testing.T) {
-	for i := 0; i < 60; i++ {
-		lanes := uint32(1 + randomInt(t, 4))
-		memory := 8*lanes + uint32(randomInt(t, 200))
-		timeCost := uint32(1 + randomInt(t, 3))
-		keyLen := uint32(4 + randomInt(t, 61))
-		password, salt := random(t, 1+randomInt(t, 64)), random(t, 8+randomInt(t, 32))
-		a, aErr := goEngine.Argon2id(password, salt, timeCost, memory, lanes, keyLen)
-		b, bErr := sslEngine.Argon2id(password, salt, timeCost, memory, lanes, keyLen)
-		same(t, "Argon2id", a, aErr, b, bErr)
-	}
-}
-
 func TestEquivalence_AES256GCM(t *testing.T) {
 	for i := 0; i < 500; i++ {
 		key, nonce := random(t, 32), random(t, 12)

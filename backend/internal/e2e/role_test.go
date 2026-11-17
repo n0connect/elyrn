@@ -194,6 +194,33 @@ func TestRoleInterop_GoVectors(t *testing.T) {
 	}
 }
 
-// Browser → Go role vectors belong here: once frontend/js/room-crypto.js seals roles, the blobs it
-// makes for the vector room (browserCardA, browserCardB) are pinned in this file and opened by a
-// TestRoleInterop_OpensWhatTheBrowserSealed beside the test above.
+// Browser → Go role vectors (vectors-js.json, sealed by frontend/js/room-crypto.js for the vector
+// room with random nonces): role for B's browser card, a cleared role for A's. Go must open each
+// to its text, and sealing that text with the blob's own nonce must give the browser's bytes.
+const (
+	browserRoleText       = "Lider_\u011f-3" // UTF-8 4c696465725fc49f2d33
+	browserRoleNonce      = "tJJi3sQYLnzkcxiH"
+	browserRoleBlob       = "tJJi3sQYLnzkcxiHUT1Ikq1u9GCzHPwO1UAJDc0TlkomKvO5GNefiZvGmrtwtzl0VdF9-gJ8VsjbOtAWIapjIk6ODyH9SlLFy2oTRAHx9akQCCE7EruKhLRtpeHv"
+	browserRoleClearNonce = "2nU2TRAtrfD6fGwO"
+	browserRoleClearBlob  = "2nU2TRAtrfD6fGwONWU8qaLvnDSCN3DlErhLzEch__cwxr_XotZvwmgzmUyu8Q-qDCEATbd-UPU6S95uPJYs9WwWbQiYXI8jkOn-2QDxuBJgP7F5SSmzma36rDBL"
+)
+
+func TestRoleInterop_OpensWhatTheBrowserSealed(t *testing.T) {
+	v := loadVectorRoom(t)
+	for _, tc := range []struct{ card, text, nonce, blob string }{
+		{browserCardB, browserRoleText, browserRoleNonce, browserRoleBlob},
+		{browserCardA, "", browserRoleClearNonce, browserRoleClearBlob},
+	} {
+		opened, err := v.room.OpenRole(tc.card, tc.blob)
+		if err != nil || opened != tc.text {
+			t.Fatalf("OpenRole(browser %q vector) = %q, %v", tc.text, opened, err)
+		}
+		if !bytes.HasPrefix(mustDecode(t, tc.blob), mustDecode(t, tc.nonce)) {
+			t.Fatal("the browser vector blob does not start with its nonce")
+		}
+		got, err := v.room.sealRoleWithNonce(tc.card, tc.text, mustDecode(t, tc.nonce))
+		if err != nil || got != tc.blob {
+			t.Fatalf("sealRoleWithNonce(%q) with the browser's nonce = %s, %v; want the browser's bytes", tc.text, got, err)
+		}
+	}
+}

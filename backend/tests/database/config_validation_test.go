@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -38,12 +39,6 @@ func TestValidateStartupConfig_RejectsOutOfRangeValues(t *testing.T) {
 	}
 
 	cases := map[string][2]string{
-		"argon2 lanes overflow uint8":   {"ARGON2_PARALLELISM", "256"},
-		"argon2 memory over 1 GiB":      {"ARGON2_MEMORY_KIB", "2097152"},
-		"argon2 memory below floor":     {"ARGON2_MEMORY_KIB", "64"},
-		"argon2 time over bound":        {"ARGON2_TIME", "1000"},
-		"argon2 salt too short":         {"ARGON2_SALT_LENGTH", "8"},
-		"argon2 hash too short":         {"ARGON2_HASH_LENGTH", "8"},
 		"jwt min length below 32":       {"JWT_SECRET_MIN_LEN", "8"},
 		"jwt secret below 32 bytes":     {"JWT_SECRET", testutil.NewAuthKey(t)[:16]},
 		"internal id beyond column":     {"INTERNAL_ID_LENGTH", "40"},
@@ -116,6 +111,57 @@ func TestValidateStartupConfig_SessionLifetimeBounds(t *testing.T) {
 	}
 }
 
+// Every whole-seconds setting is range-checked as an integer before it becomes a duration: its
+// maximum is accepted and read exactly, and every count above it is refused, including the
+// largest count whose nanoseconds still fit int64, the first that does not, and a count that
+// would wrap time.Duration to exactly an accepted value (seconds + 2^55: 2^55 s is 2^64 ns times
+// 1953125, so the product wraps to the same nanoseconds).
+func TestValidateStartupConfig_SecondsSettingsNeverWrap(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+
+	const wrapPeriodSeconds = int64(1) << 55
+	maxUnwrapped := int64(math.MaxInt64 / int64(time.Second))
+	settings := []struct {
+		key  string
+		max  int
+		read func() time.Duration
+	}{
+		{config.EnvInviteTTLSeconds, config.MaxInviteTTLSeconds, config.GetInviteTTL},
+		{config.EnvPendingTokenTTLSeconds, config.MaxPendingTokenTTLSeconds, config.GetPendingTokenTTL},
+		{config.EnvPendingCleanupIntervalSeconds, config.MaxPendingCleanupSeconds, config.GetPendingCleanupInterval},
+		{config.EnvServerReadHeaderTimeoutSeconds, config.MaxServerReadHeaderTimeoutSeconds, config.GetServerReadHeaderTimeout},
+		{config.EnvServerReadTimeoutSeconds, config.MaxServerReadTimeoutSeconds, config.GetServerReadTimeout},
+		{config.EnvServerWriteTimeoutSeconds, config.MaxServerWriteTimeoutSeconds, config.GetServerWriteTimeout},
+		{config.EnvServerIdleTimeoutSeconds, config.MaxServerIdleTimeoutSeconds, config.GetServerIdleTimeout},
+		{config.EnvPoWChallengeTTLSeconds, config.MaxPoWChallengeTTLSeconds, config.GetPoWChallengeTTL},
+	}
+	for _, s := range settings {
+		t.Run(s.key+" accepts its maximum", func(t *testing.T) {
+			t.Setenv(s.key, strconv.Itoa(s.max))
+			if err := validate(t); err != nil {
+				t.Fatalf("%s=%d rejected: %v", s.key, s.max, err)
+			}
+			if got, want := s.read(), time.Duration(s.max)*time.Second; got != want {
+				t.Fatalf("%s=%d read as %v, want %v", s.key, s.max, got, want)
+			}
+		})
+		for _, seconds := range []int64{int64(s.max) + 1, maxUnwrapped, maxUnwrapped + 1, int64(s.max) + wrapPeriodSeconds} {
+			value := strconv.FormatInt(seconds, 10)
+			t.Run(s.key+" refuses "+value, func(t *testing.T) {
+				t.Setenv(s.key, value)
+				if got := s.read(); got != 0 {
+					t.Fatalf("%s=%s read as %v, want 0 (refused)", s.key, value, got)
+				}
+				var f *opcode.Failure
+				if err := validate(t); !errors.As(err, &f) || f.Code.ID != opcode.ConfigInvalid.ID {
+					t.Fatalf("%s=%s: %v, want %s", s.key, value, err, opcode.ConfigInvalid.ID)
+				}
+			})
+		}
+	}
+}
+
 // The file settings default to the specified sizes, accept exactly their bounds (one part up to
 // their maximum), and must nest: a file fits a conversation's quota, the quota the store, and a
 // part upload the request body bound. A refusal names the setting that breaks the rule.
@@ -185,24 +231,21 @@ func describe(settings map[string]string) string {
 	return strings.Join(pairs, ",")
 }
 
-// Production mode raises the floors: verified TLS to the database and OWASP Argon2 memory.
+// Production mode raises the floors: verified TLS to the database and a strong database password.
 func TestValidateStartupConfig_ProductionFloors(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	defer testutil.TeardownTestEnv(t)
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("DB_SSL_MODE", "verify-full")
-	t.Setenv("ARGON2_MEMORY_KIB", "65536")
-	t.Setenv("ARGON2_TIME", "3")
 	t.Setenv("DB_PASSWORD", testutil.NewAuthKey(t))
 	if err := validate(t); err != nil {
 		t.Fatalf("hardened production configuration rejected: %v", err)
 	}
 
 	for name, c := range map[string][2]string{
-		"plaintext database link":    {"DB_SSL_MODE", "disable"},
-		"unauthenticated tls":        {"DB_SSL_MODE", "require"},
-		"argon2 below owasp minimum": {"ARGON2_MEMORY_KIB", "16384"},
-		"default database password":  {"DB_PASSWORD", "postgres"},
+		"plaintext database link":   {"DB_SSL_MODE", "disable"},
+		"unauthenticated tls":       {"DB_SSL_MODE", "require"},
+		"default database password": {"DB_PASSWORD", "postgres"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(c[0], c[1])
@@ -293,12 +336,6 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 		{"POW_CHALLENGE_TTL_SEC", "leak-pow-ttl", false},
 		{"POW_DIFFICULTY", "leak-pow-difficulty", false},
 		{"INTERNAL_ID_LENGTH", "leak-id-length", false},
-		{"ARGON2_MEMORY_KIB", "leak-argon2-memory", false},
-		{"ARGON2_TIME", "leak-argon2-time", false},
-		{"ARGON2_PARALLELISM", "leak-argon2-lanes", false},
-		{"ARGON2_SALT_LENGTH", "leak-argon2-salt", false},
-		{"ARGON2_HASH_LENGTH", "leak-argon2-hash", false},
-		{"ARGON2_MAX_CONCURRENT", "leak-argon2-slots", false},
 		{"PENDING_TOKEN_TTL_SEC", "leak-pending-ttl", false},
 		{"PENDING_CLEANUP_INTERVAL_SEC", "leak-pending-cleanup", false},
 		{"PENDING_ID_BYTES", "leak-pending-id", false},
@@ -324,7 +361,6 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 			if c.production {
 				t.Setenv("APP_ENV", "production")
 				t.Setenv("DB_SSL_MODE", "verify-full")
-				t.Setenv("ARGON2_MEMORY_KIB", "65536")
 				t.Setenv("DB_PASSWORD", testutil.NewAuthKey(t))
 			}
 			t.Setenv(c.variable, c.value)

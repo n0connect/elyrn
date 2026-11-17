@@ -63,7 +63,7 @@ func deriveFromAccount(accountNumber, info string) ([]byte, error) {
 }
 
 // DeriveAuthKey returns the login secret the browser sends instead of the AccountNumber.
-// The server stores only HMAC/Argon2id of this value, so the AccountNumber itself
+// The server stores only an HMAC of this value, so the AccountNumber itself
 // (and the E2E identity derived from it) never reaches the server after signup.
 func DeriveAuthKey(accountNumber string) (string, error) {
 	key, err := deriveFromAccount(accountNumber, infoAuthKey)

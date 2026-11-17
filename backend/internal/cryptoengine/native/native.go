@@ -1,5 +1,5 @@
 // Package native is the pure-Go crypto engine: the Go standard library (crypto/*) plus
-// golang.org/x/crypto/argon2, CGO disabled. It is byte-for-byte interchangeable with the
+// golang.org/x/crypto/hkdf, CGO disabled. It is byte-for-byte interchangeable with the
 // OpenSSL engine (elyrn/internal/cryptoengine/openssl); the equivalence package proves it.
 //
 // Inputs are validated by the engine-independent layer (elyrn/internal/cryptoengine)
@@ -18,7 +18,6 @@ import (
 	"io"
 	"runtime"
 
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -60,12 +59,6 @@ func (Engine) HMACSHA256(key, data []byte) ([]byte, error) {
 // Equal compares two equal-length slices in constant time.
 func (Engine) Equal(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1
-}
-
-// Argon2id derives keyLen bytes with Argon2id v1.3 (RFC 9106). memoryKiB >= 8*lanes and
-// 1 <= lanes <= 255 are guaranteed by the caller.
-func (Engine) Argon2id(password, salt []byte, timeCost, memoryKiB, lanes, keyLen uint32) ([]byte, error) {
-	return argon2.IDKey(password, salt, timeCost, memoryKiB, uint8(lanes), keyLen), nil
 }
 
 // HKDFSHA256 derives length bytes with HKDF-SHA256 (RFC 5869).

@@ -40,7 +40,6 @@ var sentinels = []struct {
 	{chat.ErrFileBudgetSpent, FileBudgetSpent},
 	{chat.ErrIdentityUnset, IdentityUnset},
 	{chat.ErrForbidden, Forbidden},
-	{auth.ErrBusy, Argon2Busy},
 	{auth.ErrPendingStoreFull, PendingStoreFull},
 	{pow.ErrRateLimited, PoWRateLimited},
 	{pow.ErrCapacity, PoWCapacity},

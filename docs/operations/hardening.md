@@ -95,12 +95,12 @@ no effective capability. Each one was removed in turn on the dev stack and the s
 which belongs to the host user on Linux, and walk `PGDATA`, 0700 uid 70), `FOWNER` (set the
 mode of the copy after handing it over), `SETUID`/`SETGID` (the switch to uid 70).
 
-**Backend memory.** Argon2id's peak is `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` = 4 × 64 MiB
-= 256 MiB with the defaults; 256 MiB more covers the runtime, 20 database connections, up to
-4,096 event streams and the garbage collector's headroom: 512 MiB. `GOMEMLIMIT` (448 MiB,
-`BACKEND_GOMEMLIMIT`) makes the Go runtime collect harder before the container limit instead of
-being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too;
-`make check-hardening` fails when the limit is below the peak plus 128 MiB.
+**Backend memory.** The file-request pool at its bound is 32 requests of about 1.6 MB
+(`backend/internal/handlers/files.go`), 51 MB; 128 MiB more covers the runtime, 20 database
+connections, up to 4,096 event streams and the garbage collector's headroom. The default limit,
+512 MiB, leaves the rest as margin. `GOMEMLIMIT` (448 MiB, `BACKEND_GOMEMLIMIT`) makes the Go
+runtime collect harder before the container limit instead of being killed. `make check-hardening`
+fails when the limit is below the pool plus 128 MiB.
 
 ## nginx
 

@@ -21,8 +21,8 @@ onion service or a VPN, and can check the served code with `make verify-frontend
   [Installation](../getting-started/installation-and-platforms.md#linux-installation-debian-ubuntu-rhel-fedora-arch)
   says how to install them.
 - `git`, `make`, `openssl` (OpenSSL or LibreSSL) and `python3` (for `make check-hardening`).
-- Memory for Argon2id: the backend container takes 512 MiB by default
-  ([Memory sizing](../getting-started/installation-and-platforms.md#memory-sizing--vps-optimization-argon2id)).
+- Memory: the backend container takes 512 MiB by default
+  ([Memory sizing](../getting-started/installation-and-platforms.md#memory-sizing--vps-optimization)).
 - For a clearnet instance: a domain name pointing at the server and a reverse proxy on the host
   that terminates TLS (step 4). For an onion-only instance: nothing more; Tor Browser is the
   client.
@@ -196,7 +196,8 @@ What happens by itself:
 ### Upgrading to the release with member roles and file sharing
 
 1. **Back up first** (`make backup-accounts`). This release raises the schema version to 2 (the
-   `file_parts` table and `conversation_members.role`). The older server refuses to start
+   `file_parts` table and `conversation_members.role`; `users.account_hash`, a hash nothing
+   read, is dropped). The older server refuses to start
    against a database stamped 2 (`E_SCHEMA_NEWER`), so there is no starting the previous image
    again: rolling back means restoring that backup into an empty instance with the previous
    release (messages and files are never in a backup and are lost on a rollback).
@@ -204,7 +205,8 @@ What happens by itself:
    `FILE_CONVERSATION_QUOTA_BYTES`, `FILE_STORE_MAX_BYTES`, `FILE_ACCOUNT_DAILY_BYTES` (all in
    `.env.example`). HSTS moved to nginx: in production it is now sent for one year by default on
    every HTTPS answer a proxy listed in `EDGE_TRUSTED_PROXIES` vouched for (see section 4); set
-   `HSTS_MAX_AGE=0` if your own proxy sends the header.
+   `HSTS_MAX_AGE=0` if your own proxy sends the header. The `ARGON2_*` settings are no longer
+   read (registration stores no hash of the key); remove them from `.env`.
 3. **Deploy the server before any agent binary.** A new `elyrn-agent` refuses a server whose
    `/me` lacks `file_max_bytes`, which only this release sends; an older agent keeps working
    against the new server.

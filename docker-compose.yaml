@@ -115,9 +115,9 @@ services:
       - no-new-privileges:true
     # Go reaps no children; tini reaps what an interrupted healthcheck leaves behind
     init: true
-    # Argon2id peak: ARGON2_MAX_CONCURRENT x ARGON2_MEMORY_KIB = 4 x 64 MiB = 256 MiB, plus
-    # 256 MiB for the runtime, 20 database connections, event streams and the GC's headroom.
-    # Raise BACKEND_MEM_LIMIT with the Argon2id settings; make check-hardening checks the sum.
+    # The file-request pool at its bound (32 x 1.6 MB, backend/internal/handlers/files.go) plus
+    # 128 MiB for the runtime, 20 database connections, event streams and the GC's headroom;
+    # make check-hardening checks the sum. The rest of the default is margin.
     shm_size: 1m
     mem_limit: ${BACKEND_MEM_LIMIT:-512m}
     memswap_limit: ${BACKEND_MEM_LIMIT:-512m}
@@ -171,12 +171,6 @@ services:
       FILE_ACCOUNT_DAILY_BYTES: ${FILE_ACCOUNT_DAILY_BYTES:-104857600}
       POW_DIFFICULTY: ${POW_DIFFICULTY:-20}
       POW_CHALLENGE_TTL_SEC: ${POW_CHALLENGE_TTL_SEC:-300}
-      ARGON2_MEMORY_KIB: ${ARGON2_MEMORY_KIB}
-      ARGON2_TIME: ${ARGON2_TIME}
-      ARGON2_PARALLELISM: ${ARGON2_PARALLELISM}
-      ARGON2_SALT_LENGTH: ${ARGON2_SALT_LENGTH}
-      ARGON2_HASH_LENGTH: ${ARGON2_HASH_LENGTH}
-      ARGON2_MAX_CONCURRENT: ${ARGON2_MAX_CONCURRENT:-4}
       PENDING_TOKEN_TTL_SEC: ${PENDING_TOKEN_TTL_SEC}
       PENDING_CLEANUP_INTERVAL_SEC: ${PENDING_CLEANUP_INTERVAL_SEC}
       PENDING_ID_BYTES: ${PENDING_ID_BYTES}

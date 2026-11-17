@@ -18,7 +18,6 @@ All cryptographic operations strictly adhere to well-vetted, modern standards:
 | **X25519** | RFC 7748 | Elliptic-curve Diffie-Hellman key exchange |
 | **HKDF-SHA256** | RFC 5869 | Extract-and-expand key derivation |
 | **AES-256-GCM** | NIST SP 800-38D | Authenticated encryption with associated data |
-| **Argon2id** | RFC 9106 | Hash of the auth key stored at registration (not read at login, see below) |
 | **HMAC-SHA256** | RFC 2104 | Database lookups, member tagging, and proxy client keys |
 | **PKCS#8 for X25519** | RFC 8410 | Encoding private keys for WebCrypto import |
 | **Base64URL** | RFC 4648 Section 5 | URL-safe string encoding (no padding `=` characters) |
@@ -29,14 +28,14 @@ Every server-side primitive goes through one internal API (`backend/internal/cry
 
 | Engine | Build | Library |
 |---|---|---|
-| `openssl` *(default)* | `make up` / `ENGINE=openssl` (Go tag `openssl`, CGO on) | libcrypto >= 3.2: `EVP_Digest`, `EVP_Q_mac`, `EVP_KDF` (`HKDF`, `ARGON2ID`), `EVP_aes_256_gcm`, `EVP_PKEY` X25519, `RAND_bytes`, `CRYPTO_memcmp` |
-| `native` | `make up ENGINE=native` (CGO off, static binary) | Go `crypto/*` + `golang.org/x/crypto/argon2`, `hkdf` |
+| `openssl` *(default)* | `make up` / `ENGINE=openssl` (Go tag `openssl`, CGO on) | libcrypto >= 3.2: `EVP_Digest`, `EVP_Q_mac`, `EVP_KDF` (`HKDF`), `EVP_aes_256_gcm`, `EVP_PKEY` X25519, `RAND_bytes`, `CRYPTO_memcmp` |
+| `native` | `make up ENGINE=native` (CGO off, static binary) | Go `crypto/*` + `golang.org/x/crypto/hkdf` |
 
 The engines are **byte-for-byte equivalent**, and this is enforced, not assumed:
 
-1. **One validation layer.** Lengths, ranges and Argon2id parameters are checked once, before an engine is called, so both engines always see the same well-formed input and refuse the same bad input.
-2. **Known-answer tests** (FIPS 180-4, RFC 4231, RFC 5869, the Argon2 reference implementation, GCM test case 16, RFC 7748) run against whichever engine is compiled in.
-3. **Differential tests** (`make test-equivalence`) link both engines into one binary and compare every primitive on random inputs and edge cases: non-canonical and low-order X25519 points, odd Argon2id memory sizes, empty AAD and plaintext, each engine opening what the other sealed, and identical rejection of tampered ciphertext.
+1. **One validation layer.** Lengths and ranges are checked once, before an engine is called, so both engines always see the same well-formed input and refuse the same bad input.
+2. **Known-answer tests** (FIPS 180-4, RFC 4231, RFC 5869, GCM test case 16, RFC 7748) run against whichever engine is compiled in.
+3. **Differential tests** (`make test-equivalence`) link both engines into one binary and compare every primitive on random inputs and edge cases: non-canonical and low-order X25519 points, empty AAD and plaintext, each engine opening what the other sealed, and identical rejection of tampered ciphertext.
 4. **Startup self-test.** The server runs the known-answer vectors on its engine before touching keys or data and refuses to start on any mismatch; the log names the engine and library version.
 
 Accounts, stored records and messages are therefore portable between the two builds: a database written by one engine is read by the other.
@@ -68,7 +67,7 @@ The account number is a 32-byte (256-bit) cryptographically secure random value 
 
 Both Go (`backend/internal/identity`) and JavaScript (`frontend/js/crypto.js`) implement this exact derivation and are verified byte-for-byte in test suites.
 
-**How the server proves the auth key.** The server stores `account_lookup = HMAC-SHA256(pepper, auth_key)` and finds the account by it. At login it computes the lookup from the presented key, reads the account by it and compares the computed and stored lookups in constant time; an unknown key is compared against a fixed-length stand-in, so both outcomes do the same work. No Argon2id runs at login and no decoy hash is needed: `auth_key` is 256 bits of HKDF output from a 256-bit random AccountNumber, so there is no low-entropy secret for a memory-hard hash to slow down, and whether an account exists for a key can be learned only by holding the key. Registration phase 2 still computes and stores an Argon2id hash of the auth key (`account_hash`, paid for by a second proof of work); nothing reads it today, and whether to keep it is recorded as S-07 in [debt.md](../development/debt.md).
+**How the server proves the auth key.** The server stores `account_lookup = HMAC-SHA256(pepper, auth_key)` and finds the account by it. At login it computes the lookup from the presented key, reads the account by it and compares the computed and stored lookups in constant time; an unknown key is compared against a fixed-length stand-in, so both outcomes do the same work. No Argon2id runs at login and no decoy hash is needed: `auth_key` is 256 bits of HKDF output from a 256-bit random AccountNumber, so there is no low-entropy secret for a memory-hard hash to slow down, and whether an account exists for a key can be learned only by holding the key. No hash of the auth key is stored at all: registration used to keep an Argon2id hash of it (`account_hash`) that nothing read, and it was removed with its column (S-07 in [debt.md](../development/debt.md), decision D-2026-11-18-a).
 
 ### 2. Browser Key Import (WebCrypto Non-Extractable)
 
@@ -235,7 +234,7 @@ role  = nonce (12, random) || AES-256-GCM(role key, nonce, plain,
 
 ## Proof of Work (PoW) Hashcash
 
-To prevent registration floods and Denial-of-Service attacks against server-side Argon2id hashing, registration requires solving a SHA-256 hashcash puzzle in a client Web Worker (`frontend/js/pow-worker.js`). Creating an invite or a room costs one fresh puzzle as well, so mass-producing pairing tokens or rooms stays expensive even for a logged-in client.
+To prevent registration floods, registration requires solving a SHA-256 hashcash puzzle in a client Web Worker (`frontend/js/pow-worker.js`). Creating an invite or a room costs one fresh puzzle as well, so mass-producing pairing tokens or rooms stays expensive even for a logged-in client.
 
 ### Challenge Structure
 - **Challenge:** 16 random bytes (hex-encoded string, 32 chars).
@@ -283,7 +282,7 @@ The solution is valid if and only if `hash` contains at least `Difficulty` leadi
    - Client requests a **fresh, second challenge**.
    - Solves PoW #2.
    - Posts `pending_token` + PoW #2 solution.
-   - Server validates PoW #2, verifies pending token, computes Argon2id hash, and creates the account.
+   - Server validates PoW #2, verifies pending token, and creates the account.
 
 ---
 

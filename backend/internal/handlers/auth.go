@@ -136,8 +136,7 @@ func issueAccountNumber(w http.ResponseWriter, users store.UserRepository) {
 func confirmRegistration(w http.ResponseWriter, users store.UserRepository, pendingToken string) {
 	authLogger.Debug("Phase 2: Confirming account creation")
 
-	// SECURITY: RegisterHandler validated a fresh, single-use phase 2 PoW: no phase 1 replay,
-	// and every Argon2id run below is paid for
+	// SECURITY: RegisterHandler validated a fresh, single-use phase 2 PoW: no phase 1 replay
 
 	if pendingToken == "" {
 		apperr.Write(w, "RegisterHandler", apperr.PendingTokenRequired)
@@ -155,7 +154,7 @@ func confirmRegistration(w http.ResponseWriter, users store.UserRepository, pend
 	}
 	authKey, publicKey := pending.AuthKey, pending.PublicKey
 
-	// Compute lookup and hash
+	// Compute the lookup
 	lookup, err := auth.ComputeAccountLookup(authKey)
 	if err != nil {
 		apperr.WriteError(w, "ComputeAccountLookup", err)
@@ -176,8 +175,8 @@ func confirmRegistration(w http.ResponseWriter, users store.UserRepository, pend
 		return
 	}
 
-	// ErrBusy (saturated Argon2id) answers 503 (apperr.Argon2Busy), anything else 500
-	user, err := newAccountRecord(lookup, authKey, publicKey)
+	// A failure answers 500 with its cause kept for apperr
+	user, err := newAccountRecord(lookup, publicKey)
 	if err != nil {
 		apperr.WriteError(w, "newAccountRecord", err)
 		return
@@ -213,14 +212,10 @@ func confirmRegistration(w http.ResponseWriter, users store.UserRepository, pend
 	authLogger.LogResponse(http.StatusCreated, "Account created successfully")
 }
 
-// newAccountRecord builds the row for a new account: the Argon2id hash of the auth key (stored
-// only, login does not read it: S-07), an internal id and a fresh per-user key wrapped under
-// the active master key. Every failure keeps its cause (ErrBusy among them) for apperr.
-func newAccountRecord(lookup, authKey, publicKey string) (*models.User, error) {
-	accountHash, err := auth.HashAccountNumber(authKey)
-	if err != nil {
-		return nil, fmt.Errorf("HashAccountNumber: %w", err)
-	}
+// newAccountRecord builds the row for a new account: an internal id and a fresh per-user key
+// wrapped under the active master key. The auth key is proven by the keyed lookup alone; no
+// hash of it is stored (D-2026-11-18-a). Every failure keeps its cause for apperr.
+func newAccountRecord(lookup, publicKey string) (*models.User, error) {
 	// Internal UUID: the JWT subject and the key every other table refers to
 	internalUUID, err := utils.GenerateInternalID()
 	if err != nil {
@@ -239,7 +234,6 @@ func newAccountRecord(lookup, authKey, publicKey string) (*models.User, error) {
 	return &models.User{
 		UUID:          internalUUID,
 		AccountLookup: lookup,
-		AccountHash:   accountHash,
 		PublicKey:     publicKey,
 		EncryptedKey:  encryptedUserKey,
 		MasterKeyID:   encryption.ActiveMasterKeyID(),

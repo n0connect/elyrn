@@ -71,9 +71,9 @@ func TestUserTableSchema(t *testing.T) {
 		t.Error("users table should have 'account_lookup' column")
 	}
 
-	hasAccountHash := database.DB.Migrator().HasColumn(&models.User{}, "account_hash")
-	if !hasAccountHash {
-		t.Error("users table should have 'account_hash' column")
+	// D-2026-11-18-a: no hash of the auth key is stored; the keyed lookup alone proves the key
+	if database.DB.Migrator().HasColumn(&models.User{}, "account_hash") {
+		t.Error("users table must not have 'account_hash' column")
 	}
 
 	for _, column := range []string{"public_key", "session_epoch", "conv_index_enc"} {
@@ -207,10 +207,6 @@ func TestDatabaseConstraints(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ComputeAccountLookup: %v", err)
 		}
-		hash, err := auth.HashAccountNumber(authKey)
-		if err != nil {
-			t.Fatalf("HashAccountNumber: %v", err)
-		}
 		userKey, err := encryption.GenerateUserAESKey()
 		if err != nil {
 			t.Fatalf("GenerateUserAESKey: %v", err)
@@ -222,7 +218,6 @@ func TestDatabaseConstraints(t *testing.T) {
 		return map[string]interface{}{
 			"uuid":           testutil.NewInternalID(t),
 			"account_lookup": lookup,
-			"account_hash":   hash,
 			"public_key":     publicKey,
 			"encrypted_key":  wrapped,
 			"master_key_id":  encryption.ActiveMasterKeyID(),
@@ -235,7 +230,7 @@ func TestDatabaseConstraints(t *testing.T) {
 	}
 	database.DB.Where("uuid = ?", complete["uuid"]).Delete(&models.User{})
 
-	for _, column := range []string{"uuid", "account_lookup", "account_hash", "encrypted_key"} {
+	for _, column := range []string{"uuid", "account_lookup", "encrypted_key"} {
 		row := realRow()
 		row[column] = nil
 		if err := database.DB.Model(&models.User{}).Create(row).Error; err == nil {

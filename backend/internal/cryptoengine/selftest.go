@@ -22,8 +22,8 @@ func mustHex(s string) []byte {
 
 // SelfTest runs known-answer tests for every primitive on the active engine. The server
 // calls it at startup and refuses to run on a mismatch (a broken or swapped library must
-// never touch user data). Vectors: FIPS 180-4, RFC 4231, RFC 5869, the Argon2 reference
-// implementation, GCM spec test case 16, RFC 7748 §6.1.
+// never touch user data). Vectors: FIPS 180-4, RFC 4231, RFC 5869, GCM spec test case 16,
+// RFC 7748 §6.1.
 func SelfTest() error {
 	if err := active.Check(); err != nil {
 		return err
@@ -41,9 +41,6 @@ func SelfTest() error {
 		{"HKDF-SHA256", func() ([]byte, error) {
 			return HKDFSHA256(bytes.Repeat([]byte{0x0b}, 22), mustHex("000102030405060708090a0b0c"), mustHex("f0f1f2f3f4f5f6f7f8f9"), 42)
 		}, "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"},
-		{"Argon2id", func() ([]byte, error) {
-			return Argon2idKey(bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 16), 3, 32, 4, 32)
-		}, "03aab965c12001c9d7d0d2de33192c0494b684bb148196d73c1df1acaf6d0c2e"},
 		{"AES-256-GCM", func() ([]byte, error) {
 			return SealAES256GCM(mustHex("feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308"),
 				mustHex("cafebabefacedbaddecaf888"),

@@ -35,19 +35,6 @@ const (
 	maxMessageTTLDays              = 365
 	defaultRoomMaxMembers          = 16
 	defaultRoomMaxTTLHours         = 168 // A room lives at most a week by default
-	// Argon2id parameters follow OWASP recommendations (2023)
-	// Memory: 64MiB (65536 KiB) - recommended for password hashing
-	// Time: 3 iterations - balance between security and performance
-	// Parallelism: 4 - utilize multi-core CPUs effectively
-	// Note: These defaults are tuned for production with 100-200 concurrent users
-	// High-traffic scenarios (1000+ concurrent) may need adjustment or queueing
-	defaultArgon2MemoryKiB   = 65536
-	defaultArgon2Time        = 3
-	defaultArgon2Parallelism = 4 // Increased from 2 for better CPU utilization
-	defaultArgon2SaltLength  = 16
-	defaultArgon2HashLength  = 32
-	// At most this many Argon2id computations at once (each takes ARGON2_MEMORY_KIB)
-	defaultArgon2MaxConcurrent     = 4
 	defaultPendingTokenTTLSeconds  = 300
 	defaultPendingCleanupSeconds   = 60
 	defaultPendingIDBytes          = 16
@@ -67,22 +54,6 @@ const (
 	defaultPoWChallengeTTLSeconds  = 300 // A challenge must be solved and used within 5 minutes
 	MaxPoWChallengeTTLSeconds      = 3600
 	minPepperBytes                 = 32
-)
-
-// Argon2id bounds (RULES.md §5.1 range checks). They apply to configuration at startup and
-// to every stored hash before verification, so no record can request unbounded work.
-const (
-	MinArgon2MemoryKiB           = 8192    // 8 MiB: test floor; production requires ProductionMinArgon2MemoryKiB
-	MaxArgon2MemoryKiB           = 1 << 20 // 1 GiB
-	MinArgon2Time                = 1
-	MaxArgon2Time                = 16
-	MinArgon2Parallelism         = 1
-	MaxArgon2Parallelism         = 255 // argon2 takes uint8 lanes
-	MinArgon2SaltBytes           = 16
-	MaxArgon2SaltBytes           = 64
-	MinArgon2HashBytes           = 16
-	MaxArgon2HashBytes           = 64
-	ProductionMinArgon2MemoryKiB = 19456 // OWASP minimum for Argon2id (19 MiB, t=2)
 )
 
 // Setting names: the environment variable each getter reads, also the name startup validation
@@ -117,12 +88,6 @@ const (
 	EnvDBPassword                      = "DB_PASSWORD"
 	EnvDBName                          = "DB_NAME"
 	EnvDBSSLMode                       = "DB_SSL_MODE"
-	EnvArgon2MemoryKiB                 = "ARGON2_MEMORY_KIB"
-	EnvArgon2Time                      = "ARGON2_TIME"
-	EnvArgon2Parallelism               = "ARGON2_PARALLELISM"
-	EnvArgon2MaxConcurrent             = "ARGON2_MAX_CONCURRENT"
-	EnvArgon2SaltLength                = "ARGON2_SALT_LENGTH"
-	EnvArgon2HashLength                = "ARGON2_HASH_LENGTH"
 	EnvAccountLookupPepper             = "ACCOUNT_LOOKUP_PEPPER"
 	EnvPendingTokenTTLSeconds          = "PENDING_TOKEN_TTL_SEC"
 	EnvPendingCleanupIntervalSeconds   = "PENDING_CLEANUP_INTERVAL_SEC"
@@ -162,8 +127,6 @@ const (
 	// MinInternalIDLength and MaxInternalIDLength: users.uuid is size:24
 	MinInternalIDLength = 16
 	MaxInternalIDLength = 24
-
-	MaxArgon2ConcurrentBound = 64
 
 	MinPendingTokenTTLSeconds = 30
 	MaxPendingTokenTTLSeconds = 3600
@@ -208,11 +171,12 @@ func getEnvIntDefault(key string, defaultValue int) int {
 	return parsed
 }
 
-// getEnvSecondsDefault reads a whole-seconds setting as a duration: anything that is not a
-// positive integer reads as 0 (fails its bound).
-func getEnvSecondsDefault(key string, defaultSeconds int) time.Duration {
+// getEnvSecondsDefault reads a whole-seconds setting as a duration. The count is range-checked
+// as an integer first: anything that is not a positive integer up to maxSeconds reads as 0
+// (refused at startup), so a huge count can never wrap time.Duration into an accepted value.
+func getEnvSecondsDefault(key string, defaultSeconds, maxSeconds int) time.Duration {
 	seconds := getEnvIntDefault(key, defaultSeconds)
-	if seconds <= 0 {
+	if seconds <= 0 || seconds > maxSeconds {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second
@@ -280,7 +244,7 @@ func GetMaxJSONDepth() int {
 
 // GetInviteTTL returns how long an unredeemed invite stays valid
 func GetInviteTTL() time.Duration {
-	return getEnvSecondsDefault(EnvInviteTTLSeconds, defaultInviteTTLSeconds)
+	return getEnvSecondsDefault(EnvInviteTTLSeconds, defaultInviteTTLSeconds, MaxInviteTTLSeconds)
 }
 
 // GetMaxActiveInvites returns the cap on unredeemed invites per user
@@ -494,36 +458,6 @@ func GetDBSSLMode() string {
 // ENCRYPTION CONFIGURATION
 // ========================================
 
-// GetArgon2MemoryKiB returns Argon2 memory in KiB
-func GetArgon2MemoryKiB() int {
-	return getEnvIntDefault(EnvArgon2MemoryKiB, defaultArgon2MemoryKiB)
-}
-
-// GetArgon2Time returns Argon2 time cost
-func GetArgon2Time() int {
-	return getEnvIntDefault(EnvArgon2Time, defaultArgon2Time)
-}
-
-// GetArgon2Parallelism returns Argon2 parallelism
-func GetArgon2Parallelism() int {
-	return getEnvIntDefault(EnvArgon2Parallelism, defaultArgon2Parallelism)
-}
-
-// GetArgon2MaxConcurrent returns how many Argon2id computations may run at once
-func GetArgon2MaxConcurrent() int {
-	return getEnvIntDefault(EnvArgon2MaxConcurrent, defaultArgon2MaxConcurrent)
-}
-
-// GetArgon2SaltLength returns Argon2 salt length in bytes
-func GetArgon2SaltLength() int {
-	return getEnvIntDefault(EnvArgon2SaltLength, defaultArgon2SaltLength)
-}
-
-// GetArgon2HashLength returns Argon2 hash length in bytes
-func GetArgon2HashLength() int {
-	return getEnvIntDefault(EnvArgon2HashLength, defaultArgon2HashLength)
-}
-
 // MinPepperBytes returns the shortest account-lookup pepper accepted, in bytes.
 func MinPepperBytes() int {
 	return minPepperBytes
@@ -551,12 +485,12 @@ func GetAccountLookupPepper() []byte {
 
 // GetPendingTokenTTL returns pending token TTL
 func GetPendingTokenTTL() time.Duration {
-	return getEnvSecondsDefault(EnvPendingTokenTTLSeconds, defaultPendingTokenTTLSeconds)
+	return getEnvSecondsDefault(EnvPendingTokenTTLSeconds, defaultPendingTokenTTLSeconds, MaxPendingTokenTTLSeconds)
 }
 
 // GetPendingCleanupInterval returns pending store cleanup interval
 func GetPendingCleanupInterval() time.Duration {
-	return getEnvSecondsDefault(EnvPendingCleanupIntervalSeconds, defaultPendingCleanupSeconds)
+	return getEnvSecondsDefault(EnvPendingCleanupIntervalSeconds, defaultPendingCleanupSeconds, MaxPendingCleanupSeconds)
 }
 
 // GetPendingIDBytes returns pending ID length in bytes
@@ -584,22 +518,22 @@ func GetBackendPort() string {
 
 // GetServerReadHeaderTimeout returns read header timeout
 func GetServerReadHeaderTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerReadHeaderTimeoutSeconds, defaultServerReadHeaderTimeout)
+	return getEnvSecondsDefault(EnvServerReadHeaderTimeoutSeconds, defaultServerReadHeaderTimeout, MaxServerReadHeaderTimeoutSeconds)
 }
 
 // GetServerReadTimeout returns read timeout
 func GetServerReadTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerReadTimeoutSeconds, defaultServerReadTimeout)
+	return getEnvSecondsDefault(EnvServerReadTimeoutSeconds, defaultServerReadTimeout, MaxServerReadTimeoutSeconds)
 }
 
 // GetServerWriteTimeout returns write timeout
 func GetServerWriteTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerWriteTimeoutSeconds, defaultServerWriteTimeout)
+	return getEnvSecondsDefault(EnvServerWriteTimeoutSeconds, defaultServerWriteTimeout, MaxServerWriteTimeoutSeconds)
 }
 
 // GetServerIdleTimeout returns idle timeout
 func GetServerIdleTimeout() time.Duration {
-	return getEnvSecondsDefault(EnvServerIdleTimeoutSeconds, defaultServerIdleTimeout)
+	return getEnvSecondsDefault(EnvServerIdleTimeoutSeconds, defaultServerIdleTimeout, MaxServerIdleTimeoutSeconds)
 }
 
 // GetServerMaxHeaderBytes returns max header bytes
@@ -618,11 +552,7 @@ func GetPoWDifficulty() int {
 
 // GetPoWChallengeTTL returns how long an issued PoW challenge stays valid
 func GetPoWChallengeTTL() time.Duration {
-	seconds := getEnvIntDefault(EnvPoWChallengeTTLSeconds, defaultPoWChallengeTTLSeconds)
-	if seconds <= 0 || seconds > MaxPoWChallengeTTLSeconds {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvPoWChallengeTTLSeconds, defaultPoWChallengeTTLSeconds, MaxPoWChallengeTTLSeconds)
 }
 
 // DefaultPoWDifficulty returns the default PoW difficulty level

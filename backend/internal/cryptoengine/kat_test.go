@@ -13,7 +13,7 @@ import (
 // (native by default, OpenSSL with -tags openssl). Every expected value comes from a
 // published specification or an independent reference implementation:
 //   SHA-256: FIPS 180-4 examples · HMAC: RFC 4231 · HKDF: RFC 5869
-//   Argon2id: the phc-winner-argon2 reference CLI · AES-256-GCM: GCM spec test case 16
+//   AES-256-GCM: GCM spec test case 16
 //   X25519: RFC 7748 §5.2 and §6.1
 
 func unhex(t *testing.T, s string) []byte {
@@ -82,20 +82,6 @@ func TestKAT_HKDFSHA256(t *testing.T) {
 		}
 		expectHex(t, "HKDF-SHA256 RFC 5869", got, c.want)
 	}
-}
-
-func TestKAT_Argon2id(t *testing.T) {
-	got, err := cryptoengine.Argon2idKey([]byte("password"), []byte("somesalt"), 2, 1<<16, 1, 32)
-	if err != nil {
-		t.Fatalf("Argon2idKey: %v", err)
-	}
-	expectHex(t, "Argon2id t=2 m=64MiB p=1", got, "09316115d5cf24ed5a15a31a3ba326e5cf32edc24702987c02b6566f61913cf7")
-
-	got, err = cryptoengine.Argon2idKey(bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 16), 3, 32, 4, 32)
-	if err != nil {
-		t.Fatalf("Argon2idKey (4 lanes): %v", err)
-	}
-	expectHex(t, "Argon2id t=3 m=32KiB p=4", got, "03aab965c12001c9d7d0d2de33192c0494b684bb148196d73c1df1acaf6d0c2e")
 }
 
 func TestKAT_AES256GCM(t *testing.T) {
@@ -168,13 +154,6 @@ func TestInputValidation(t *testing.T) {
 	_, checks["HKDF empty ikm"] = cryptoengine.HKDFSHA256(nil, nil, nil, 32)
 	_, checks["HKDF length 0"] = cryptoengine.HKDFSHA256(key, nil, nil, 0)
 	_, checks["HKDF length too long"] = cryptoengine.HKDFSHA256(key, nil, nil, 255*32+1)
-	_, checks["Argon2 empty password"] = cryptoengine.Argon2idKey(nil, key, 1, 64, 1, 32)
-	_, checks["Argon2 empty salt"] = cryptoengine.Argon2idKey(key, nil, 1, 64, 1, 32)
-	_, checks["Argon2 zero lanes"] = cryptoengine.Argon2idKey(key, key, 1, 64, 0, 32)
-	_, checks["Argon2 256 lanes"] = cryptoengine.Argon2idKey(key, key, 1, 1<<16, 256, 32)
-	_, checks["Argon2 memory below 8 per lane"] = cryptoengine.Argon2idKey(key, key, 1, 31, 4, 32)
-	_, checks["Argon2 zero time"] = cryptoengine.Argon2idKey(key, key, 0, 64, 1, 32)
-	_, checks["Argon2 short output"] = cryptoengine.Argon2idKey(key, key, 1, 64, 1, 3)
 	_, checks["GCM short key"] = cryptoengine.EncryptAES256GCM(key[:16], []byte("x"), nil)
 	_, checks["GCM short nonce"] = cryptoengine.SealAES256GCM(key, key[:8], []byte("x"), nil)
 	_, checks["GCM truncated input"] = cryptoengine.DecryptAES256GCM(key, key[:27], nil)

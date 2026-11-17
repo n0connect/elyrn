@@ -46,7 +46,7 @@ an expired session from none). Three shapes reach the wire:
 | 429 | `Too many requests` | `E_RATE_LIMITED`, `E_POW_RATE_LIMITED`, `E_SUBSCRIBER_LIMIT`, `E_LIMIT_REACHED` | any rate limit, stream share or per-account cap |
 | 429 | `File budget spent` (JSON) | `E_FILE_BUDGET_SPENT` | the account stored `FILE_ACCOUNT_DAILY_BYTES` of file parts within the last day |
 | 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED`, `E_LOGIN_LOOKUP_FAILED` (JSON) | a server fault; on login, a lookup the server could not compute |
-| 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_ARGON2_BUSY`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED`, `E_FILE_REQUESTS_BUSY` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full (for files: 32 file part requests handled at once); retry later |
+| 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED`, `E_FILE_REQUESTS_BUSY` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full (for files: 32 file part requests handled at once); retry later |
 | 507 | `File quota reached` (JSON) | `E_FILE_QUOTA_REACHED` | the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of file parts |
 | 507 | `File store full` (JSON) | `E_FILE_STORE_FULL` | the server holds `FILE_STORE_MAX_BYTES` of file parts, or has not counted them yet |
 
@@ -84,7 +84,7 @@ peers only (`200` or `503 E_HEALTH_UNAVAILABLE`, no body; any other peer gets `4
 - **Session Delivery:** The only credential is an HttpOnly, `SameSite=Strict` cookie: `noaddx_session` in development (a name kept from the project's former name, so sessions survived the rename), `__Host-Session` (Secure, host-only) in production. The token never appears in a response body and the `Authorization` header is ignored, so page script can never read or replay it.
 - **Same-Origin Writes:** `POST`/`PUT`/`PATCH`/`DELETE` requests are refused with `403` unless the browser marks them `Sec-Fetch-Site: same-origin` (or, without that header, sends an `Origin` listed exactly in `ALLOWED_ORIGINS`). Clients that send neither header are not browsers and hold no ambient cookies.
 - **Sliding Expiration:** Sessions expire after `JWT_EXPIRATION_MINUTES` (default 43200 minutes, 30 days; accepted range 1 to 525600 minutes, 365 days). A session used after half its lifetime has passed is re-issued as a fresh cookie, so one used at least once every half-lifetime (15 days by default) does not expire; logout and account deletion end it at once.
-- **Saturation and outages:** phase 2 of `POST /api/v2/register` answers `503 Service Unavailable` when every Argon2id slot (`ARGON2_MAX_CONCURRENT`) stays busy for 3 seconds. `POST /api/v2/login` runs no Argon2id and is never refused for that reason; it answers `503` while the database is unreachable, so an outage is never reported as an unknown account. When the server cannot compute the account lookup from a well-formed key (a missing or short pepper, or a crypto engine failure), login answers `500 Internal server error` (`E_LOGIN_LOOKUP_FAILED`), never `401`: the lookup is computed from the key alone before any account is read, so it fails alike for every key, and `401` always means the key matches no usable account. The `503` and `500` answers do not depend on whether the account exists; retry with backoff. Every other route answers a database outage (unreachable, restarting, out of connections, or a statement past its timeout) the same way, `503 Service Unavailable`, the session check included, so an outage never logs a client out.
+- **Saturation and outages:** `POST /api/v2/login` answers `503` while the database is unreachable, so an outage is never reported as an unknown account. When the server cannot compute the account lookup from a well-formed key (a missing or short pepper, or a crypto engine failure), login answers `500 Internal server error` (`E_LOGIN_LOOKUP_FAILED`), never `401`: the lookup is computed from the key alone before any account is read, so it fails alike for every key, and `401` always means the key matches no usable account. The `503` and `500` answers do not depend on whether the account exists; retry with backoff. Every other route answers a database outage (unreachable, restarting, out of connections, or a statement past its timeout) the same way, `503 Service Unavailable`, the session check included, so an outage never logs a client out.
 - **Global Invalidation:** `POST /api/v2/logout` with a live session increments the user's `session_epoch`, instantly invalidating every JWT issued for that account on every device. A token revoked earlier cannot trigger this (it no longer authenticates); if revocation fails the endpoint answers `500` instead of reporting success. The cookie is cleared in every case.
 
 ---
@@ -147,7 +147,7 @@ unexpired challenges is full.
 ---
 
 ### `POST /api/v2/register`
-Two-phase registration process to protect against bot accounts and Argon2id DoS.
+Two-phase registration process to protect against bot accounts.
 
 #### Phase 1: Request Account Number Preview
 - **Request Body:**
@@ -207,7 +207,7 @@ Requires solving a fresh, single-use PoW challenge.
 ### `POST /api/v2/login`
 Authenticates a user via their derived `auth_key`. The `AccountNumber` is **never** sent.
 
-The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_key)`, finds the account by it and compares the two in constant time. No Argon2id runs at login, so a flood of registrations cannot lock existing accounts out. Answers: `200` (logged in), `400` (body is not JSON), `401` (no account for this key, whatever the reason), `429` (per-client or per-account rate limit), `500` (the lookup could not be computed, `E_LOGIN_LOOKUP_FAILED`), `503` (database unreachable).
+The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_key)`, finds the account by it and compares the two in constant time. No slow hash runs at login (and none at registration either), so a flood of registrations cannot lock existing accounts out. Answers: `200` (logged in), `400` (body is not JSON), `401` (no account for this key, whatever the reason), `429` (per-client or per-account rate limit), `500` (the lookup could not be computed, `E_LOGIN_LOOKUP_FAILED`), `503` (database unreachable).
 
 - **Request Body:**
 ```json

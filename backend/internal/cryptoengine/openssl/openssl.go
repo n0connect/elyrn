@@ -5,10 +5,11 @@ package openssl
 /*
 #cgo pkg-config: libcrypto
 #include <openssl/opensslv.h>
-// NX_MIN_OPENSSL is OpenSSL 3.2.0, the first release with the ARGON2ID KDF
+// NX_MIN_OPENSSL is OpenSSL 3.2.0, the release this engine is built and verified against
+// (its equivalence and known-answer tests); lowering it is a decision of its own
 #define NX_MIN_OPENSSL 0x30200000L
 #if OPENSSL_VERSION_NUMBER < NX_MIN_OPENSSL
-#error "elyrn: the OpenSSL engine needs OpenSSL >= 3.2 (EVP_KDF ARGON2ID)"
+#error "elyrn: the OpenSSL engine needs OpenSSL >= 3.2"
 #endif
 #include <openssl/core_names.h>
 #include <openssl/crypto.h>
@@ -17,7 +18,6 @@ package openssl
 #include <openssl/kdf.h>
 #include <openssl/params.h>
 #include <openssl/rand.h>
-#include <openssl/thread.h>
 #include <stdint.h>
 
 // Sizes fixed by the algorithms, in bytes; the Go side reads these same macros, and
@@ -74,35 +74,6 @@ static int nx_hkdf_sha256(const unsigned char *ikm, size_t ikmlen, const unsigne
 		*p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO, (void *)info, infolen);
 	}
 	*p = OSSL_PARAM_construct_end();
-	int ok = EVP_KDF_derive(ctx, out, outlen, params) == 1;
-	EVP_KDF_CTX_free(ctx);
-	return nx_done(ok);
-}
-
-static int nx_argon2id(const unsigned char *pwd, size_t pwdlen, const unsigned char *salt, size_t saltlen,
-                       uint32_t iter, uint32_t memcost, uint32_t lanes, uint32_t threads,
-                       unsigned char *out, uint32_t outlen) {
-	EVP_KDF *kdf = EVP_KDF_fetch(NULL, "ARGON2ID", NULL);
-	if (kdf == NULL) {
-		return nx_done(0);
-	}
-	EVP_KDF_CTX *ctx = EVP_KDF_CTX_new(kdf);
-	EVP_KDF_free(kdf);
-	if (ctx == NULL) {
-		return nx_done(0);
-	}
-	uint32_t version = 0x13; // Argon2 version 1.3 (RFC 9106 §3.1)
-	OSSL_PARAM params[] = {
-		OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_PASSWORD, (void *)pwd, pwdlen),
-		OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT, (void *)salt, saltlen),
-		OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ITER, &iter),
-		OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_MEMCOST, &memcost),
-		OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_LANES, &lanes),
-		OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_THREADS, &threads),
-		OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_ARGON2_VERSION, &version),
-		OSSL_PARAM_construct_uint32(OSSL_KDF_PARAM_SIZE, &outlen),
-		OSSL_PARAM_construct_end(),
-	};
 	int ok = EVP_KDF_derive(ctx, out, outlen, params) == 1;
 	EVP_KDF_CTX_free(ctx);
 	return nx_done(ok);
@@ -224,32 +195,16 @@ static unsigned long nx_version_num(void) {
 static const char *nx_version(void) {
 	return OpenSSL_version(OPENSSL_VERSION);
 }
-
-// Lets Argon2id compute its lanes in parallel; returns how many threads are allowed
-static uint64_t nx_enable_threads(uint64_t wanted) {
-	if (OSSL_set_max_threads(NULL, wanted) != 1) {
-		return 1; // threading refused: Argon2id runs on the calling thread alone
-	}
-	return OSSL_get_max_threads(NULL);
-}
 */
 import "C"
 
 import (
 	"errors"
-	"sync"
 	"unsafe"
 )
 
-// minVersion is OpenSSL 3.2.0: the first release with the ARGON2ID KDF.
+// minVersion is OpenSSL 3.2.0 (NX_MIN_OPENSSL).
 const minVersion = C.NX_MIN_OPENSSL
-
-// maxArgon2Threads bounds the worker threads OpenSSL may start for one Argon2id call;
-// minArgon2Threads is the calling thread alone.
-const (
-	maxArgon2Threads = 8
-	minArgon2Threads = 1
-)
 
 // Algorithm sizes in bytes, from the C macros above (one home for both sides of cgo).
 const (
@@ -262,8 +217,6 @@ const (
 var (
 	errFailed     = errors.New("openssl: operation failed")
 	errOldOpenSSL = errors.New("openssl: the linked libcrypto is older than 3.2.0")
-	threadsOnce   sync.Once
-	argon2Threads uint32 = minArgon2Threads
 )
 
 // Engine implements the primitives with OpenSSL's EVP interfaces (libcrypto >= 3.2).
@@ -334,28 +287,6 @@ func (Engine) Equal(a, b []byte) bool {
 		return true
 	}
 	return C.nx_equal(ptr(a), ptr(b), C.size_t(len(a))) == 1
-}
-
-// Argon2id derives keyLen bytes with the ARGON2ID KDF (v1.3, RFC 9106).
-func (Engine) Argon2id(password, salt []byte, timeCost, memoryKiB, lanes, keyLen uint32) ([]byte, error) {
-	threadsOnce.Do(func() {
-		argon2Threads = uint32(C.nx_enable_threads(maxArgon2Threads))
-		if argon2Threads == 0 {
-			argon2Threads = minArgon2Threads
-		}
-	})
-	threads := lanes
-	if threads > argon2Threads {
-		threads = argon2Threads
-	}
-	out := make([]byte, keyLen)
-	ok := C.nx_argon2id(ptr(password), C.size_t(len(password)), ptr(salt), C.size_t(len(salt)),
-		C.uint32_t(timeCost), C.uint32_t(memoryKiB), C.uint32_t(lanes), C.uint32_t(threads),
-		ptr(out), C.uint32_t(keyLen))
-	if err := done(ok); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // HKDFSHA256 derives length bytes with the HKDF KDF over SHA-256 (RFC 5869).

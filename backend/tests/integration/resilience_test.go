@@ -309,7 +309,7 @@ func TestLogin_LookupFailureIsAServerFaultForEveryKey(t *testing.T) {
 }
 
 // The account number is shown in phase 1 and saved by the user before phase 2 creates the
-// account. A phase 2 that fails for a passing reason (database outage, saturated Argon2id)
+// account. A phase 2 that fails for a passing reason (a database outage)
 // must leave it redeemable, or the number the user just saved is silently worthless.
 func TestRegister_PassingFailureKeepsTheAccountNumber(t *testing.T) {
 	mux := setup(t)
@@ -327,11 +327,6 @@ func TestRegister_PassingFailureKeepsTheAccountNumber(t *testing.T) {
 		t.Fatalf("phase 2 during an outage: status %d, want 5xx", rr.Code)
 	}
 	restore()
-
-	release := auth.HoldArgon2SlotsForTesting()
-	rr = c.do("POST", "/api/v2/register", confirm())
-	release()
-	expectStatus(t, rr, http.StatusServiceUnavailable, "phase 2 while saturated")
 
 	expectStatus(t, c.do("POST", "/api/v2/register", confirm()), http.StatusCreated, "phase 2 retried")
 	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: registeredAuthKey(t, phase1.AccountNumber)}),
