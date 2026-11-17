@@ -180,6 +180,7 @@ const Chat = (() => {
         // A proof of work still running belongs to this session: end it, which releases its lock
         cancelProofsOfWork();
         Alerts.stop();
+        RoleControl.reset();
         closeEvents();
         clearTimeout(pollTimer);
         polling = false;
@@ -678,7 +679,7 @@ const Chat = (() => {
             // Off the roster, yet a lookalike all the same: its name is compared too
             conv.room.outsiders.set(plain.sender, { publicKey: plain.sender, aura: aura });
         }
-        return Object.assign(message, { from: aura, left: !entry });
+        return Object.assign(message, { from: aura, left: !entry, role: entry ? entry.role : '' });
     }
 
     // Judges an authenticated message's counter on a ledger (counters.js), the same way for pairs
@@ -1073,6 +1074,7 @@ const Chat = (() => {
         checkLookalikes(conv);
         if (activeId === conv.id) {
             renderRoomHeader(conv.room);
+            RoleControl.markBubbles(new Map(conv.room.roster.map(entry => [entry.publicKey, entry.role])));
         }
         return true;
     }
@@ -1099,13 +1101,30 @@ const Chat = (() => {
     async function refreshRoomPanels(conv) {
         if (!conv.room.roster || activeId !== conv.id) return;
         if (document.getElementById('membersPanel').style.display !== 'none') {
-            renderMembers(conv.room.roster, conv.room.skipped, conv.room.requested, conv.room.lookalikes,
-                entry => befriend(conv, entry));
+            renderMemberList(conv);
             renderRoomSafety(await Rooms.safetyNumber(conv));
         }
         const notes = conv.room.notes > 0 ? await Rooms.notes(api, conv) : [];
         if (activeId !== conv.id) return;
         renderNotes(notes, note => acceptNote(conv, note), note => ignoreNote(conv, note));
+    }
+
+    function renderMemberList(conv) {
+        if (activeId !== conv.id || !conv.room.roster) return;
+        renderMembers({
+            entries: conv.room.roster, skipped: conv.room.skipped, requested: conv.room.requested,
+            lookalikes: conv.room.lookalikes, onBefriend: entry => befriend(conv, entry),
+            roleControl: entry => RoleControl.control({
+                room: conv.room, entry, save: text => saveRole(conv, entry, text), rerender: () => renderMemberList(conv)
+            })
+        });
+    }
+
+    // Stores a member's role (RoleControl); a stored one shows at once, before the conv event
+    async function saveRole(conv, entry, text) {
+        const saved = await RoleControl.save({ api, conv, entry, text });
+        if (saved && me) await refreshActiveRoom(conv);
+        return saved;
     }
 
     async function joinRoom(code) {

@@ -169,3 +169,33 @@ test('messages and notes: a served blob opens to its genuine plaintext or not at
         }
     });
 });
+
+test('roles: any text up to the byte bound round-trips; a mutated role, or one moved to another card or room, never opens', async () => {
+    const r0 = rng(SEED + 6);
+    const { room, members } = await newRoom(r0);
+    const other = await newRoom(r0);
+    const [a, b] = members;
+    const encoder = new TextEncoder();
+    await fuzz(SEED + 6, SEALED_ITERATIONS, async (r) => {
+        const text = r.string(r.int(0, R.MAX_ROLE_BYTES));
+        const fits = encoder.encode(text).length <= R.MAX_ROLE_BYTES && text === new TextDecoder().decode(encoder.encode(text));
+        const sealed = await attempt(() => R.sealRole({ room, card: a.member.card, text }));
+        // Bytes only: the text rule is validation.js's; a lone surrogate is not text and never seals as itself
+        if (!fits) {
+            if (sealed.ok) assert.notEqual(await R.openRole({ room, card: a.member.card, role: sealed.value }), text);
+            return;
+        }
+        assert.ok(sealed.ok, 'a role within the bound was refused');
+        const blob = sealed.value;
+        assert.equal(blob.length, Math.ceil(R.ROLE_BYTES * 4 / 3));
+        assert.equal(await R.openRole({ room, card: a.member.card, role: blob }), text);
+        assert.equal((await attempt(() => R.openRole({ room, card: b.member.card, role: blob }))).ok, false, 'moved to another card');
+        assert.equal((await attempt(() => R.openRole({ room: other.room, card: a.member.card, role: blob }))).ok, false, 'opened in another room');
+        const mutated = mutateBlob(r, blob);
+        const back = await attempt(() => R.openRole({ room, card: a.member.card, role: mutated }));
+        if (back.ok) {
+            assert.equal(mutated, blob, 'a mutated role opened');
+            assert.equal(back.value, text);
+        }
+    });
+});

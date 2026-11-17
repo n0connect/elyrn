@@ -651,6 +651,8 @@ function createMessageElement(message) {
         sender.className = 'msg-sender';
         sender.dataset.sender = message.sender;
         appendAura(sender, message.from);
+        const role = RoleControl.tag(message.role);
+        if (role) sender.appendChild(role);
         if (message.left) {
             const left = document.createElement('span');
             left.textContent = LEFT_MARK;
@@ -959,15 +961,20 @@ function markLookalikes(keys) {
 }
 
 // entries: verified roster; skipped: cards that failed to open (shown, never written to);
-// lookalikes: public keys whose name another key shares
-function renderMembers(entries, skipped, requested, lookalikes, onBefriend) {
+// lookalikes: public keys whose name another key shares; roleControl(entry): the role control
+// for that entry, or null where this account may not change its role (RoleControl.control)
+function renderMembers({ entries, skipped, requested, lookalikes, onBefriend, roleControl }) {
     const list = document.getElementById('memberList');
     clearChildren(list);
     entries.forEach(entry => {
         const row = memberRow(entry);
+        const role = RoleControl.tag(entry.role);
+        if (role) row.appendChild(role);
         if (entry.mine) row.appendChild(memberTag('you'));
         if (entry.owner) row.appendChild(memberTag('owner'));
         if (lookalikes.has(entry.publicKey)) row.appendChild(lookalikeTag());
+        const control = roleControl(entry);
+        if (control) row.appendChild(control);
         if (!entry.mine) {
             const button = document.createElement('button');
             button.className = 'menu-opt member-action';

@@ -1341,6 +1341,44 @@ header {
     letter-spacing: inherit;
 }
 
+/* A member's role: plain italic text after '#', never framed like the built-in you / owner
+   badges, so a role cannot pass for one (role-control.js) */
+.member-role {
+    font-size: 13px;
+    font-style: italic;
+    color: var(--fg);
+    border: none;
+    padding: 0;
+}
+
+.msg-sender .member-role {
+    font-size: inherit;
+}
+
+/* The role editor takes its own line under the member */
+.role-editor {
+    flex: 1 0 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.role-editor input[type="text"].role-input {
+    flex: 1 1 8em;
+    width: auto;
+    min-width: 0;
+    padding: 4px 8px;
+    font-size: 14px;
+}
+
+.role-reason {
+    flex: 1 0 100%;
+    font-size: 13px;
+    color: var(--danger);
+    text-align: left;
+}
+
 /* Two keys under one name: one may be a ground lookalike */
 .member-tag.lookalike-tag {
     color: var(--danger);

@@ -148,7 +148,7 @@ test('a room whose limits change between two listings is refused on the second (
 
 // ---------- the member list ----------
 
-const card = (member, mine = false, owner = false) => ({ card: member.card, mine, owner });
+const card = (member, mine = false, owner = false, role = '') => ({ card: member.card, mine, owner, role });
 
 test('a member list of the wrong shape is refused as malformed (chat.js: E_ROSTER_UNVERIFIED)', async () => {
     const { conv, me, others } = await roomFixture();
@@ -158,7 +158,12 @@ test('a member list of the wrong shape is refused as malformed (chat.js: E_ROSTE
         { success: true, members: [card(me, true), null] },
         { success: true, members: [card(me, true), { ...card(others[0]), mine: 'false' }] },
         { success: true, members: [card(me, true), { ...card(others[0]), owner: 0 }] },
-        { success: true, members: [card(me, true), { card: 5, mine: false, owner: false }] },
+        { success: true, members: [card(me, true), { card: 5, mine: false, owner: false, role: '' }] },
+        // the role: missing or not a string is a malformed entry, as any other field
+        { success: true, members: [card(me, true), { card: others[0].card, mine: false, owner: false }] },
+        { success: true, members: [card(me, true), { ...card(others[0]), role: null }] },
+        { success: true, members: [card(me, true), { ...card(others[0]), role: 7 }] },
+        { success: true, members: [{ ...card(me, true), role: ['x'] }] },
         // 2xx with an error body
         { success: false, message: 'unauthorized' }
     ];
@@ -188,7 +193,7 @@ test('cards that are invites, room codes, account numbers, markup or duplicates 
     const { conv, me, others, code } = await roomFixture(R.MAX_MEMBERS);
     const junk = [C.INVITE_PREFIX + ACCOUNT_B, R.buildRoomCode(code), ACCOUNT_C, ...MARKUP.slice(0, 2)];
     serve(OK, { success: true, members: [card(me, true), card(others[0]), card(others[0]),
-        ...junk.map(text => ({ card: text, mine: false, owner: false })), { ...card(others[1]), extra: MARKUP[0] }] });
+        ...junk.map(text => ({ card: text, mine: false, owner: false, role: '' })), { ...card(others[1]), extra: MARKUP[0] }] });
     const roster = await Rooms.loadRoster(apiCall, conv);
     assert.deepEqual([...roster].map(entry => entry.publicKey).sort(), [me.publicKey, others[0].publicKey, others[1].publicKey].sort());
     assert.equal(conv.room.skipped, 1 + junk.length);
@@ -198,7 +203,7 @@ test('cards that are invites, room codes, account numbers, markup or duplicates 
 
 test('a list longer than the code\'s seats is refused', async () => {
     const { conv, me, others } = await roomFixture(SEATS);
-    serve(OK, { success: true, members: [card(me, true), ...others.map(o => card(o)), { card: 'x', mine: false, owner: false }] });
+    serve(OK, { success: true, members: [card(me, true), ...others.map(o => card(o)), { card: 'x', mine: false, owner: false, role: '' }] });
     await assert.rejects(Rooms.loadRoster(apiCall, conv), { message: 'roster does not match this room' });
 });
 
@@ -216,6 +221,69 @@ test('a member list that drops then adds members between reads is taken as serve
     serve(OK, { success: true, members: [card(me, true), ...others.map(o => card(o))] });
     await Rooms.loadRoster(apiCall, conv);
     assert.equal(conv.room.roster.length, 4);
+});
+
+test('roles: each opens for its own card only; one that does not open or breaks the rule is no role', async () => {
+    const { conv, keys, me, others } = await roomFixture(R.MAX_MEMBERS);
+    const seal = (member, text) => R.sealRole({ room: keys, card: member.card, text });
+    // Sealed by a code holder with text the rule refuses: shown as no role, never as the text
+    const refused = [];
+    for (const text of ['owner', 'ＹＯＵ', 'a b', 'u\u0308ber', '<b>x</b>']) refused.push(await seal(others[2], text));
+    serve(OK, { success: true, members: [
+        card(me, true, true, await seal(me, 'komutan')),
+        card(others[0], false, false, await seal(others[0], 'Kâşif-7_ü')),
+        // another member's role moved onto this card: does not open here
+        card(others[1], false, false, await seal(others[0], 'lider')),
+        card(others[2], false, false, refused[0])
+    ] });
+    const roster = await Rooms.loadRoster(apiCall, conv);
+    const roleOf = (member) => roster.find(entry => entry.card === member.card).role;
+    assert.equal(roleOf(me), 'komutan');
+    assert.equal(roleOf(others[0]), 'Kâşif-7_ü');
+    assert.equal(roleOf(others[1]), '');
+    for (const blob of refused) {
+        serve(OK, { success: true, members: [card(me, true), card(others[2], false, false, blob)] });
+        assert.equal((await Rooms.loadRoster(apiCall, conv)).find(entry => entry.card === others[2].card).role, '');
+    }
+    // The cleared role and the never-set role both read as none; markup, junk and a role from
+    // another room are none too, and none of them makes the list malformed
+    const otherRoom = await R.deriveRoom(R.newRoomCode(SEATS, R.expiryHourFor(24, Date.now())).secret);
+    for (const role of ['', await seal(others[0], ''), ...MARKUP, 'x'.repeat(124),
+        await R.sealRole({ room: otherRoom, card: others[0].card, text: 'lider' })]) {
+        serve(OK, { success: true, members: [card(me, true), card(others[0], false, false, role)] });
+        assert.equal((await Rooms.loadRoster(apiCall, conv)).find(entry => entry.card === others[0].card).role, '', role.slice(0, 40));
+    }
+});
+
+test('roles: a set role is sealed for the target card and posted as the contract asks; refusals keep their status', async () => {
+    const { conv, keys, me, others } = await roomFixture();
+    serve(OK, { success: true, members: [card(me, true, true), card(others[0])] });
+    await Rooms.loadRoster(apiCall, conv);
+    const target = conv.room.roster.find(entry => entry.card === others[0].card);
+    let seen = null;
+    server.answer((request) => {
+        seen = request;
+        return { status: 204 };
+    });
+    const stored = await Rooms.setRole({ api: apiCall, conv, entry: target, text: 'lider' });
+    assert.equal(stored.status, 204);
+    assert.equal(seen.method, 'POST');
+    assert.ok(seen.path.endsWith(`/conversations/${conv.id}/members`));
+    const body = JSON.parse(seen.body);
+    assert.deepEqual(Object.keys(body).sort(), ['card', 'role']);
+    assert.equal(body.card, others[0].card);
+    assert.equal(body.role.length, 124);
+    assert.equal(await R.openRole({ room: keys, card: others[0].card, role: body.role }), 'lider');
+    // Who may edit: the owner anyone, a member itself only
+    assert.equal(Rooms.mayEditRole({ owner: true }, { mine: false }), true);
+    assert.equal(Rooms.mayEditRole({ owner: false }, { mine: true }), true);
+    assert.equal(Rooms.mayEditRole({ owner: false }, { mine: false }), false);
+    assert.equal(Rooms.mayEditRole({ owner: 'true' }, { mine: 1 }), false);
+    // The server's refusal reaches the caller with its status and maps to the registered code
+    serve(403, { success: false, message: 'Role not allowed' });
+    const refused = await Rooms.setRole({ api: apiCall, conv, entry: target, text: 'lider' });
+    assert.equal(refused.status, 403);
+    assert.equal(Errors.fromResult(refused), CODES.E_ROLE_NOT_ALLOWED);
 });
 
 // ---------- friend requests (notes) ----------

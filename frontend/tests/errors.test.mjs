@@ -130,6 +130,11 @@ test('wave 2 codes exist with the severity they are reported at', () => {
     // An authentic message a newer elyrn wrote is named as such, never as tampered with
     assert.equal(Errors.REGISTRY.W_MESSAGE_FROM_NEWER.severity, 'warning');
     assert.equal(Errors.REGISTRY.W_MESSAGE_FROM_NEWER.text, 'sent by a newer elyrn; reload this page to read it');
+    // Member roles: the server's own sentence maps to its code, as the other sentences do
+    assert.equal(Errors.fromApi('Role not allowed', 403), C.E_ROLE_NOT_ALLOWED);
+    assert.equal(Errors.fromResult({ status: 403, data: { success: false, message: 'Role not allowed' } }), C.E_ROLE_NOT_ALLOWED);
+    assert.equal(Errors.REGISTRY.E_ROLE_TOO_LONG.text.includes('{max}'), true);
+    assert.equal(Errors.INTERNAL.W_ROLE_UNREADABLE, 'W_ROLE_UNREADABLE');
     // A room judged expired by this device's clock names the clock
     assert.match(Errors.REGISTRY.E_ROOM_CODE_EXPIRED.text, /device clock/);
     assert.match(Errors.REGISTRY.W_ROOM_EXPIRED.text, /device clock/);

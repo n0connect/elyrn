@@ -163,6 +163,16 @@ const Errors = (() => {
         E_ROOM_LIMITS_REFUSED: e('the server refused the room\'s settings — reload the page and try again'),
         E_ROOM_NOT_CREATED: e('could not create room'),
         E_ROOM_NOT_LEFT: e('could not leave the room'),
+        // member roles: the text as typed (validation.js validateRoleText), then the server's answer
+        E_ROLE_INVALID: e('invalid role'),
+        E_ROLE_EMPTY: e('type a role first, or clear it'),
+        E_ROLE_TOO_LONG: e('a role is at most {max} characters'),
+        E_ROLE_CHARS: e('a role takes letters, digits, - and _ only'),
+        E_ROLE_RESERVED: e('owner and you are shown by elyrn. itself — choose another role'),
+        E_ROLE_NOT_ALLOWED: e('only the room\'s owner can set another member\'s role'),
+        W_ROLE_MEMBER_GONE: w('that member is no longer in this room'),
+        W_ROLE_RATE_LIMITED: w('too many role changes — wait a moment'),
+        E_ROLE_NOT_SET: e('role not changed'),
         W_FRIEND_REQUEST_PENDING: w('you already have a request waiting with them'),
         W_FRIEND_GONE: w('they are no longer in this room'),
         E_FRIEND_REQUEST_NOT_SENT: e('friend request not sent'),
@@ -199,6 +209,9 @@ const Errors = (() => {
         // The event stream failed MAX_RECONNECT_ATTEMPTS times in a row: it is not retried until
         // the tab is shown again, and polling carries the updates meanwhile (chat.js)
         W_LIVE_STREAM_GAVE_UP: 'W_LIVE_STREAM_GAVE_UP',
+        // A member's sealed role did not open, or opened to text the rule refuses: shown as no
+        // role (rooms.js); its text is never logged
+        W_ROLE_UNREADABLE: 'W_ROLE_UNREADABLE',
         // No Notification API: the alerts control is not shown (alerts.js)
         W_ALERTS_UNSUPPORTED: 'W_ALERTS_UNSUPPORTED',
         // The browser has the API but refused to show a notification from the page (alerts.js)
@@ -220,7 +233,9 @@ const Errors = (() => {
         'unsupported media type': CODES.E_API_INVALID_REQUEST,
         // A send's 409 whose id is held by something else (apperr IDTaken, in JSON): nothing was
         // stored, unlike the plain-text 409 "Conflict" (the earlier attempt is stored)
-        'id taken': CODES.E_MESSAGE_ID_TAKEN
+        'id taken': CODES.E_MESSAGE_ID_TAKEN,
+        // A member who does not own the room set another member's role (apperr RoleNotAllowed, JSON)
+        'role not allowed': CODES.E_ROLE_NOT_ALLOWED
     });
 
     // Used when the answer carries no message
