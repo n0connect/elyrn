@@ -193,6 +193,56 @@ maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 
 ## Decisions
 
+- D-2026-11-18-a: the stored Argon2id hash of the auth key is removed (closes S-07). Nothing read
+  `users.account_hash` since login moved to the keyed lookup (S-02), yet every registration ran
+  Argon2id to write it. Data nobody reads is not stored, and the memory-heavy step, its slots and
+  its settings go with it. The migration drops the column inside the migration transaction.
+- D-2026-11-17-a (owner): pending engineering and security decisions are analysed and taken by
+  the lead through these lenses: cybersecurity, edge cases, disaster scenarios, situation
+  handling, consistency, logic, continuity. They are recorded here and reported as taken.
+- D-2026-11-17-b: where a browser cannot read an X25519 key back from IndexedDB (WebKit, proven
+  in the Safari 27 engine), the identity is kept wrapped under a non-extractable device key, and
+  only there; an engine that keeps the key keeps today's direct form and never produces the
+  wrapped one. Decided by what the engine proves at login, never by its name. Cost, stated in
+  the threat model: in the wrapped form, script running in the origin could unwrap an
+  extractable copy. The alternative (asking for the account number after every reload) exposes
+  the root secret each time and was judged weaker against the same threat.
+- D-2026-11-17-c: the open conversation is synced while the page is hidden; nothing is marked
+  read until the page is visible. A hidden page behind a held event stream polls every 30 s.
+- D-2026-11-17-d: the event stream's heartbeat is 10 s and a silent stream is noticed after
+  25 s; nginx passes `X-Accel-Buffering: no` through so an outer nginx does not buffer it.
+- D-2026-11-17-e: member roles (`#text` beside a room member). The owner sets anyone's, a member
+  only their own (server-enforced, 403 otherwise). The text is sealed under a key derived from
+  the room secret and bound to the member's stored card; the server never reads it. A role
+  grants nothing. Reserved words are compared after NFKC and case folding. Known limits: a
+  cross-script lookalike of a reserved word is not caught, and a lying server can serve an
+  older role of the same member.
+- D-2026-11-17-f: file sharing. A file is sealed in the browser into equal 256 KiB parts; its
+  key travels inside an ordinary message. Limits: 10 MiB per file, 100 MiB per conversation,
+  100 MiB per account per day (held in memory only, so nothing about an account's volume is
+  stored), 2 GiB in total; a full store refuses uploads and nothing else. Images are re-encoded
+  before they leave, which removes their metadata. No CSP change: images are drawn on a canvas.
+  Not in this round: deleting an uploaded file, download by the Go agent.
+- D-2026-11-17-g: the per-account file budget evicts the fullest budget when its table is full
+  rather than refusing new accounts. Many accounts can fill the store either way (each costs
+  registration proofs of work); refusing would only add a way to lock honest accounts out.
+- D-2026-11-17-h: at most 32 file requests are handled at once, counted only for an
+  authenticated caller; nginx admits 4 per address and 32 in total on the files location.
+  Known limit: many addresses can occupy that pool; messages do not use it.
+- D-2026-11-17-i: content-free alerts are the browser's own notification with a fixed text,
+  off by default. No Web Push and no service worker: a push service is a third party that
+  would learn when an account receives messages. Consequence: alerts work only while elyrn is
+  open in a tab.
+- D-2026-11-17-j: the open conversation is not remembered across a reload, neither in the
+  address nor in storage: it would leave a trace on the device.
+- D-2026-11-17-k: HSTS has one home, nginx, and covers every HTTPS answer of the clearnet
+  listener; in production it defaults to one year and `0` turns it off. `Clear-Site-Data` is
+  sent on a successful logout and account deletion. API answers carry one copy of each
+  security header (two CSPs stay: the browser enforces both).
+- D-2026-11-17-l: a message whose payload carries keys this build does not know is shown as
+  sent by a newer elyrn, with the advice to reload, not as a tampered message.
+- D-2026-11-17-m: not built in this round: renaming a room, delivery and read ticks, a typing
+  indicator.
 - D-2026-11-14-a (owner): sessions last 30 days by default (`JWT_EXPIRATION_MINUTES=43200`),
   configurable from 1 minute to 365 days, with the sliding refresh after half the lifetime, so a
   session in use does not end; logout and account deletion still end every session at once.
