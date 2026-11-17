@@ -13,6 +13,7 @@ const CODE_ITERATIONS = 3000;
 const ID_ITERATIONS = 5000;
 const ORIGIN_ITERATIONS = 3000;
 const ROLE_ITERATIONS = 5000;
+const NAME_ITERATIONS = 5000;
 const MAX_ROLE_CHARS = 16;
 const ROLE_RESERVED = ['owner', 'you'];
 const MAX_MESSAGE_CHARS = 2000;
@@ -214,5 +215,27 @@ test('validateRoleText: never throws, matches an independent model, and what it 
         assert.equal(isRole(result.value), true);
         assert.equal(isRole(input), input === result.value);
         assert.equal(validate(result.value).value, result.value);
+    });
+});
+
+// The Go rule (backend/internal/e2e/file.go fileNameValid), written apart from validation.js:
+// unicode.IsControl is Cc, Bidi_Control is this fixed set, and the text must be valid UTF-8
+const GO_BIDI_CONTROL = new Set([0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]);
+function goFileNameValid(name) {
+    if (typeof name !== 'string' || !name.isWellFormed()) return false;
+    const points = [...name];
+    return points.length >= 1 && points.length <= 128 && new TextEncoder().encode(name).length <= 512 &&
+        name.normalize('NFC') === name && !name.startsWith('.') &&
+        points.every((ch) => !/\p{Cc}/u.test(ch) && !GO_BIDI_CONTROL.has(ch.codePointAt(0)) && ch !== '/' && ch !== '\\');
+}
+
+test('isFileName agrees with the Go rule, and every chosen name is sent under one it accepts', async () => {
+    const isFileName = get('isFileName');
+    const forSending = get('fileNameForSending');
+    await fuzz(SEED + 8, NAME_ITERATIONS, (r) => {
+        const input = r.bool(0.9) ? (r.bool(0.5) ? r.string(r.int(0, 140)) : r.mutate('report 2026.pdf')) : r.value();
+        assert.equal(isFileName(input), goFileNameValid(input), JSON.stringify(input));
+        const sent = forSending(input);
+        assert.equal(goFileNameValid(sent), true, JSON.stringify([input, sent]));
     });
 });
