@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"elyrn/internal/config"
+	"elyrn/internal/e2e"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
 )
@@ -86,6 +87,12 @@ const (
 // Message text, as frontend/validation.js validateMessageText.
 const (
 	MaxMessageChars = 2000
+)
+
+// Member roles: the role text rule lives in e2e (ValidateRoleText); a member is named by its aura code.
+const (
+	MaxRoleChars    = e2e.RoleMaxChars
+	MemberCodeChars = e2e.AuraCodeChars
 )
 
 // Room limits the tools accept before asking the server (the server's own limits apply after).

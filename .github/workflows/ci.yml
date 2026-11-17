@@ -76,6 +76,7 @@ jobs:
           fuzz ./internal/agent FuzzParseIdentity
           fuzz ./internal/agent FuzzReceivedText
           fuzz ./internal/agent FuzzRoomPages
+          fuzz ./internal/agent FuzzServedRole
           fuzz ./internal/agent FuzzServerAnswer
           fuzz ./internal/agent FuzzSolveChallenge
           fuzz ./internal/apperr FuzzEdgeBody
@@ -113,12 +114,15 @@ jobs:
           fuzz ./internal/e2e FuzzOpenRoomCard
           fuzz ./internal/e2e FuzzOpenRoomMessage
           fuzz ./internal/e2e FuzzOpenRoomNote
+          fuzz ./internal/e2e FuzzOpenRoomRole
           fuzz ./internal/e2e FuzzOpenRoomVault
           fuzz ./internal/e2e FuzzParseRoomCode
+          fuzz ./internal/e2e FuzzRoleText
           fuzz ./internal/e2e FuzzRoomCodeBuild
           fuzz ./internal/e2e FuzzRoomSafetyNumber
           fuzz ./internal/e2e FuzzRosterDigest
           fuzz ./internal/handlers FuzzHealthLoopback
+          fuzz ./internal/mcp FuzzRoleArguments
           fuzz ./internal/mcp FuzzRoomCodeArgument
           fuzz ./internal/mcp FuzzServe
           fuzz ./internal/mcp FuzzToolArguments

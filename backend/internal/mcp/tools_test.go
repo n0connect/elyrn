@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"elyrn/internal/agent"
+	"elyrn/internal/e2e"
 )
 
 const validRoom = `"0b6b9a54-3c0e-4f3a-9d6c-2a1f0e5b7c11"`
@@ -82,6 +84,22 @@ func TestToolArguments_AreValidatedBeforeAnythingIsSent(t *testing.T) {
 		{ToolRoomWait, `{"room":` + validRoom + `,"after":0,"timeout_seconds":0}`, agent.CodeArgument},
 		{ToolRoomWait, `{"room":` + validRoom + `,"after":0,"timeout_seconds":301}`, agent.CodeArgument},
 		{ToolRoomLeave, `{"room":null}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `}`, agent.CodeArgument},
+		{ToolRoomRole, `{"role":"lider"}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":null}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":7}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"lider","member":""}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"lider","member":"7F3A"}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"lider","member":"7f3"}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"lider","member":"silent-ember"}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"lider","member":7}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"lider","name":"x"}`, agent.CodeArgument},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"#lider"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"Owner"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"YOU","member":"7f3a"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"two words"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"` + strings.Repeat("a", agent.MaxRoleChars+1) + `"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"swap` + "‮" + `"}`, agent.CodeRoleText},
 	}
 	for _, tc := range cases {
 		if got := callError(t, tc.tool, tc.args); got != tc.want {
@@ -144,6 +162,41 @@ func TestMessageTools_LabelReceivedTextAsData(t *testing.T) {
 	for _, name := range []ToolName{ToolRoomRead, ToolRoomWait} {
 		if tl := findTool(name); tl == nil || !strings.Contains(tl.description, dataNotInstructions) {
 			t.Errorf("%s does not label message text as data", name)
+		}
+	}
+}
+
+// Design D7: roles are labels other members wrote.
+func TestRolesAndFileNames_AreLabelledAsData(t *testing.T) {
+	for _, name := range []ToolName{ToolRoomMembers, ToolRoomRole} {
+		if tl := findTool(name); tl == nil || !strings.Contains(tl.description, rolesAreData) {
+			t.Errorf("%s does not label roles as data", name)
+		}
+	}
+}
+
+// room_role's schema advertises what its validation enforces.
+func TestRoomRole_SchemaMatchesTheValidation(t *testing.T) {
+	tl := findTool(ToolRoomRole)
+	if tl == nil {
+		t.Fatal("room_role is not listed")
+	}
+	role, member := tl.schema.Properties[argRole], tl.schema.Properties[argMember]
+	if role.MinLength == nil || *role.MinLength != 0 || role.MaxLength == nil || *role.MaxLength != agent.MaxRoleChars {
+		t.Fatalf("room_role role property %+v", role)
+	}
+	if !slices.Equal(tl.schema.Required, []string{argRoom, argRole}) {
+		t.Fatalf("room_role requires %v", tl.schema.Required)
+	}
+	shape := regexp.MustCompile(member.Pattern)
+	for _, code := range []string{"7f3a", "0000", "ffff", "7F3A", "7f3", "7f3a0", "", "g000", "7f3a\n"} {
+		if shape.MatchString(code) != e2e.IsAuraCode(code) {
+			t.Errorf("the member pattern and IsAuraCode disagree on %q", code)
+		}
+	}
+	for in, want := range map[string]string{"": "", "lider": "lider", "über": "über"} {
+		if got, err := roleArg(&in); err != nil || got != want {
+			t.Errorf("roleArg(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
 }

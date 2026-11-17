@@ -5,6 +5,7 @@ package e2e
 //	code    = "elyrn#" || base64url(S(32) || max members(1) || expiry hour(4, big-endian))
 //	room id = UUIDv4 bits over HKDF(S, "noaddx/room/id", 16); lookup = HKDF(S, "noaddx/room/lookup")
 //	card    = nonce || AES-GCM(HKDF(S, "noaddx/room/card"), member key, AAD "NADC" 1 room id)
+//	role    = nonce || AES-GCM(HKDF(S, "noaddx/room/role"), len || text || padding, AAD "NADL" 1 room id card) (role.go)
 //	member  = X25519 key from HKDF(rooms root, salt = room id, "noaddx/rooms/member/x25519")
 //	          (codes made before the rename carry "noaddx#" and are still accepted)
 //	message = header(162) || wraps(48 each) || body; each recipient unwraps the message key with
@@ -218,9 +219,10 @@ type Room struct {
 	ID      uuid.UUID
 	Lookup  string // base64url; the only derived value the server is shown
 	cardKey []byte
+	roleKey []byte
 }
 
-// DeriveRoom computes the room id, the lookup and the card key from the room secret.
+// DeriveRoom computes the room id, the lookup, the card key and the role key from the room secret.
 func DeriveRoom(secret []byte) (*Room, error) {
 	if len(secret) != RoomSecretSize {
 		return nil, ErrInvalidInput
@@ -241,7 +243,11 @@ func DeriveRoom(secret []byte) (*Room, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Room{ID: id, Lookup: encode(lookup), cardKey: cardKey}, nil
+	roleKey, err := deriveFrom(secret, infoRoomRole, keySize)
+	if err != nil {
+		return nil, err
+	}
+	return &Room{ID: id, Lookup: encode(lookup), cardKey: cardKey, roleKey: roleKey}, nil
 }
 
 // RoomsRoot is the per-account root of every room key (the browser keeps it non-extractable).

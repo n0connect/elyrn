@@ -163,6 +163,11 @@ func (a *Agent) verifiedRoom(item *models.ConversationDTO) (*roomState, error) {
 	return a.adopt(item)
 }
 
+// expired reports whether the room's code has expired: nothing more is written to it.
+func (st *roomState) expired() bool {
+	return !time.Now().Before(st.expiresAt)
+}
+
 // expiredLongAgo reports whether the room's code expired more than expiredRoomGrace ago.
 func (st *roomState) expiredLongAgo(now time.Time) bool {
 	return expiredLongAgo(st.expiresAt.Unix(), now)

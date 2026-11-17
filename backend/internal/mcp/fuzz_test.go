@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,12 @@ func (b *checkingBackend) Rooms(context.Context) (*agent.RoomsResult, error) {
 
 func (b *checkingBackend) Members(_ context.Context, id uuid.UUID) (*agent.MembersResult, error) {
 	return nil, b.refuse(canonicalRoom(id), "room")
+}
+
+func (b *checkingBackend) SetRole(_ context.Context, id uuid.UUID, member, role string) (*agent.RoleSet, error) {
+	again, err := agent.ValidateRoleText(role)
+	valid := canonicalRoom(id) && err == nil && again == role && (member == "" || e2e.IsAuraCode(member))
+	return nil, b.refuse(valid, "room, member or role")
 }
 
 func (b *checkingBackend) Send(_ context.Context, id uuid.UUID, text string) (*agent.Sent, error) {
@@ -193,6 +200,9 @@ func FuzzToolArguments(f *testing.F) {
 			`{"max_members":2,"ttl_hours":1}`, `{"max_members":4.5,"ttl_hours":1e3}`, `{"code":"elyrn#AAAA"}`,
 			`{"room":` + validRoom + `,"after":9007199254740991}`, `{"room":` + validRoom + `,"text":"\u202e"}`,
 			`{}, "name":"rooms"`, `{"room":` + validRoom + `,"room":null}`,
+			`{"room":` + validRoom + `,"role":"lider"}`, `{"room":` + validRoom + `,"role":"","member":"7f3a"}`,
+			`{"room":` + validRoom + `,"role":"owner","member":"7F3A"}`, `{"room":` + validRoom + `,"role":"über","member":null}`,
+			`{"room":` + validRoom + `,"role":"#x","member":"7f3a0"}`,
 		} {
 			f.Add(uint8(i), args)
 		}
@@ -220,7 +230,7 @@ func FuzzToolArguments(f *testing.F) {
 				t.Fatalf("%s %s: refused by a backend reached %d times", tl.name, args, backend.calls())
 			}
 			return
-		case agent.CodeArgument, agent.CodeRoomCode, agent.CodeMessageText:
+		case agent.CodeArgument, agent.CodeRoomCode, agent.CodeMessageText, agent.CodeRoleText:
 			if backend.calls() != 0 {
 				t.Fatalf("%s %s: refused as %s after reaching the backend", tl.name, args, code)
 			}
@@ -273,6 +283,55 @@ func FuzzRoomCodeArgument(f *testing.F) {
 		}
 		if strings.HasPrefix(value, e2e.RoomCodePrefix) && parsed.String() != value {
 			t.Fatalf("%q parsed although it is not canonical", value)
+		}
+	})
+}
+
+// FuzzRoleArguments: room_role reaches the backend exactly when the member is absent or of the
+// shape the schema advertises (the same as e2e.IsAuraCode) and the role passes the role rule.
+func FuzzRoleArguments(f *testing.F) {
+	for _, seed := range []struct {
+		role, member string
+		withMember   bool
+	}{
+		{"lider", "", false}, {"", "7f3a", true}, {"owner", "7f3a", true}, {"Lider-1_x", "7F3A", true},
+		{"über", "", true}, {"#x", "7f3a\n", true}, {"a b", "zzzz", true}, {"\xff", "7f3", true},
+	} {
+		f.Add(seed.role, seed.member, seed.withMember)
+	}
+	shape := regexp.MustCompile(memberCodePattern)
+	f.Fuzz(func(t *testing.T, role, member string, withMember bool) {
+		if shape.MatchString(member) != e2e.IsAuraCode(member) {
+			t.Fatalf("the schema pattern and the validation disagree on %q", member)
+		}
+		args := map[string]any{argRoom: json.RawMessage(validRoom), argRole: role}
+		if withMember {
+			args[argMember] = member
+		}
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var sent roleArgs // what the tool decodes (invalid UTF-8 arrives as U+FFFD)
+		if err := json.Unmarshal(raw, &sent); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		_, roleErr := agent.ValidateRoleText(*sent.Role)
+		reach := roleErr == nil && (sent.Member == nil || e2e.IsAuraCode(*sent.Member))
+		backend := &checkingBackend{t: t}
+		params := json.RawMessage(`{"name":"` + string(ToolRoomRole) + `","arguments":` + string(raw) + `}`)
+		got, err := (&Server{backend: backend}).callTool(context.Background(), params)
+		if err != nil {
+			t.Fatalf("protocol error %v", err)
+		}
+		result, ok := got.(toolResult)
+		if !ok || !result.IsError {
+			t.Fatalf("a backend that refuses everything gave %+v", got)
+		}
+		code := toolErrorCode(t, result)
+		if reach != (backend.calls() == 1) || (reach && code != agent.CodeStopped) ||
+			(!reach && code != agent.CodeArgument && code != agent.CodeRoleText) {
+			t.Fatalf("role %q member %q (%v): code %s after %d backend calls", role, member, withMember, code, backend.calls())
 		}
 	})
 }

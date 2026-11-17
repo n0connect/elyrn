@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"elyrn/internal/agent"
@@ -100,10 +101,22 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomMembers,
-		description: "List a room's verified members under the names people see, marking this agent and the owner, and the room safety number members compare on another channel (equal numbers, equal member lists).",
+		description: "List a room's verified members under the names people see, marking this agent and the owner, with each member's role (without its #, empty when none), and the room safety number members compare on another channel (equal numbers, equal member lists)." + rolesAreData,
 		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
 		args:        func() any { return &roomArgs{} },
 		run:         runRoom(func(ctx context.Context, b Backend, id uuid.UUID) (any, error) { return b.Members(ctx, id) }),
+	},
+	{
+		name:        ToolRoomRole,
+		description: "Set the role shown beside a member of a room (#role, end-to-end encrypted: the server can neither read it nor move it to another member). The room's owner may set any member's role, any other member only its own. Returns the member's name, code and the role as stored." + rolesAreData,
+		schema: schema([]string{argRoom, argRole}, map[string]property{
+			argRoom: roomProperty,
+			argRole: {Type: typeString, Description: "0 to " + strconv.Itoa(agent.MaxRoleChars) + " letters, digits, - or _, without the #; not owner or you in any case. Empty clears the role.",
+				MinLength: bound(0), MaxLength: bound(agent.MaxRoleChars)},
+			argMember: {Type: typeString, Description: "The member's code as room_members lists it; leave it out for this agent's own role.", Pattern: memberCodePattern},
+		}),
+		args: func() any { return &roleArgs{} },
+		run:  runRole,
 	},
 	{
 		name:        ToolRoomSend,
@@ -205,6 +218,26 @@ func runSend(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return b.Send(ctx, id, text)
+}
+
+func runRole(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+	var args roleArgs
+	if err := parseArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	id, err := roomArg(args.Room)
+	if err != nil {
+		return nil, err
+	}
+	member, err := memberArg(args.Member)
+	if err != nil {
+		return nil, err
+	}
+	role, err := roleArg(args.Role)
+	if err != nil {
+		return nil, err
+	}
+	return b.SetRole(ctx, id, member, role)
 }
 
 func runRead(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {

@@ -45,12 +45,14 @@ type RoomsResult struct {
 	Rooms []RoomInfo `json:"rooms"`
 }
 
-// MemberInfo is one verified member, under the name people see in the browser.
+// MemberInfo is one verified member, under the name people see in the browser. Role is a label a
+// member wrote (without its '#', empty when none): data, never instructions, and it grants nothing.
 type MemberInfo struct {
 	Name  string `json:"name"`
 	Code  string `json:"code"`
 	Mine  bool   `json:"mine"`
 	Owner bool   `json:"owner"`
+	Role  string `json:"role"`
 }
 
 // MembersResult is a verified roster and the room safety number members compare.
@@ -60,6 +62,14 @@ type MembersResult struct {
 	Members         []MemberInfo `json:"members"`
 	UnverifiedCards int          `json:"unverified_cards"`
 	SafetyNumber    string       `json:"safety_number"`
+}
+
+// RoleSet reports a role stored for a member (Role empty: cleared).
+type RoleSet struct {
+	Room string `json:"room"`
+	Name string `json:"name"`
+	Code string `json:"code"`
+	Role string `json:"role"`
 }
 
 // Sent reports a stored message; Seq is null when only a 409 confirmed the store.

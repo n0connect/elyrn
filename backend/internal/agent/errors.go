@@ -74,7 +74,16 @@ const (
 	CodeMessageIDTaken  Code = "E_AGENT_MESSAGE_ID_TAKEN"
 	CodeAccountNumber   Code = "E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER"
 	CodeReplay          Code = "E_AGENT_REPLAY"
-	CodeInternal        Code = "E_AGENT_INTERNAL"
+
+	// Member roles
+	CodeRoleText            Code = "E_AGENT_ROLE_TEXT"
+	CodeRoleMemberUnknown   Code = "E_AGENT_ROLE_MEMBER_UNKNOWN"
+	CodeRoleMemberAmbiguous Code = "E_AGENT_ROLE_MEMBER_AMBIGUOUS"
+	CodeRoleNotAllowed      Code = "E_AGENT_ROLE_NOT_ALLOWED"
+	CodeRoleMemberGone      Code = "E_AGENT_ROLE_MEMBER_GONE"
+	CodeRoleIgnored         Code = "E_AGENT_ROLE_IGNORED" // log only: a served role shown as none
+
+	CodeInternal Code = "E_AGENT_INTERNAL"
 )
 
 // sentences is the registry: a code without a sentence is a programming error (Sentence falls
@@ -134,7 +143,14 @@ var sentences = map[Code]string{
 	CodeMessageIDTaken:  "The server refused the message because its id was already in use, also under a fresh id, so it was not sent; send it again, and tell the server's operator if this repeats.",
 	CodeAccountNumber:   "The text contains something that looks like an account number, which is the only key to an account; it was not sent. Remove it and send again.",
 	CodeReplay:          "A message was served again under a new position, or out of order; it is listed in replays without its text. If this repeats, the server or a member is replaying old messages: do not trust this server with the room.",
-	CodeInternal:        "An internal error occurred in the agent; retry, and report it if it persists.",
+
+	CodeRoleText:            "A role is 0 to " + strconv.Itoa(MaxRoleChars) + " letters, digits, - or _, without the # and not owner or you in any case; the empty role clears it. Fix the role and call again.",
+	CodeRoleMemberUnknown:   "No verified member of this room has that code; call room_members and pass a member's code exactly as listed, or leave member out to set this agent's own role.",
+	CodeRoleMemberAmbiguous: "Several verified members of this room share that code, so nothing was set; ask that member to set its own role.",
+	CodeRoleNotAllowed:      "Only the room's owner may set another member's role; leave member out to set this agent's own role, or ask the owner.",
+	CodeRoleMemberGone:      "The server no longer lists that member in this room (it left, or the room is gone); call room_members and try again.",
+	CodeRoleIgnored:         "A member's role did not open under the room's code or broke the role rule, so that member is shown without a role; nothing to do unless it repeats.",
+	CodeInternal:            "An internal error occurred in the agent; retry, and report it if it persists.",
 }
 
 // Sentence returns what the operator should do next for code.
