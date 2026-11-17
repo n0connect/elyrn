@@ -130,6 +130,8 @@ func RequestBudget() time.Duration {
 	if writeTimeout <= 0 {
 		return 0
 	}
+	// clamped is not an error: Open warns about a clamped budget once at startup; a request
+	// only needs the budget itself
 	budget, _ := requestBudget(writeTimeout)
 	return budget
 }

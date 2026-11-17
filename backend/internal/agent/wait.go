@@ -31,6 +31,8 @@ type eventStream struct {
 	reader *bufio.Reader
 }
 
+// close ends the stream. A response body is only read, so its close error carries nothing the
+// agent could act on: the connection is dropped either way.
 func (s *eventStream) close() { _ = s.resp.Body.Close() }
 
 // openEvents connects to the event stream (logging in again once on 401) and returns once the
@@ -41,6 +43,7 @@ func (a *Agent) openEvents(ctx context.Context) (*eventStream, error) {
 	}
 	resp, err := a.open(ctx, http.MethodGet, pathEvents, nil, mimeEventStream)
 	if err == nil && resp.StatusCode == http.StatusUnauthorized {
+		// A 401 body is discarded unread; its close error carries nothing (see eventStream.close)
 		_ = resp.Body.Close()
 		a.endSession()
 		if err := a.login(ctx); err != nil {

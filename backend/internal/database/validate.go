@@ -239,6 +239,8 @@ func checkRootCert() error {
 	if err != nil {
 		return invalid(envSSLRootCert, "must name a readable file (make certs writes certs/ca/ca.crt)")
 	}
+	// The second result is the bytes after the first block, not an error: the first certificate
+	// proves the file is a PEM bundle; the driver reads the rest
 	block, _ := pem.Decode(raw)
 	if block == nil || block.Type != "CERTIFICATE" {
 		return invalid(envSSLRootCert, "must hold a PEM certificate")

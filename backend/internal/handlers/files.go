@@ -68,6 +68,7 @@ func uploadFilePart(w http.ResponseWriter, r *http.Request, svc *chat.Service, m
 // readFilePart answers one stored part to a member (the gate admitted exactly one part number).
 func readFilePart(w http.ResponseWriter, in *contract.Input, svc *chat.Service, me *chat.Member, id uuid.UUID) {
 	withFileSlot(w, "readFilePart", func() {
+		// ok is always true here: the gate's table marks the part number Required for this route
 		part, _ := in.Query(models.QueryPart)
 		data, err := svc.ReadFilePart(me, id, in.PathID(contract.PathFile), int(part))
 		if err != nil {

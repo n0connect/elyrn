@@ -141,6 +141,8 @@ func writePrivate(path string, raw []byte, replace bool, code Code) error {
 	syncErr := tmp.Sync()
 	closeErr := tmp.Close()
 	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		// The write already failed under code; a temporary file left behind is swept at the next
+		// start (sweepTemps), so a failed remove adds nothing the caller can act on
 		_ = os.Remove(name)
 		return fail(code, err)
 	}
@@ -149,7 +151,9 @@ func writePrivate(path string, raw []byte, replace bool, code Code) error {
 	} else {
 		err = os.Link(name, path)
 	}
-	_ = os.Remove(name) // after a rename it is already gone
+	// After a rename it is already gone, so the remove is expected to fail; after a link a
+	// leftover is swept at the next start (sweepTemps)
+	_ = os.Remove(name)
 	if err != nil {
 		return fail(code, err)
 	}
@@ -161,6 +165,7 @@ func writePrivate(path string, raw []byte, replace bool, code Code) error {
 func sweepTemps(dir string) {
 	leftovers, err := filepath.Glob(filepath.Join(dir, privateTempPattern))
 	if err != nil {
+		// Glob fails only on a malformed pattern, and privateTempPattern is a constant
 		return
 	}
 	for _, name := range leftovers {

@@ -97,6 +97,8 @@ func (a *Agent) takeIdentityLock() error {
 
 func (a *Agent) releaseIdentityLock() {
 	if a.held != nil {
+		// Closing the descriptor drops the flock whatever Close reports, and the agent is done
+		// with the file: there is nothing to retry and nothing to tell the caller
 		_ = a.held.Close()
 		a.held = nil
 	}
