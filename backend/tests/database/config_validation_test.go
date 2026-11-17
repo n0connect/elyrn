@@ -64,6 +64,7 @@ func TestValidateStartupConfig_RejectsOutOfRangeValues(t *testing.T) {
 		"file quota below one part":     {config.EnvFileConversationQuotaBytes, "1"},
 		"file store above its bound":    {config.EnvFileStoreMaxBytes, "1099511627777"},
 		"file store not a number":       {config.EnvFileStoreMaxBytes, "2GiB"},
+		"file budget above its bound":   {config.EnvFileAccountDailyBytes, "10737418241"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -121,10 +122,10 @@ func TestValidateStartupConfig_SessionLifetimeBounds(t *testing.T) {
 func TestValidateStartupConfig_FileLimits(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	defer testutil.TeardownTestEnv(t)
-	for _, key := range []string{config.EnvMaxFileBytes, config.EnvFileConversationQuotaBytes, config.EnvFileStoreMaxBytes} {
+	for _, key := range []string{config.EnvMaxFileBytes, config.EnvFileConversationQuotaBytes, config.EnvFileStoreMaxBytes, config.EnvFileAccountDailyBytes} {
 		t.Setenv(key, "")
 	}
-	if config.GetMaxFileBytes() != 10485760 || config.GetFileConversationQuotaBytes() != 104857600 || config.GetFileStoreMaxBytes() != 2147483648 {
+	if config.GetMaxFileBytes() != 10485760 || config.GetFileConversationQuotaBytes() != 104857600 || config.GetFileStoreMaxBytes() != 2147483648 || config.GetFileAccountDailyBytes() != 104857600 {
 		t.Fatalf("defaults %d, %d, %d", config.GetMaxFileBytes(), config.GetFileConversationQuotaBytes(), config.GetFileStoreMaxBytes())
 	}
 	if err := validate(t); err != nil {
@@ -138,6 +139,7 @@ func TestValidateStartupConfig_FileLimits(t *testing.T) {
 		{config.EnvFileConversationQuotaBytes: strconv.FormatInt(config.MaxFileConversationQuotaBound, 10),
 			config.EnvFileStoreMaxBytes: strconv.FormatInt(config.MaxFileStoreBytesBound, 10)},
 		{"MAX_REQUEST_BODY_BYTES": strconv.Itoa(2 * utils.FilePartSealedBytes)},
+		{config.EnvFileAccountDailyBytes: strconv.FormatInt(config.MaxFileAccountDailyBound, 10)},
 	}
 	for _, settings := range accepted {
 		t.Run("accepts "+describe(settings), func(t *testing.T) {
@@ -158,6 +160,7 @@ func TestValidateStartupConfig_FileLimits(t *testing.T) {
 		{map[string]string{config.EnvFileConversationQuotaBytes: "2147483649"}, config.EnvFileConversationQuotaBytes},
 		{map[string]string{config.EnvFileStoreMaxBytes: onePart}, config.EnvFileConversationQuotaBytes},
 		{map[string]string{"MAX_REQUEST_BODY_BYTES": strconv.Itoa(2*utils.FilePartSealedBytes - 1)}, "MAX_REQUEST_BODY_BYTES"},
+		{map[string]string{config.EnvFileAccountDailyBytes: "10485759"}, config.EnvMaxFileBytes},
 	}
 	for _, c := range refused {
 		t.Run("refuses "+describe(c.settings), func(t *testing.T) {
@@ -286,6 +289,7 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 		{config.EnvMaxFileBytes, "leak-file-bytes", false},
 		{config.EnvFileConversationQuotaBytes, "leak-file-quota", false},
 		{config.EnvFileStoreMaxBytes, "leak-file-store", false},
+		{config.EnvFileAccountDailyBytes, "leak-file-daily", false},
 		{"POW_CHALLENGE_TTL_SEC", "leak-pow-ttl", false},
 		{"POW_DIFFICULTY", "leak-pow-difficulty", false},
 		{"INTERNAL_ID_LENGTH", "leak-id-length", false},

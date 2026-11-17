@@ -25,7 +25,17 @@ var (
 	ErrFileQuotaReached = errors.New("file quota reached")
 	// ErrFileStoreFull: the server holds FILE_STORE_MAX_BYTES of parts, or does not know yet
 	ErrFileStoreFull = errors.New("file store full")
+	// ErrFileBudgetSpent: the caller stored FILE_ACCOUNT_DAILY_BYTES of parts within a day
+	ErrFileBudgetSpent = errors.New("file budget spent")
 )
+
+// PartBudget is the caller's in-memory upload budget (middleware.FileBudget, keyed by the
+// stream tag, never stored): Allow takes one part, Refund gives it back when the part was not
+// stored. It is passed in because this package sits below the middleware.
+type PartBudget interface {
+	Allow() bool
+	Refund()
+}
 
 const (
 	// FirstFilePart opens a file: its uploader owns the file id in the conversation
@@ -160,8 +170,10 @@ func (s *Service) partsMark() uint64 {
 // uploader, and takes its deletion day so a file expires as one. A part already stored answers
 // like a duplicate message: ErrConflict when it is the caller's own identical earlier upload,
 // ErrIDTaken otherwise. Runs under the conversation row lock, so a burn, a room's expiry or a
-// leave never interleaves with it, and the conversation's quota is counted exactly.
-func (s *Service) UploadFilePart(me *Member, conversationID uuid.UUID, rawFileID string, part int, data string) error {
+// leave never interleaves with it, and the conversation's quota is counted exactly. Right after
+// membership the part is taken from the caller's budget (ErrFileBudgetSpent when it is empty),
+// and given back unless the part is stored: a resend, a refusal or a failure spends nothing.
+func (s *Service) UploadFilePart(me *Member, conversationID uuid.UUID, rawFileID string, part int, data string, budget PartBudget) error {
 	fileID, okID := utils.ParseCanonicalUUIDv4(rawFileID)
 	raw, okData := utils.DecodeExact(data, utils.FilePartSealedBytes)
 	if !okID || !okData || part < FirstFilePart || int64(part) >= utils.FilePartCount(config.GetMaxFileBytes()) {
@@ -170,7 +182,7 @@ func (s *Service) UploadFilePart(me *Member, conversationID uuid.UUID, rawFileID
 	if _, err := s.liveRoom(s.chats, conversationID); err != nil {
 		return err
 	}
-	reserved := false
+	reserved, spent := false, false
 	err := s.chats.Transaction(func(tx store.ChatRepository) error {
 		if _, err := tx.LockConversation(conversationID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
@@ -182,6 +194,10 @@ func (s *Service) UploadFilePart(me *Member, conversationID uuid.UUID, rawFileID
 		if err != nil {
 			return err
 		}
+		if !budget.Allow() {
+			return ErrFileBudgetSpent
+		}
+		spent = true
 		// A stored part is judged first: a resend after a lost answer answers "stored" even when
 		// the quota filled meanwhile (duplicates.go: membership was checked, no existence oracle)
 		if err := filePartDuplicate(tx, member.MemberTag, conversationID, fileID, part, raw); err != nil {
@@ -210,6 +226,9 @@ func (s *Service) UploadFilePart(me *Member, conversationID uuid.UUID, rawFileID
 		if settleErr := storedParts.settle(err == nil); settleErr != nil {
 			s.logger.LogError("UploadFilePart: settle", settleErr)
 		}
+	}
+	if spent && err != nil {
+		budget.Refund()
 	}
 	if err != nil {
 		return err

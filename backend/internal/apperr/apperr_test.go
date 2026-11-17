@@ -84,6 +84,7 @@ var jsonWire = map[Code]struct {
 	FilePartOutOfOrder: {409, `{"success":false,"message":"File part out of order"}`},
 	FileQuotaReached:   {507, `{"success":false,"message":"File quota reached"}`},
 	FileStoreFull:      {507, `{"success":false,"message":"File store full"}`},
+	FileBudgetSpent:    {429, `{"success":false,"message":"File budget spent"}`},
 }
 
 // emptyWire pins the answers with a status line only: HEAD on register, login and the PoW
@@ -239,6 +240,7 @@ func TestSentinelsMapped(t *testing.T) {
 		chat.ErrFilePartOutOfOrder: FilePartOutOfOrder,
 		chat.ErrFileQuotaReached:   FileQuotaReached,
 		chat.ErrFileStoreFull:      FileStoreFull,
+		chat.ErrFileBudgetSpent:    FileBudgetSpent,
 		auth.ErrBusy:               Argon2Busy,
 		auth.ErrPendingStoreFull:   PendingStoreFull,
 		pow.ErrRateLimited:         PoWRateLimited,

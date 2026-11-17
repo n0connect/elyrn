@@ -156,6 +156,7 @@ stops in order on `SIGINT` or `SIGTERM`:
 - **Master keys:** for the process lifetime, zeroized on shutdown (above).
 - **Per-user server keys and conversation indexes:** only while a request that needs them runs.
 - **Stream tags and rate-limit keys:** HMACs under per-boot secrets, never persisted.
+- **File upload budgets:** how many file parts each account stored in the last day (`FILE_ACCOUNT_DAILY_BYTES`) is counted in memory only, keyed by the stream tag, never written to the database, and resets when the process restarts.
 
 ## Login Cost and Availability
 

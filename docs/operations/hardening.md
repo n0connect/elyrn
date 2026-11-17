@@ -137,7 +137,7 @@ in `location /api/ { include /etc/nginx/elyrn/api-errors.conf; return 404; }`.
 | `conversations/{id}/read` | POST | 1k (93) |
 | `conversations/{id}/members` | GET, POST | 1k (290) |
 | `conversations/{id}/messages`, `…/notes` | GET, POST | 8k (≤ 7873) |
-| `conversations/{id}/files`, `…/files/{file}` | GET, POST | 342k (≤ 349695); request and response kept in memory (`client_body_buffer_size 342k`, `proxy_buffers 6 64k`, `proxy_max_temp_file_size 0`), never in a temporary file |
+| `conversations/{id}/files`, `…/files/{file}` | GET, POST | 342k (≤ 349695); request and response kept in memory (`client_body_buffer_size 342k`, `proxy_buffers 6 64k`, `proxy_max_temp_file_size 0`), never in a temporary file; behind it every stored part spends from the account's in-memory daily budget (`FILE_ACCOUNT_DAILY_BYTES`, 429 `E_FILE_BUDGET_SPENT`) |
 | `conversations/{id}`, `conversations/{id}/notes/{note}` | DELETE | 1k (none) |
 
 A method outside the list answers 405, as the backend would; an unknown path 404; a body over

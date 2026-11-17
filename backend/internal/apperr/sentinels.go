@@ -37,6 +37,7 @@ var sentinels = []struct {
 	{chat.ErrFilePartOutOfOrder, FilePartOutOfOrder},
 	{chat.ErrFileQuotaReached, FileQuotaReached},
 	{chat.ErrFileStoreFull, FileStoreFull},
+	{chat.ErrFileBudgetSpent, FileBudgetSpent},
 	{chat.ErrIdentityUnset, IdentityUnset},
 	{chat.ErrForbidden, Forbidden},
 	{auth.ErrBusy, Argon2Busy},

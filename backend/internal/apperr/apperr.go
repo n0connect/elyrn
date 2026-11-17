@@ -67,6 +67,7 @@ const (
 	FilePartOutOfOrder
 	FileQuotaReached
 	FileStoreFull
+	FileBudgetSpent
 
 	// Login: JSON-shaped answers (the browser maps the message, the agent the status)
 	LoginBodyInvalid
@@ -104,6 +105,7 @@ const (
 	sayFilePartOutOfOrder = "File part out of order"
 	sayFileQuotaReached   = "File quota reached"
 	sayFileStoreFull      = "File store full"
+	sayFileBudgetSpent    = "File budget spent"
 	sayInternalServerErr  = "Internal server error"
 	sayInvalidCredentials = "Invalid credentials"
 )
@@ -210,6 +212,9 @@ var registry = map[Code]entry{
 	// FileStoreFull: the server holds FILE_STORE_MAX_BYTES of parts, or does not know how many it
 	// holds yet (fail closed); the operator's signal to raise the bound or wait for retention
 	FileStoreFull: {"E_FILE_STORE_FULL", http.StatusInsufficientStorage, sayFileStoreFull, utils.LogLevelWARN, shapeJSON},
+	// FileBudgetSpent: the account stored FILE_ACCOUNT_DAILY_BYTES of parts within the last day
+	// (an in-memory budget); JSON, so it is told apart from the other 429s
+	FileBudgetSpent: {"E_FILE_BUDGET_SPENT", http.StatusTooManyRequests, sayFileBudgetSpent, utils.LogLevelINFO, shapeJSON},
 
 	// Login answers in JSON (shapeJSON); a body that is not JSON is its InvalidRequest twin
 	LoginBodyInvalid: {"E_LOGIN_BODY_INVALID", http.StatusBadRequest, sayInvalidRequest, utils.LogLevelWARN, shapeJSON},

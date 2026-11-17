@@ -17,6 +17,13 @@ func ResetRateLimiterForTesting() {
 	rateLimitLogger.Debug("RateLimiter: reset for testing")
 }
 
+// FileBudgetCountForTesting reports how many file budgets are held.
+func FileBudgetCountForTesting() int {
+	fileBudgets.mu.RLock()
+	defer fileBudgets.mu.RUnlock()
+	return len(fileBudgets.buckets)
+}
+
 // RateLimiterBucketCountForTesting reports how many buckets the global limiter holds.
 func RateLimiterBucketCountForTesting() int {
 	globalRateLimiter.mu.RLock()

@@ -44,6 +44,7 @@ an expired session from none). Three shapes reach the wire:
 | 412 | `Roster changed` | `E_ROSTER_CHANGED` | a room message for a member list that is no longer current |
 | 415 | `Unsupported Media Type` | `E_UNSUPPORTED_MEDIA_TYPE` | a body not declared as exactly `application/json` |
 | 429 | `Too many requests` | `E_RATE_LIMITED`, `E_POW_RATE_LIMITED`, `E_SUBSCRIBER_LIMIT`, `E_LIMIT_REACHED` | any rate limit, stream share or per-account cap |
+| 429 | `File budget spent` (JSON) | `E_FILE_BUDGET_SPENT` | the account stored `FILE_ACCOUNT_DAILY_BYTES` of file parts within the last day |
 | 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED`, `E_LOGIN_LOOKUP_FAILED` (JSON) | a server fault; on login, a lookup the server could not compute |
 | 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_ARGON2_BUSY`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full; retry later |
 | 507 | `File quota reached` (JSON) | `E_FILE_QUOTA_REACHED` | the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of file parts |
@@ -551,7 +552,10 @@ member's account deletion); leaving a room keeps the leaver's parts, like their 
 Stores one part. Part 0 opens the file for its uploader (and takes one token of the caller's `file`
 rate bucket; later parts take none); a later part needs that live part 0 stored by the same
 uploader and takes its deletion day, so a file expires as one. Parts after part 0 may come in any
-order. Runs under the conversation's row lock. Nothing is published: the announcing message is.
+order. Runs under the conversation's row lock. Nothing is published: the announcing message is. Every
+stored part also spends one part of the caller's daily budget (`FILE_ACCOUNT_DAILY_BYTES`, one budget
+per account across all its conversations, refilled over 24 hours, held in memory only and reset when
+the server restarts); an identical resend or a refused part spends nothing.
 
 - **Request Body:**
 ```json
@@ -571,6 +575,7 @@ part).
   - `409` `{"success":false,"message":"File part out of order"}` (`E_FILE_PART_OUT_OF_ORDER`) a later part before the caller stored part 0 (or after part 0 expired);
   - `507` `{"success":false,"message":"File quota reached"}` (`E_FILE_QUOTA_REACHED`) the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of parts;
   - `507` `{"success":false,"message":"File store full"}` (`E_FILE_STORE_FULL`) the server holds `FILE_STORE_MAX_BYTES` of parts (or has not counted them yet: fail closed);
+  - `429` `{"success":false,"message":"File budget spent"}` (`E_FILE_BUDGET_SPENT`) the account's daily budget is spent (checked right after membership, before the part's other checks);
   - `429` too many new files.
 - **Response:** `201 Created`, no body.
 

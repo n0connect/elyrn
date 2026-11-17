@@ -7,6 +7,11 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
 ### Priority Level 1 (Lowest) - Application State
 - `globalRateLimiter.mu` (RWMutex) - Rate limiting buckets map; held for every lookup/insert, and
   while evicting it reads each bucket's `lastAccess` (Priority 1 -> 2, the permitted direction)
+- `middleware.fileBudgets.mu` (RWMutex) - the per-account file upload budgets map; its own
+  `RateLimiter` instance with the same discipline as `globalRateLimiter.mu`, never held together
+  with it. The budget is looked up before the upload's transaction; its `TokenBucket.mu` (Level 2)
+  is then taken inside the transaction, under the conversation row lock, for one token's
+  arithmetic (a leaf there: nothing is acquired while it is held)
 - `rateLimiterMutex` - PoW per-client limiters map (never held together with `spentMutex`)
 - `spentMutex` - PoW spent (solved, unexpired) challenges map; leaf lock. Issued challenges are
   no longer stored (S-03)

@@ -158,6 +158,7 @@ func fileBounds() []bounded[int64] {
 		{config.EnvMaxFileBytes, config.GetMaxFileBytes(), utils.FilePartBytes, config.MaxFileBytesBound},
 		{config.EnvFileConversationQuotaBytes, config.GetFileConversationQuotaBytes(), utils.FilePartBytes, config.MaxFileConversationQuotaBound},
 		{config.EnvFileStoreMaxBytes, config.GetFileStoreMaxBytes(), utils.FilePartBytes, config.MaxFileStoreBytesBound},
+		{config.EnvFileAccountDailyBytes, config.GetFileAccountDailyBytes(), utils.FilePartBytes, config.MaxFileAccountDailyBound},
 	}
 }
 
@@ -199,6 +200,9 @@ func checkSizesFit() error {
 	}
 	if config.GetFileConversationQuotaBytes() > config.GetFileStoreMaxBytes() {
 		return invalid(config.EnvFileConversationQuotaBytes, "must not exceed "+config.EnvFileStoreMaxBytes)
+	}
+	if config.GetMaxFileBytes() > config.GetFileAccountDailyBytes() {
+		return invalid(config.EnvMaxFileBytes, "must not exceed "+config.EnvFileAccountDailyBytes)
 	}
 	return nil
 }

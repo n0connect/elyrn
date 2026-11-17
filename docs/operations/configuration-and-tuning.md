@@ -61,6 +61,7 @@ At startup the backend checks these keys against the database before it serves a
 | `MAX_FILE_BYTES` | int | `10485760` | Largest file one message may announce, in bytes (262144-104857600). Files are stored as sealed parts of 262144 bytes of plaintext each, so this allows `ceil(MAX_FILE_BYTES / 262144)` parts per file; `/me` reports it as `file_max_bytes`. Lowering it affects new uploads only. |
 | `FILE_CONVERSATION_QUOTA_BYTES` | int | `104857600` | How many bytes of stored parts one conversation may hold (262144-10737418240), counted as stored parts × 262144, expired parts included until retention removes them. A further upload answers `507 File quota reached`. |
 | `FILE_STORE_MAX_BYTES` | int | `2147483648` | How many bytes of stored parts the whole server may hold (262144-1099511627776), counted the same way against an in-process count of stored parts (taken at start, again every retention cycle, kept up to date by uploads and burns). A further upload answers `507 File store full`; so does every upload before the first count (fail closed). Parts are kept like messages (`MESSAGE_TTL_DAYS`) and go with their conversation. |
+| `FILE_ACCOUNT_DAILY_BYTES` | int | `104857600` | How many bytes of parts one account may store per day (262144-10737418240, at least `MAX_FILE_BYTES`): a budget of `FILE_ACCOUNT_DAILY_BYTES / 262144` parts that every stored part spends from (an identical resend or a refused part spends nothing) and that refills continuously to full over 24 hours. It lives in memory only, keyed by the account's in-memory stream tag like the rate buckets, so nothing about an account's upload volume is stored; it resets when the server restarts, and the number of budgets is bounded by `RATE_LIMIT_MAX_BUCKETS`. An empty budget answers `429 File budget spent`. It keeps one account from filling the store; several accounts still can (each costs registration proofs of work). |
 | `POW_DIFFICULTY` | int | `20` | Proof-of-work target leading zero bits (18-24). |
 | `POW_CHALLENGE_TTL_SEC` | int | `300` | How long an issued challenge stays valid (1-3600). |
 
@@ -178,9 +179,10 @@ variable's **name** and its rule, never its value, and the process exits with st
 | `MESSAGE_TTL_DAYS` | 1-365 |
 | `ROOM_MAX_MEMBERS` | 2-32, and a message to a full room fits in `MAX_REQUEST_BODY_BYTES` |
 | `ROOM_MAX_TTL_HOURS` | 1-720 |
-| `MAX_FILE_BYTES` | 262144-104857600, and at most `FILE_CONVERSATION_QUOTA_BYTES` |
+| `MAX_FILE_BYTES` | 262144-104857600, and at most `FILE_CONVERSATION_QUOTA_BYTES` and `FILE_ACCOUNT_DAILY_BYTES` |
 | `FILE_CONVERSATION_QUOTA_BYTES` | 262144-10737418240, and at most `FILE_STORE_MAX_BYTES` |
 | `FILE_STORE_MAX_BYTES` | 262144-1099511627776 |
+| `FILE_ACCOUNT_DAILY_BYTES` | 262144-10737418240 |
 | `POW_CHALLENGE_TTL_SEC` | 1-3600 |
 | `POW_DIFFICULTY` | 18-24 |
 | `INTERNAL_ID_LENGTH` | 16-24 |

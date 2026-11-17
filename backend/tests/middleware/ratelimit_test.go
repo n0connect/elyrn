@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"elyrn/internal/config"
 	"elyrn/internal/middleware"
+	"elyrn/internal/utils"
 	"elyrn/tests/testutil"
 )
 
@@ -211,5 +213,50 @@ func TestRateLimiter_BucketCountIsBoundedAtInsertion(t *testing.T) {
 		if n := middleware.RateLimiterBucketCountForTesting(); n > 50 {
 			t.Fatalf("after %d keys the limiter holds %d buckets, cap is 50", i+1, n)
 		}
+	}
+}
+
+// The file budgets are bounded like the rate buckets (RATE_LIMIT_MAX_BUCKETS), hold
+// FILE_ACCOUNT_DAILY_BYTES / 262144 parts each, give a refunded part back, and never touch the
+// shared limiter.
+func TestFileBudget_SizeRefundAndBound(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+	t.Setenv("RATE_LIMIT_MAX_BUCKETS", "100")
+	t.Setenv(config.EnvFileAccountDailyBytes, strconv.Itoa(3*utils.FilePartBytes))
+	middleware.ResetRateLimiterForTesting()
+	t.Cleanup(middleware.ResetRateLimiterForTesting)
+	shared := middleware.RateLimiterBucketCountForTesting()
+
+	budget := middleware.FileBudget("budget-size:" + strconv.FormatInt(time.Now().UnixNano(), 10))
+	if budget == nil {
+		t.Fatal("no budget under valid settings")
+	}
+	for i := 0; i < 3; i++ {
+		if !budget.Allow() {
+			t.Fatalf("part %d of a 3-part budget refused", i)
+		}
+	}
+	if budget.Allow() {
+		t.Fatal("a fourth part passed a 3-part budget")
+	}
+	budget.Refund()
+	if !budget.Allow() || budget.Allow() {
+		t.Fatal("a refund did not give back exactly one part")
+	}
+	if middleware.FileBudget("") != nil {
+		t.Fatal("a budget without an account")
+	}
+
+	for i := 0; i < 1000; i++ {
+		if b := middleware.FileBudget("budget-flood:" + strconv.Itoa(i)); b == nil || !b.Allow() {
+			t.Fatalf("fresh budget %d refused", i)
+		}
+		if n := middleware.FileBudgetCountForTesting(); n > 100 {
+			t.Fatalf("after %d accounts %d budgets are held, cap is 100", i+1, n)
+		}
+	}
+	if middleware.RateLimiterBucketCountForTesting() != shared {
+		t.Fatal("file budgets landed in the shared limiter")
 	}
 }

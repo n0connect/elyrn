@@ -366,3 +366,32 @@ func TestFiles_OnlyPartZeroIsRateLimited(t *testing.T) {
 	}
 	expectAnswer(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.RateLimited, "one new file too many")
 }
+
+// FILE_ACCOUNT_DAILY_BYTES is one budget per account across all its conversations: every stored
+// part spends from it, a resend or a refused part spends nothing, an empty budget answers 429
+// E_FILE_BUDGET_SPENT before the quota or the store is looked at, and another account keeps its own.
+func TestFiles_DailyBudgetIsPerAccount(t *testing.T) {
+	mux := filesSetup(t)
+	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
+	withBob, withCarol := pair(t, alice, bob), pair(t, alice, carol)
+	t.Setenv(config.EnvFileAccountDailyBytes, strconv.Itoa(3*utils.FilePartBytes)) // before the budgets exist
+
+	file, first := uuid.NewString(), newFilePart(t)
+	expectStatus(t, alice.uploadPart(withBob, file, 0, first), http.StatusCreated, "part 0 (1 of 3)")
+	expectAnswer(t, alice.uploadPart(withBob, file, 0, first), apperr.Conflict, "the identical resend")
+	expectAnswer(t, alice.uploadPart(withBob, uuid.NewString(), 1, newFilePart(t)), apperr.FilePartOutOfOrder, "a refused part")
+	expectStatus(t, alice.uploadPart(withBob, file, 1, newFilePart(t)), http.StatusCreated, "part 1 (2 of 3)")
+	expectStatus(t, alice.uploadPart(withCarol, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "another conversation (3 of 3)")
+	expectAnswer(t, alice.uploadPart(withCarol, uuid.NewString(), 0, newFilePart(t)), apperr.FileBudgetSpent, "a fourth part anywhere")
+
+	// Checked before the quota: even with no quota left the answer is the budget's
+	t.Setenv(config.EnvFileConversationQuotaBytes, strconv.Itoa(utils.FilePartBytes))
+	expectAnswer(t, alice.uploadPart(withBob, file, 2, newFilePart(t)), apperr.FileBudgetSpent, "spent budget and full quota")
+	t.Setenv(config.EnvFileConversationQuotaBytes, "")
+
+	// bob's budget is his own
+	expectStatus(t, bob.uploadPart(withBob, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "bob uploads")
+	if n := storedParts(t, uuid.MustParse(withBob)) + storedParts(t, uuid.MustParse(withCarol)); n != 4 {
+		t.Fatalf("%d parts stored, want 4", n)
+	}
+}

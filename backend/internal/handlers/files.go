@@ -8,6 +8,7 @@ import (
 	"elyrn/internal/apperr"
 	"elyrn/internal/chat"
 	"elyrn/internal/contract"
+	"elyrn/internal/middleware"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
 )
@@ -23,7 +24,14 @@ func uploadFilePart(w http.ResponseWriter, r *http.Request, svc *chat.Service, m
 	if req.Part == chat.FirstFilePart && !allowOrTooMany(w, bucketFile, me) {
 		return
 	}
-	if err := svc.UploadFilePart(me, id, req.ID, req.Part, req.Data); err != nil {
+	// Every stored part also spends one part of the account's in-memory daily budget
+	budget := middleware.FileBudget(me.StreamTag)
+	if budget == nil {
+		// Unusable budget settings (refused at startup, so never in a started server): fail closed
+		apperr.Write(w, "uploadFilePart: budget", apperr.FileBudgetSpent)
+		return
+	}
+	if err := svc.UploadFilePart(me, id, req.ID, req.Part, req.Data, budget); err != nil {
 		apperr.WriteError(w, "UploadFilePart", err)
 		return
 	}

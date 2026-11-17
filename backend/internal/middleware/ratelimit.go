@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 	"sort"
 	"sync"
@@ -66,42 +66,80 @@ func (tb *TokenBucket) Allow() bool {
 	return false
 }
 
+// Refund gives back one token that Allow took for work that was then not done, never above the
+// bucket's size.
+func (tb *TokenBucket) Refund() {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if tb.tokens < tb.maxTokens {
+		tb.tokens++
+	}
+}
+
+// limiterSettings is what one limiter's buckets are made of, read from the configuration at
+// every use (so tests and a changed environment take effect for buckets created afterwards).
+type limiterSettings struct {
+	maxTokens       int
+	refillInterval  time.Duration
+	cleanupInterval time.Duration
+	maxBuckets      int
+	// idleLimit: a bucket untouched this long is dropped; it must be at least the time the
+	// bucket takes to refill, or dropping it would hand back tokens early
+	idleLimit time.Duration
+}
+
 // RateLimiter stores token buckets per client key (Lock order: rl.mu before bucket.mu)
 type RateLimiter struct {
 	buckets         map[string]*TokenBucket
 	mu              sync.RWMutex
+	settings        func() (limiterSettings, error)
 	cleanupInterval time.Duration
 	lastCleanup     time.Time
 	maxTokens       int
 	refillInterval  time.Duration
 	maxBuckets      int
+	idleLimit       time.Duration
 }
 
 var globalRateLimiter = &RateLimiter{
-	buckets: make(map[string]*TokenBucket),
+	buckets:  make(map[string]*TokenBucket),
+	settings: globalSettings,
 }
 
-func (rl *RateLimiter) loadConfig() error {
+var errLimiterConfig = errors.New("rate limit config not set")
+
+// globalSettings are the RATE_LIMIT_* settings of the shared limiter.
+func globalSettings() (limiterSettings, error) {
 	maxTokens := config.GetRateLimitMaxTokens()
 	refillSec := config.GetRateLimitRefillIntervalSeconds()
 	cleanupSec := config.GetRateLimitCleanupIntervalSeconds()
 	maxBuckets := config.GetRateLimitMaxBuckets()
 	if maxTokens <= 0 || refillSec <= 0 || cleanupSec <= 0 || maxBuckets <= 0 {
-		return fmt.Errorf("rate limit config not set")
+		return limiterSettings{}, errLimiterConfig
+	}
+	return limiterSettings{maxTokens: maxTokens, refillInterval: time.Duration(refillSec) * time.Second,
+		cleanupInterval: time.Duration(cleanupSec) * time.Second, maxBuckets: maxBuckets, idleLimit: inactivityThreshold}, nil
+}
+
+func (rl *RateLimiter) loadConfig() error {
+	s, err := rl.settings()
+	if err != nil {
+		return err
 	}
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	rl.maxTokens = maxTokens
-	rl.refillInterval = time.Duration(refillSec) * time.Second
-	rl.cleanupInterval = time.Duration(cleanupSec) * time.Second
-	rl.maxBuckets = maxBuckets
+	rl.maxTokens = s.maxTokens
+	rl.refillInterval = s.refillInterval
+	rl.cleanupInterval = s.cleanupInterval
+	rl.maxBuckets = s.maxBuckets
+	rl.idleLimit = s.idleLimit
 	if rl.lastCleanup.IsZero() {
 		rl.lastCleanup = time.Now()
 	}
 	return nil
 }
 
-// inactivityThreshold drops buckets nobody has touched for an hour
+// inactivityThreshold drops the shared limiter's buckets nobody has touched for an hour
 const inactivityThreshold = time.Hour
 
 // getBucket returns the bucket for key, creating it if needed. The bucket count is bounded
@@ -136,10 +174,10 @@ func (rl *RateLimiter) lastAccess(bucket *TokenBucket) time.Time {
 	return bucket.lastAccess
 }
 
-// evictInactiveLocked removes buckets idle past inactivityThreshold. Caller holds rl.mu.
+// evictInactiveLocked removes buckets idle past the limiter's idle limit. Caller holds rl.mu.
 func (rl *RateLimiter) evictInactiveLocked(now time.Time) {
 	for key, bucket := range rl.buckets {
-		if now.Sub(rl.lastAccess(bucket)) > inactivityThreshold {
+		if now.Sub(rl.lastAccess(bucket)) > rl.idleLimit {
 			delete(rl.buckets, key)
 		}
 	}

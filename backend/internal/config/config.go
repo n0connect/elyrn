@@ -261,14 +261,17 @@ const (
 	EnvMaxFileBytes               = "MAX_FILE_BYTES"
 	EnvFileConversationQuotaBytes = "FILE_CONVERSATION_QUOTA_BYTES"
 	EnvFileStoreMaxBytes          = "FILE_STORE_MAX_BYTES"
+	EnvFileAccountDailyBytes      = "FILE_ACCOUNT_DAILY_BYTES"
 
 	MaxFileBytesBound             int64 = 100 << 20 // 104857600
 	MaxFileConversationQuotaBound int64 = 10 << 30  // 10737418240
 	MaxFileStoreBytesBound        int64 = 1 << 40   // 1099511627776
+	MaxFileAccountDailyBound      int64 = 10 << 30  // 10737418240
 
 	defaultMaxFileBytes          int64 = 10 << 20  // 10485760
 	defaultFileConversationQuota int64 = 100 << 20 // 104857600
 	defaultFileStoreMaxBytes     int64 = 2 << 30   // 2147483648
+	defaultFileAccountDaily      int64 = 100 << 20 // 104857600
 
 	decimalBase = 10
 	int64Bits   = 64
@@ -301,6 +304,12 @@ func GetFileConversationQuotaBytes() int64 {
 // GetFileStoreMaxBytes returns how many bytes of stored parts the whole server may hold
 func GetFileStoreMaxBytes() int64 {
 	return getEnvInt64Default(EnvFileStoreMaxBytes, defaultFileStoreMaxBytes)
+}
+
+// GetFileAccountDailyBytes returns how many bytes of parts one account may store per day (an
+// in-memory budget that refills over a day)
+func GetFileAccountDailyBytes() int64 {
+	return getEnvInt64Default(EnvFileAccountDailyBytes, defaultFileAccountDaily)
 }
 
 // ========================================
