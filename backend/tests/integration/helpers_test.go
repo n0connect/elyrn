@@ -297,11 +297,25 @@ func open(t *testing.T, reader, peer *user, convID string, m models.MessageDTO) 
 	return msg
 }
 
-// eventLines opens the live-event stream of the session behind cookie on srv and returns its
-// lines once the stream is ready (its preamble read); the stream closes when the test ends.
-func eventLines(t *testing.T, srv *httptest.Server, cookie *http.Cookie) <-chan string {
+// eventServer serves mux on a real listener for event-stream tests. It is closed when the test
+// ends, after every stream openEvents opened on it: cleanups run last registered first, and
+// Close waits for streams that are still open.
+func eventServer(t *testing.T, mux http.Handler) *httptest.Server {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v2/events", nil)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// eventLinesBuffer holds the lines a test has not read yet
+const eventLinesBuffer = 64
+
+// openEvents opens the live-event stream of the session behind cookie on srv (from
+// eventServer) and returns the answer, for its status and headers, and the stream's lines as
+// they arrive; the stream is closed when the test ends.
+func openEvents(t *testing.T, srv *httptest.Server, cookie *http.Cookie) (*http.Response, <-chan string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+models.PathEvents, nil)
 	if err != nil {
 		t.Fatalf("events request: %v", err)
 	}
@@ -311,7 +325,7 @@ func eventLines(t *testing.T, srv *httptest.Server, cookie *http.Cookie) <-chan 
 		t.Fatalf("events connect: %v", err)
 	}
 	t.Cleanup(func() { resp.Body.Close() })
-	lines := make(chan string, 32)
+	lines := make(chan string, eventLinesBuffer)
 	go func() {
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
@@ -319,8 +333,7 @@ func eventLines(t *testing.T, srv *httptest.Server, cookie *http.Cookie) <-chan 
 		}
 		close(lines)
 	}()
-	waitFor(t, lines, "retry: 3000")
-	return lines
+	return resp, lines
 }
 
 // randomBytes returns CSPRNG output, used only to build adversarial (non-protocol) inputs.

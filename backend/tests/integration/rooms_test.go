@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/base64"
 	"net/http"
@@ -696,23 +695,8 @@ func TestRooms_EventsPokeTheOtherMembers(t *testing.T) {
 	alice, bob := register(t, mux), register(t, mux)
 	a := createRoom(t, alice, 4, 24)
 
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	req, _ := http.NewRequest("GET", srv.URL+"/api/v2/events", nil)
-	req.AddCookie(alice.cookie)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("events connect: %v", err)
-	}
-	defer resp.Body.Close()
-	lines := make(chan string, 32)
-	go func() {
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		close(lines)
-	}()
+	srv := eventServer(t, mux)
+	_, lines := openEvents(t, srv, alice.cookie)
 	waitFor(t, lines, "retry: 3000")
 
 	b := joinRoom(t, bob, a.code)
