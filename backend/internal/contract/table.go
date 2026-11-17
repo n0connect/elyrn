@@ -81,6 +81,7 @@ const (
 	OpNoteList
 	OpNoteSend
 	OpNoteDelete
+	OpMemberRole
 	OpEvents
 	OpHealth
 )
@@ -208,7 +209,11 @@ func chatEndpoints() []Endpoint {
 		}},
 		{Template: conversation + "/" + models.SubRead, Ops: []Op{{ID: OpReadMark, Method: http.MethodPost,
 			Body: jsonBody(Field{Name: "seq", Kind: KindInt, Required: true, Int: rangeSeq})}}},
-		{Template: conversation + "/" + models.SubMembers, Ops: []Op{{ID: OpMemberList, Method: http.MethodGet}}},
+		{Template: conversation + "/" + models.SubMembers, Ops: []Op{
+			{ID: OpMemberList, Method: http.MethodGet},
+			{ID: OpMemberRole, Method: http.MethodPost, Body: jsonBody(cardField,
+				Field{Name: "role", Kind: KindString, Required: true, Str: patternRoomRole})},
+		}},
 		{Template: conversation + "/" + models.SubNotes, Ops: []Op{
 			{ID: OpNoteList, Method: http.MethodGet},
 			{ID: OpNoteSend, Method: http.MethodPost, Body: jsonBody(idField,

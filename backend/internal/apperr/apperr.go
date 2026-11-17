@@ -63,6 +63,7 @@ const (
 	RosterChanged
 	IdentityUnset
 	Forbidden
+	RoleNotAllowed
 
 	// Login: JSON-shaped answers (the browser maps the message, the agent the status)
 	LoginBodyInvalid
@@ -96,6 +97,7 @@ const (
 	sayIDTaken            = "Id taken"
 	sayRoomFull           = "Room full"
 	sayRosterChanged      = "Roster changed"
+	sayRoleNotAllowed     = "Role not allowed"
 	sayInternalServerErr  = "Internal server error"
 	sayInvalidCredentials = "Invalid credentials"
 )
@@ -190,6 +192,11 @@ var registry = map[Code]entry{
 	// MERGE: an account without an identity key and an action the caller may not take
 	IdentityUnset: {"E_IDENTITY_UNSET", http.StatusForbidden, sayForbidden, utils.LogLevelWARN, shapeText},
 	Forbidden:     {"E_FORBIDDEN", http.StatusForbidden, sayForbidden, utils.LogLevelWARN, shapeText},
+	// RoleNotAllowed answers in JSON for the reason IDTaken does: it shares its status with
+	// another answer of its route (a cross-origin 403), and the browser tells them apart by
+	// message, the agent by the same field.
+	// RoleNotAllowed: a member who does not own the room set another member's role
+	RoleNotAllowed: {"E_ROLE_NOT_ALLOWED", http.StatusForbidden, sayRoleNotAllowed, utils.LogLevelWARN, shapeJSON},
 
 	// Login answers in JSON (shapeJSON); a body that is not JSON is its InvalidRequest twin
 	LoginBodyInvalid: {"E_LOGIN_BODY_INVALID", http.StatusBadRequest, sayInvalidRequest, utils.LogLevelWARN, shapeJSON},

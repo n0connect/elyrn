@@ -182,6 +182,7 @@ func shapedBodies(t *testing.T, mux http.Handler, owner *user) map[contract.OpID
 		contract.OpMessageSend:  models.SendMessageRequest{ID: newMessageID(), Ciphertext: pairCiphertext(t)},
 		contract.OpReadMark:     models.MarkReadRequest{Seq: 1},
 		contract.OpNoteSend:     models.SendNoteRequest{ID: noteID, To: side.member.Card, Blob: note},
+		contract.OpMemberRole:   models.SetRoleRequest{Card: side.member.Card, Role: newRole(t)},
 	}
 	for _, r := range tableRoutes(t) {
 		if r.op.Body == nil || publicOps[r.op.ID] {

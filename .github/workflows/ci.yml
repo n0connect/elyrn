@@ -95,6 +95,7 @@ jobs:
           fuzz ./internal/contract FuzzPatternNote
           fuzz ./internal/contract FuzzPatternPendingToken
           fuzz ./internal/contract FuzzPatternRoomCard
+          fuzz ./internal/contract FuzzPatternRoomRole
           fuzz ./internal/contract FuzzPatternRoomVault
           fuzz ./internal/contract FuzzPatternSalt
           fuzz ./internal/contract FuzzPatternSeqQuery

@@ -160,6 +160,14 @@ type RoomMemberDTO struct {
 	Card  string `json:"card"`
 	Mine  bool   `json:"mine"`
 	Owner bool   `json:"owner"`
+	Role  string `json:"role"` // the sealed role, or "" when none was ever set
+}
+
+// SetRoleRequest stores a sealed role for the member whose card is Card (the owner for anyone,
+// any member for itself); the server checks only the blob's size
+type SetRoleRequest struct {
+	Card string `json:"card"`
+	Role string `json:"role"`
 }
 
 type RoomMembersResponse struct {

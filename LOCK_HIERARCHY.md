@@ -33,8 +33,9 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
   row before anything else for the same reason
 - `conversations` row lock (`ChatRepository.NextSeq`, `UPDATE … RETURNING`, and
   `ChatRepository.LockConversation`): serialises senders of one conversation until the transaction
-  ends. Room joins, leaves and notes take it too, so a message is always checked against the roster
-  it is stored under. Never held while acquiring a `users` or `rooms` row lock.
+  ends. Room joins, leaves, notes and role changes (`SetRole`) take it too, so a message is always
+  checked against the roster it is stored under and a role is written only for a current member.
+  Never held while acquiring a `users` or `rooms` row lock.
   `DeleteConversation` takes it (`LockConversation`) right after the `rooms` delete and **before**
   deleting the children (messages, memberships, notes) and the conversation row itself, so a sender
   holding it finishes first and nothing it stores outlives the delete
@@ -123,5 +124,5 @@ rl.mu.Lock()
 
 ---
 
-**Last Updated**: 2026-11-13
+**Last Updated**: 2026-11-17
 **Next Review**: Every sprint or when adding new locks

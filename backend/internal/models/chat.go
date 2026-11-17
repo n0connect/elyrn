@@ -46,6 +46,7 @@ type ConversationMember struct {
 	Card           string    `gorm:"type:text;not null;default:''"` // rooms: sealed by a code-derived key the server never sees
 	Vault          string    `gorm:"type:text;not null;default:''"` // rooms: the room code sealed for this member's account
 	JoinedSeq      int64     `gorm:"not null;default:0"`            // rooms: messages up to this seq predate the member
+	Role           string    `gorm:"type:text;not null;default:''"` // rooms: a role sealed by a code-derived key, "" when never set
 }
 
 func (ConversationMember) TableName() string {

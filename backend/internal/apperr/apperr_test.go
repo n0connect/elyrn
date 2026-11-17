@@ -67,8 +67,9 @@ var knownLevels = map[utils.LogLevel]struct{}{
 }
 
 // jsonWire pins login's failure answers to the exact (status, body) LoginHandler wrote before
-// they moved into the registry, and a send's "id taken" 409 (in JSON so the browser can read
-// it); frontend/js/errors.js fromApi maps these messages.
+// they moved into the registry, a send's "id taken" 409, and the role answer that shares a status
+// with another answer of its route (in JSON so the browser can read them);
+// frontend/js/errors.js fromApi maps these messages.
 var jsonWire = map[Code]struct {
 	status int
 	body   string
@@ -79,6 +80,7 @@ var jsonWire = map[Code]struct {
 	LoginNoAccount:     {401, `{"success":false,"message":"Invalid credentials"}`},
 	LoginLegacyAccount: {401, `{"success":false,"message":"Invalid credentials"}`},
 	IDTaken:            {409, `{"success":false,"message":"Id taken"}`},
+	RoleNotAllowed:     {403, `{"success":false,"message":"Role not allowed"}`},
 }
 
 // emptyWire pins the answers with a status line only: HEAD on register, login and the PoW
@@ -230,6 +232,7 @@ func TestSentinelsMapped(t *testing.T) {
 		chat.ErrStale:            RosterChanged,
 		chat.ErrIdentityUnset:    IdentityUnset,
 		chat.ErrForbidden:        Forbidden,
+		chat.ErrRoleNotAllowed:   RoleNotAllowed,
 		auth.ErrBusy:             Argon2Busy,
 		auth.ErrPendingStoreFull: PendingStoreFull,
 		pow.ErrRateLimited:       PoWRateLimited,

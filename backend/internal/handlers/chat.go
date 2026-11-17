@@ -28,6 +28,7 @@ const (
 	bucketRoom   = "room"
 	bucketJoin   = "join"
 	bucketNote   = "note"
+	bucketRole   = "role"
 )
 
 // pageCursors maps each page query the contract admits to its cursor kind
@@ -211,6 +212,8 @@ func ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 		sendNote(w, r, svc, me, id)
 	case contract.OpNoteDelete:
 		deleteNote(w, svc, me, id, in.PathID(contract.PathNote))
+	case contract.OpMemberRole:
+		setRole(w, r, svc, me, id)
 	default:
 		// The table routed another endpoint's operation here: a wiring fault
 		apperr.Write(w, "ConversationsHandler", apperr.InputUnchecked)
@@ -350,6 +353,24 @@ func roomMembers(w http.ResponseWriter, svc *chat.Service, me *chat.Member, id u
 		return
 	}
 	utils.EncodeJSONResponse(w, models.RoomMembersResponse{Members: members}, http.StatusOK)
+}
+
+// setRole stores a sealed role and tells every member, the caller's other devices included.
+func setRole(w http.ResponseWriter, r *http.Request, svc *chat.Service, me *chat.Member, id uuid.UUID) {
+	if !allowOrTooMany(w, bucketRole, me) {
+		return
+	}
+	var req models.SetRoleRequest
+	if !bindInput(w, r, &req, "setRole") {
+		return
+	}
+	streams, err := svc.SetRole(me, id, req.Card, req.Role)
+	if err != nil {
+		apperr.WriteError(w, "SetRole", err)
+		return
+	}
+	realtime.Default.Publish(streams, realtime.Event{Kind: realtime.KindConversation})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func listNotes(w http.ResponseWriter, svc *chat.Service, me *chat.Member, id uuid.UUID) {

@@ -70,6 +70,10 @@ func FuzzPatternRoomCard(f *testing.F) {
 func FuzzPatternRoomVault(f *testing.F) {
 	fuzzBase64(f, patternRoomVault, base64Seeds(f, patternRoomVault)...)
 }
+func FuzzPatternRoomRole(f *testing.F) {
+	fuzzBase64(f, patternRoomRole, base64Seeds(f, patternRoomRole)...)
+}
+
 func FuzzPatternMessage(f *testing.F) {
 	fuzzBase64(f, patternMessage, exampleString(f, patternMessage), roomBlob(f, utils.RoomMessageMagic, 2), roomBlob(f, utils.RoomNoteMagic, 1))
 }

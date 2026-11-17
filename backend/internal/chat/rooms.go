@@ -24,6 +24,8 @@ import (
 var (
 	ErrRoomFull = errors.New("room full")
 	ErrStale    = errors.New("roster changed")
+	// ErrRoleNotAllowed: a member who does not own the room set another member's role
+	ErrRoleNotAllowed = errors.New("role not allowed")
 )
 
 const (
@@ -319,10 +321,8 @@ func (s *Service) JoinRoom(me *Member, in *RoomInput) (*models.ConversationDTO, 
 		if len(members) >= room.MaxMembers {
 			return ErrRoomFull
 		}
-		for i := range members {
-			if members[i].Card == in.Card {
-				return ErrInvalidInput // a copy of someone's card announces nobody new
-			}
+		if memberWithCard(members, in.Card) != nil {
+			return ErrInvalidInput // a copy of someone's card announces nobody new
 		}
 		index, err := openIndex(self, row.ConvIndexEnc)
 		if err != nil {
@@ -371,10 +371,71 @@ func (s *Service) RoomMembers(me *Member, id uuid.UUID) ([]models.RoomMemberDTO,
 	}
 	result := make([]models.RoomMemberDTO, len(members))
 	for i, m := range members {
-		result[i] = models.RoomMemberDTO{Card: m.Card, Mine: m.MemberTag == mine.MemberTag, Owner: m.MemberTag == room.OwnerTag}
+		result[i] = models.RoomMemberDTO{Card: m.Card, Mine: m.MemberTag == mine.MemberTag, Owner: m.MemberTag == room.OwnerTag, Role: m.Role}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Card < result[j].Card })
 	return result, nil
+}
+
+// SetRole stores a sealed role for the member whose card is `card`: the owner may set anyone's,
+// any other member only their own. The server never opens the role (it is sealed by a key derived
+// from the room's code, bound to that card); it checks only its size. Runs under the conversation
+// row lock, so the target is a member when it is written. Returns every member's live-event
+// address, the caller's included (its other devices).
+func (s *Service) SetRole(me *Member, id uuid.UUID, card, role string) ([]string, error) {
+	_, okCard := utils.DecodeExact(card, utils.RoomCardBytes)
+	_, okRole := utils.DecodeExact(role, utils.RoomRoleBytes)
+	if !okCard || !okRole {
+		return nil, ErrInvalidInput
+	}
+	room, err := s.requireRoom(s.chats, id)
+	if err != nil {
+		return nil, err
+	}
+	var streams []string
+	err = s.chats.Transaction(func(tx store.ChatRepository) error {
+		if _, err := tx.LockConversation(id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		caller, err := s.requireMembership(tx, me, id)
+		if err != nil {
+			return err
+		}
+		members, err := tx.ListMembers(id)
+		if err != nil {
+			return err
+		}
+		target := memberWithCard(members, card)
+		if target == nil {
+			return ErrNotFound
+		}
+		if caller.MemberTag != room.OwnerTag && target.MemberTag != caller.MemberTag {
+			return ErrRoleNotAllowed
+		}
+		if err := tx.UpdateRole(id, target.MemberTag, role); err != nil {
+			return err
+		}
+		streams, err = memberStreams(members)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.logger.Debug("SetRole: role stored")
+	return streams, nil
+}
+
+// memberWithCard is the member whose stored card is card, or nil.
+func memberWithCard(members []models.ConversationMember, card string) *models.ConversationMember {
+	for i := range members {
+		if members[i].Card == card {
+			return &members[i]
+		}
+	}
+	return nil
 }
 
 // leaveRoom removes the caller from a room they do not own; their messages stay readable to
@@ -479,12 +540,7 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 		if err != nil {
 			return err
 		}
-		var recipient *models.ConversationMember
-		for i := range members {
-			if members[i].Card == to {
-				recipient = &members[i]
-			}
-		}
+		recipient := memberWithCard(members, to)
 		if recipient == nil {
 			return ErrNotFound
 		}

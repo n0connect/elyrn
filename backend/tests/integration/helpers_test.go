@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
@@ -294,6 +295,32 @@ func open(t *testing.T, reader, peer *user, convID string, m models.MessageDTO) 
 		t.Fatalf("Decrypt seq %d: %v", m.Seq, err)
 	}
 	return msg
+}
+
+// eventLines opens the live-event stream of the session behind cookie on srv and returns its
+// lines once the stream is ready (its preamble read); the stream closes when the test ends.
+func eventLines(t *testing.T, srv *httptest.Server, cookie *http.Cookie) <-chan string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v2/events", nil)
+	if err != nil {
+		t.Fatalf("events request: %v", err)
+	}
+	req.AddCookie(cookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("events connect: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	lines := make(chan string, 32)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+		close(lines)
+	}()
+	waitFor(t, lines, "retry: 3000")
+	return lines
 }
 
 // randomBytes returns CSPRNG output, used only to build adversarial (non-protocol) inputs.

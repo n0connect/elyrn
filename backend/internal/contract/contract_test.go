@@ -64,7 +64,7 @@ func exampleString(t testing.TB, p *Pattern) string {
 	switch p {
 	case patternUUIDv4:
 		return uuid.NewString()
-	case patternKey32, patternInviteToken, patternRoomCard, patternRoomVault:
+	case patternKey32, patternInviteToken, patternRoomCard, patternRoomVault, patternRoomRole:
 		return base64.RawURLEncoding.EncodeToString(randomBytes(t, base64.RawURLEncoding.DecodedLen(p.MaxLen)))
 	case patternChallenge, patternSalt:
 		return hex.EncodeToString(randomBytes(t, p.MaxLen/2))
@@ -223,6 +223,7 @@ func TestBodiesBindToTheirModels(t *testing.T) {
 		OpMessageSend:  func() any { return &models.SendMessageRequest{} },
 		OpReadMark:     func() any { return &models.MarkReadRequest{} },
 		OpNoteSend:     func() any { return &models.SendNoteRequest{} },
+		OpMemberRole:   func() any { return &models.SetRoleRequest{} },
 	}
 	forEachOp(func(e *Endpoint, op *Op) {
 		if op.Body == nil {

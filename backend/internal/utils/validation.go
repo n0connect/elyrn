@@ -219,6 +219,13 @@ const (
 	RoomHeaderBytes  = len(RoomMessageMagic) + 1 + RoomCardBytes + 3*roomKeyBytes + roomCountBytes
 	RoomWrapBytes    = roomKeyBytes + cryptoengine.GCMTagSize
 	RoomDigestOffset = RoomHeaderBytes - roomCountBytes - roomKeyBytes
+
+	// roomRoleTextBytes: a role's UTF-8 form is at most this long; its sealed plaintext is a
+	// length byte, the text and zero padding up to this size, so every role seals to one size
+	roomRoleTextBytes  = 64
+	roomRolePlainBytes = 1 + roomRoleTextBytes
+	// RoomRoleBytes: nonce || AES-256-GCM(role plaintext) || tag; its size is all the server checks
+	RoomRoleBytes = cryptoengine.GCMNonceSize + roomRolePlainBytes + cryptoengine.GCMTagSize
 )
 
 // DecodeExact whitelists canonical base64url (no padding) of exactly size bytes.

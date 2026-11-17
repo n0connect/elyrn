@@ -35,6 +35,7 @@ named constants. Integers are canonical JSON integer literals (no fraction, expo
 | pending-token | `^(?:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)?$` | 0..1024 | - |
 | pow-solution | `^(?:0\|[1-9][0-9]*)$` | 1..20 | canonical uint64 |
 | room-card | `^[A-Za-z0-9_-]{80}$` | 80 | utils.DecodeExact(60) |
+| room-role | `^[A-Za-z0-9_-]{124}$` | 124 | utils.DecodeExact(93) |
 | room-vault | `^[A-Za-z0-9_-]{86}[AEIMQUYcgkosw048]$` | 87 | utils.DecodeExact(65) |
 | seq-query | `^(?:0\|[1-9][0-9]*)$` | 1..19 | - |
 | uuid-v4 | `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` | 36 | utils.ParseCanonicalUUIDv4 |
@@ -246,6 +247,16 @@ HEAD: bare 405 (`E_HEAD_NOT_ALLOWED`).
 
 - Query: none.
 - Body: none.
+
+### POST
+
+- Query: none.
+- Body: required, at most 290 bytes; shape refused with 400 `E_INVALID_REQUEST`.
+
+| Field | Type | Required | Whitelist | Missing | Invalid |
+|---|---|---|---|---|---|
+| `card` | string | true | room-card | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
+| `role` | string | true | room-role | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
 
 ## `/api/v2/conversations/{id}/notes`
 

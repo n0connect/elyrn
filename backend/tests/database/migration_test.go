@@ -43,7 +43,7 @@ func TestDatabaseMigration(t *testing.T) {
 			t.Errorf("%T table should exist after migration", table)
 		}
 	}
-	for _, column := range []string{"card", "vault", "joined_seq"} {
+	for _, column := range []string{"card", "vault", "joined_seq", "role"} {
 		if !database.DB.Migrator().HasColumn(&models.ConversationMember{}, column) {
 			t.Errorf("conversation_members.%s should exist after migration", column)
 		}

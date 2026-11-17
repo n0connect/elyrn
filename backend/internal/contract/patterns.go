@@ -19,7 +19,7 @@ import (
 
 // Every pattern below is an anchored RE2 expression (Go's regexp: linear time in the input, no
 // backtracking, so no ReDoS), compiled once at package init from named constants, never from
-// request data. Each is plain: character classes, one optional group, counted repeats <= 87.
+// request data. Each is plain: character classes, one optional group, counted repeats <= 124.
 
 // Pattern is the whitelist of one string value: its anchored expression, its length bounds
 // (checked first, so the expression never sees an oversized value), and, where a regular
@@ -120,6 +120,8 @@ var (
 		MaxLen:    base64.RawURLEncoding.EncodedLen(utils.RoomMaxBlobBytes(noteWraps)),
 		check:     noteBlob,
 		CheckName: fmt.Sprintf("utils.ParseRoomBlob(%s, %d wrap)", utils.RoomNoteMagic, noteWraps)}
+	// patternRoomRole: the server only checks a role's size; what it says is sealed for the room
+	patternRoomRole = base64URLExact("room-role", utils.RoomRoleBytes)
 	// patternSeqQuery is a page cursor's text: canonical decimal of at most 19 digits
 	patternSeqQuery = &Pattern{Name: "seq-query", re: regexp.MustCompile(exprDecimal), MinLen: 1, MaxLen: maxInt64Digits}
 

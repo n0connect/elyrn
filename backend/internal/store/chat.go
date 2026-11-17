@@ -54,6 +54,7 @@ type ChatRepository interface {
 	LockConversation(conversationID uuid.UUID) (int64, error)
 	AddMember(member *models.ConversationMember) error
 	UpdateVault(conversationID uuid.UUID, memberTag, vault string) error
+	UpdateRole(conversationID uuid.UUID, memberTag, role string) error
 	DeleteMember(conversationID uuid.UUID, memberTag string) error
 	CountMembers(conversationIDs []uuid.UUID) (map[uuid.UUID]int, error)
 
@@ -569,6 +570,20 @@ func (r *chatRepository) UpdateVault(conversationID uuid.UUID, memberTag, vault 
 		chatRepoLogger.LogError("ChatRepository.UpdateVault", err)
 	}
 	return err
+}
+
+// UpdateRole replaces one member's sealed role; ErrNotFound when the membership is gone.
+func (r *chatRepository) UpdateRole(conversationID uuid.UUID, memberTag, role string) error {
+	result := r.db().Model(&models.ConversationMember{}).
+		Where(whereMember, conversationID, memberTag).UpdateColumn("role", role)
+	if result.Error != nil {
+		chatRepoLogger.LogError("ChatRepository.UpdateRole", result.Error)
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeleteMember removes one membership and every note to or from it in that room.
