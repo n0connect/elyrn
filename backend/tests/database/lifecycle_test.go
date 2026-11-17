@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bytes"
-	"log"
 	"net"
 	"os"
 	"strconv"
@@ -163,24 +161,6 @@ const (
 	lostWithin  = 30 * time.Second
 )
 
-// lockedLog is a log destination the watcher's goroutine writes while the test reads it.
-type lockedLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *lockedLog) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
-}
-
-func (l *lockedLog) count(id string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return strings.Count(l.buf.String(), id)
-}
-
 // instanceLockHeld reports, through the pool (not the stalled path), whether some session holds
 // the single-instance lock.
 func instanceLockHeld(t *testing.T) bool {
@@ -205,10 +185,8 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 	proxy := testutil.StartStallingProxy(t, net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT")))
 	t.Setenv("DB_HOST", "127.0.0.1")
 	t.Setenv("DB_PORT", proxy.Port())
-	logs := &lockedLog{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	defer log.SetOutput(previous)
+	logs := &testutil.LockedLog{}
+	defer testutil.RedirectStandardLog(logs)()
 
 	lost := make(chan *opcode.Failure, 1)
 	lock, f := database.AcquireInstanceLockForTesting(func(f *opcode.Failure) { lost <- f }, stallCheck, stallSlow)
@@ -226,7 +204,7 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 	if !instanceLockHeld(t) {
 		t.Fatal("checking an unanswering database released the lock")
 	}
-	if got := logs.count(opcode.InstanceLockUnreachable.ID); got != 1 {
+	if got := strings.Count(logs.String(), opcode.InstanceLockUnreachable.ID); got != 1 {
 		t.Fatalf("the outage was reported %d times, want once", got)
 	}
 

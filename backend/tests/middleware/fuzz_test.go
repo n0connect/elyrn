@@ -198,7 +198,7 @@ func FuzzRecover(f *testing.F) {
 	f.Add(uint8(panicError), "\x00\n\xff")
 	f.Fuzz(func(t *testing.T, kind uint8, text string) {
 		text = panicCanary + text
-		captured := captureLog(t)
+		captured := testutil.CaptureLog(t)
 		var value any
 		switch kind % panicKinds {
 		case panicString:

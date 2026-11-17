@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -574,30 +573,10 @@ func TestBurn_RacingSendsLeaveNoCiphertext(t *testing.T) {
 func logsDuring(t *testing.T, fn func()) string {
 	t.Helper()
 	t.Setenv("LOG_LEVEL", "info")
-	var buf lockedBuffer
-	previous := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(previous)
+	var buf testutil.LockedLog
+	defer testutil.RedirectStandardLog(&buf)()
 	fn()
 	return buf.String()
-}
-
-// lockedBuffer is a log sink safe for the server's goroutines.
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }
 
 // brokenDatabaseText is what the driver's own text says of breakDatabase's address: the
