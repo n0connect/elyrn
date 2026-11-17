@@ -58,7 +58,12 @@ var (
 const (
 	// minProductionDBPasswordLen rejects well-known defaults such as "postgres" in production
 	minProductionDBPasswordLen = 16
+	minPort                    = 1
 	maxPort                    = 65535
+	// minCount is the floor of every count, size and interval setting: at least one
+	minCount = 1
+	// wireExpansion: twice a raw size covers its base64 and the JSON around it in a request body
+	wireExpansion = 2
 	// envSSLRootCert is libpq's (and pgx's) variable for the CA that verifies the database server
 	envSSLRootCert = "PGSSLROOTCERT"
 )
@@ -66,11 +71,11 @@ const (
 // ValidateStartupConfig validates all configuration at startup. A refusal is always an
 // *opcode.Failure (E_CONFIG_INVALID, or what the master keys report).
 func ValidateStartupConfig() error {
-	if _, ok := allowedAppEnvs[strings.ToLower(strings.TrimSpace(config.GetEnv("APP_ENV", "development")))]; !ok {
-		return invalid("APP_ENV", "must be one of development, test, production")
+	if _, ok := allowedAppEnvs[config.GetAppEnv()]; !ok {
+		return invalid(config.EnvAppEnv, "must be one of development, test, production")
 	}
 	if _, ok := allowedLogLevels[config.GetLogLevel()]; !ok {
-		return invalid("LOG_LEVEL", "must be one of debug, info, warn, error")
+		return invalid(config.EnvLogLevel, "must be one of debug, info, warn, error")
 	}
 
 	minJWTLen := config.GetJWTSecretMinLength()
@@ -109,41 +114,41 @@ func startupBounds(minJWTLen int) []bounded[int] {
 		argon2Floor = config.ProductionMinArgon2MemoryKiB
 	}
 	return []bounded[int]{
-		{"JWT_SECRET_MIN_LEN", minJWTLen, 32, 1024},
-		{"JWT_EXPIRATION_MINUTES", int(config.GetJWTExpiration() / time.Minute), config.MinJWTExpirationMinutes, config.MaxJWTExpirationMinutes},
-		{"MAX_REQUEST_BODY_BYTES", config.GetMaxRequestBodyBytes(), 1024, 16 << 20},
-		{"MAX_JSON_DEPTH", config.GetMaxJSONDepth(), 1, 8},
-		{"INVITE_TTL_SEC", seconds(config.GetInviteTTL()), 60, 7 * 24 * 3600},
-		{"MAX_ACTIVE_INVITES", config.GetMaxActiveInvites(), 1, 100},
-		{"MAX_CONVERSATIONS_PER_USER", config.GetMaxConversationsPerUser(), 1, config.MaxConversationsPerUserBound},
-		{"MAX_MESSAGE_BYTES", config.GetMaxMessageBytes(), 512, 65536},
-		{"MESSAGE_PAGE_LIMIT", config.GetMessagePageLimit(), 1, 1000},
-		{"MESSAGE_TTL_DAYS", config.GetMessageTTLDays(), 1, config.MaxMessageTTLDays()},
-		{"ROOM_MAX_MEMBERS", config.GetRoomMaxMembers(), config.MinRoomMembers, config.MaxRoomMembersBound},
-		{"ROOM_MAX_TTL_HOURS", config.GetRoomMaxTTLHours(), 1, config.MaxRoomTTLHoursBound},
-		{"POW_CHALLENGE_TTL_SEC", seconds(config.GetPoWChallengeTTL()), 1, 3600},
-		{"POW_DIFFICULTY", config.GetPoWDifficulty(), config.MinPoWDifficulty(), config.MaxPoWDifficulty()},
-		{"INTERNAL_ID_LENGTH", config.GetInternalIDLength(), 16, 24}, // users.uuid is size:24
-		{"ARGON2_MEMORY_KIB", config.GetArgon2MemoryKiB(), argon2Floor, config.MaxArgon2MemoryKiB},
-		{"ARGON2_TIME", config.GetArgon2Time(), config.MinArgon2Time, config.MaxArgon2Time},
-		{"ARGON2_PARALLELISM", config.GetArgon2Parallelism(), config.MinArgon2Parallelism, config.MaxArgon2Parallelism},
-		{"ARGON2_SALT_LENGTH", config.GetArgon2SaltLength(), config.MinArgon2SaltBytes, config.MaxArgon2SaltBytes},
-		{"ARGON2_HASH_LENGTH", config.GetArgon2HashLength(), config.MinArgon2HashBytes, config.MaxArgon2HashBytes},
-		{"ARGON2_MAX_CONCURRENT", config.GetArgon2MaxConcurrent(), 1, 64},
-		{"PENDING_TOKEN_TTL_SEC", seconds(config.GetPendingTokenTTL()), 30, 3600},
-		{"PENDING_CLEANUP_INTERVAL_SEC", seconds(config.GetPendingCleanupInterval()), 1, 3600},
-		{"PENDING_ID_BYTES", config.GetPendingIDBytes(), 16, 64},
-		{"RATE_LIMIT_MAX_TOKENS", config.GetRateLimitMaxTokens(), 1, 10000},
-		{"RATE_LIMIT_REFILL_INTERVAL_SEC", config.GetRateLimitRefillIntervalSeconds(), 1, 3600},
-		{"RATE_LIMIT_CLEANUP_INTERVAL_SEC", config.GetRateLimitCleanupIntervalSeconds(), 1, 86400},
-		{"RATE_LIMIT_MAX_BUCKETS", config.GetRateLimitMaxBuckets(), 100, 1000000},
-		{"BACKEND_PORT", portNumber(config.GetBackendPort()), 1, maxPort},
-		{"DB_PORT", portNumber(config.GetDBPort()), 1, maxPort},
-		{"SERVER_READ_HEADER_TIMEOUT_SEC", seconds(config.GetServerReadHeaderTimeout()), 1, 60},
-		{"SERVER_READ_TIMEOUT_SEC", seconds(config.GetServerReadTimeout()), 1, 300},
-		{"SERVER_WRITE_TIMEOUT_SEC", seconds(config.GetServerWriteTimeout()), 1, 300},
-		{"SERVER_IDLE_TIMEOUT_SEC", seconds(config.GetServerIdleTimeout()), 1, 600},
-		{"SERVER_MAX_HEADER_BYTES", config.GetServerMaxHeaderBytes(), 1024, 1 << 20},
+		{config.EnvJWTSecretMinLen, minJWTLen, config.MinJWTSecretMinLen, config.MaxJWTSecretMinLen},
+		{config.EnvJWTExpirationMinutes, int(config.GetJWTExpiration() / time.Minute), config.MinJWTExpirationMinutes, config.MaxJWTExpirationMinutes},
+		{config.EnvMaxRequestBodyBytes, config.GetMaxRequestBodyBytes(), config.MinRequestBodyBytes, config.MaxRequestBodyBytesBound},
+		{config.EnvMaxJSONDepth, config.GetMaxJSONDepth(), minCount, config.MaxJSONDepthBound},
+		{config.EnvInviteTTLSeconds, seconds(config.GetInviteTTL()), config.MinInviteTTLSeconds, config.MaxInviteTTLSeconds},
+		{config.EnvMaxActiveInvites, config.GetMaxActiveInvites(), minCount, config.MaxActiveInvitesBound},
+		{config.EnvMaxConversationsPerUser, config.GetMaxConversationsPerUser(), minCount, config.MaxConversationsPerUserBound},
+		{config.EnvMaxMessageBytes, config.GetMaxMessageBytes(), config.MinMessageBytes, config.MaxMessageBytesBound},
+		{config.EnvMessagePageLimit, config.GetMessagePageLimit(), minCount, config.MaxMessagePageLimitBound},
+		{config.EnvMessageTTLDays, config.GetMessageTTLDays(), minCount, config.MaxMessageTTLDays()},
+		{config.EnvRoomMaxMembers, config.GetRoomMaxMembers(), config.MinRoomMembers, config.MaxRoomMembersBound},
+		{config.EnvRoomMaxTTLHours, config.GetRoomMaxTTLHours(), config.MinRoomTTLHours, config.MaxRoomTTLHoursBound},
+		{config.EnvPoWChallengeTTLSeconds, seconds(config.GetPoWChallengeTTL()), minCount, config.MaxPoWChallengeTTLSeconds},
+		{config.EnvPoWDifficulty, config.GetPoWDifficulty(), config.MinPoWDifficulty(), config.MaxPoWDifficulty()},
+		{config.EnvInternalIDLength, config.GetInternalIDLength(), config.MinInternalIDLength, config.MaxInternalIDLength},
+		{config.EnvArgon2MemoryKiB, config.GetArgon2MemoryKiB(), argon2Floor, config.MaxArgon2MemoryKiB},
+		{config.EnvArgon2Time, config.GetArgon2Time(), config.MinArgon2Time, config.MaxArgon2Time},
+		{config.EnvArgon2Parallelism, config.GetArgon2Parallelism(), config.MinArgon2Parallelism, config.MaxArgon2Parallelism},
+		{config.EnvArgon2SaltLength, config.GetArgon2SaltLength(), config.MinArgon2SaltBytes, config.MaxArgon2SaltBytes},
+		{config.EnvArgon2HashLength, config.GetArgon2HashLength(), config.MinArgon2HashBytes, config.MaxArgon2HashBytes},
+		{config.EnvArgon2MaxConcurrent, config.GetArgon2MaxConcurrent(), minCount, config.MaxArgon2ConcurrentBound},
+		{config.EnvPendingTokenTTLSeconds, seconds(config.GetPendingTokenTTL()), config.MinPendingTokenTTLSeconds, config.MaxPendingTokenTTLSeconds},
+		{config.EnvPendingCleanupIntervalSeconds, seconds(config.GetPendingCleanupInterval()), minCount, config.MaxPendingCleanupSeconds},
+		{config.EnvPendingIDBytes, config.GetPendingIDBytes(), config.MinPendingIDBytes, config.MaxPendingIDBytes},
+		{config.EnvRateLimitMaxTokens, config.GetRateLimitMaxTokens(), minCount, config.MaxRateLimitTokensBound},
+		{config.EnvRateLimitRefillIntervalSeconds, config.GetRateLimitRefillIntervalSeconds(), minCount, config.MaxRateLimitRefillSeconds},
+		{config.EnvRateLimitCleanupIntervalSeconds, config.GetRateLimitCleanupIntervalSeconds(), minCount, config.MaxRateLimitCleanupSeconds},
+		{config.EnvRateLimitMaxBuckets, config.GetRateLimitMaxBuckets(), config.MinRateLimitBuckets, config.MaxRateLimitBucketsBound},
+		{config.EnvBackendPort, portNumber(config.GetBackendPort()), minPort, maxPort},
+		{config.EnvDBPort, portNumber(config.GetDBPort()), minPort, maxPort},
+		{config.EnvServerReadHeaderTimeoutSeconds, seconds(config.GetServerReadHeaderTimeout()), minCount, config.MaxServerReadHeaderTimeoutSeconds},
+		{config.EnvServerReadTimeoutSeconds, seconds(config.GetServerReadTimeout()), minCount, config.MaxServerReadTimeoutSeconds},
+		{config.EnvServerWriteTimeoutSeconds, seconds(config.GetServerWriteTimeout()), minCount, config.MaxServerWriteTimeoutSeconds},
+		{config.EnvServerIdleTimeoutSeconds, seconds(config.GetServerIdleTimeout()), minCount, config.MaxServerIdleTimeoutSeconds},
+		{config.EnvServerMaxHeaderBytes, config.GetServerMaxHeaderBytes(), config.MinServerMaxHeaderBytes, config.MaxServerMaxHeaderBytesBound},
 	}
 }
 
@@ -160,19 +165,19 @@ func fileBounds() []bounded[int64] {
 // checkSecrets insists on the signing secret, the token claims, the master keys and the pepper.
 func checkSecrets(minJWTLen int) error {
 	if len(config.GetJWTSecret()) < minJWTLen {
-		return invalid("JWT_SECRET", fmt.Sprintf("must be at least %d characters (generate it: openssl rand -hex 32)", minJWTLen))
+		return invalid(config.EnvJWTSecret, fmt.Sprintf("must be at least %d characters (generate it: openssl rand -hex 32)", minJWTLen))
 	}
 	if config.GetJWTIssuer() == "" {
-		return invalid("JWT_ISSUER", "is required")
+		return invalid(config.EnvJWTIssuer, "is required")
 	}
 	if config.GetJWTAudience() == "" {
-		return invalid("JWT_AUDIENCE", "is required")
+		return invalid(config.EnvJWTAudience, "is required")
 	}
 	if err := encryption.InitMasterKeys(); err != nil {
 		return err
 	}
 	if config.GetAccountLookupPepper() == nil {
-		return invalid("ACCOUNT_LOOKUP_PEPPER", "must be at least 32 bytes as hex or base64 (generate it: openssl rand -hex 32)")
+		return invalid(config.EnvAccountLookupPepper, fmt.Sprintf("must be at least %d bytes as hex or base64 (generate it: openssl rand -hex 32)", config.MinPepperBytes()))
 	}
 	return nil
 }
@@ -180,15 +185,15 @@ func checkSecrets(minJWTLen int) error {
 // checkSizesFit insists that the largest message, direct or to a full room, and a file part fit
 // a request body, and that a file fits a conversation's quota and that quota the store.
 func checkSizesFit() error {
-	if config.GetMaxMessageBytes() > config.GetMaxRequestBodyBytes()/2 {
-		return invalid("MAX_MESSAGE_BYTES", "must fit (base64) inside MAX_REQUEST_BODY_BYTES")
+	if config.GetMaxMessageBytes() > config.GetMaxRequestBodyBytes()/wireExpansion {
+		return invalid(config.EnvMaxMessageBytes, "must fit (base64) inside MAX_REQUEST_BODY_BYTES")
 	}
-	if utils.RoomMaxBlobBytes(config.GetRoomMaxMembers()) > config.GetMaxRequestBodyBytes()/2 {
-		return invalid("ROOM_MAX_MEMBERS", "a message to a full room must fit (base64) inside MAX_REQUEST_BODY_BYTES")
+	if utils.RoomMaxBlobBytes(config.GetRoomMaxMembers()) > config.GetMaxRequestBodyBytes()/wireExpansion {
+		return invalid(config.EnvRoomMaxMembers, "a message to a full room must fit (base64) inside MAX_REQUEST_BODY_BYTES")
 	}
 	// The same rule as a message: twice the raw size covers base64 and the JSON around it
-	if utils.FilePartSealedBytes > config.GetMaxRequestBodyBytes()/2 {
-		return invalid("MAX_REQUEST_BODY_BYTES", fmt.Sprintf("must hold a file part upload (at least %d bytes)", 2*utils.FilePartSealedBytes))
+	if utils.FilePartSealedBytes > config.GetMaxRequestBodyBytes()/wireExpansion {
+		return invalid(config.EnvMaxRequestBodyBytes, fmt.Sprintf("must hold a file part upload (at least %d bytes)", wireExpansion*utils.FilePartSealedBytes))
 	}
 	if config.GetMaxFileBytes() > config.GetFileConversationQuotaBytes() {
 		return invalid(config.EnvMaxFileBytes, "must not exceed "+config.EnvFileConversationQuotaBytes)
@@ -206,24 +211,24 @@ func checkSizesFit() error {
 // origins and parseable trusted proxies.
 func checkConnections() error {
 	for _, required := range []struct{ key, value string }{
-		{"DB_HOST", config.GetDBHost()}, {"DB_USER", config.GetDBUser()},
-		{"DB_PASSWORD", config.GetDBPassword()}, {"DB_NAME", config.GetDBName()},
+		{config.EnvDBHost, config.GetDBHost()}, {config.EnvDBUser, config.GetDBUser()},
+		{config.EnvDBPassword, config.GetDBPassword()}, {config.EnvDBName, config.GetDBName()},
 	} {
 		if required.value == "" {
 			return invalid(required.key, "is required")
 		}
 	}
 	if _, ok := allowedSSLModes[config.GetDBSSLMode()]; !ok {
-		return invalid("DB_SSL_MODE", "must be a libpq sslmode (disable, require, verify-ca, verify-full, ...)")
+		return invalid(config.EnvDBSSLMode, "must be a libpq sslmode (disable, require, verify-ca, verify-full, ...)")
 	}
 	if err := checkRootCert(); err != nil {
 		return err
 	}
 	if _, err := utils.ParseOrigins(config.GetAllowedOrigins()); err != nil {
-		return invalid("ALLOWED_ORIGINS", "must list exact origins scheme://host[:port], comma-separated, no wildcard or path ("+err.Error()+")")
+		return invalid(config.EnvAllowedOrigins, "must list exact origins scheme://host[:port], comma-separated, no wildcard or path ("+err.Error()+")")
 	}
 	if _, _, err := utils.ParseProxyList(config.GetTrustedProxies()); err != nil {
-		return invalid("TRUSTED_PROXIES", "must list IP addresses or CIDR ranges, comma-separated ("+err.Error()+")")
+		return invalid(config.EnvTrustedProxies, "must list IP addresses or CIDR ranges, comma-separated ("+err.Error()+")")
 	}
 	return nil
 }
@@ -255,16 +260,16 @@ func checkRootCert() error {
 // a strong database password and no debug logging.
 func checkProduction() error {
 	if _, ok := productionSSLModes[config.GetDBSSLMode()]; !ok {
-		return invalid("DB_SSL_MODE", "must be verify-ca or verify-full in production")
+		return invalid(config.EnvDBSSLMode, "must be verify-ca or verify-full in production")
 	}
 	if len(config.GetDBPassword()) < minProductionDBPasswordLen {
-		return invalid("DB_PASSWORD", fmt.Sprintf("must be at least %d characters in production", minProductionDBPasswordLen))
+		return invalid(config.EnvDBPassword, fmt.Sprintf("must be at least %d characters in production", minProductionDBPasswordLen))
 	}
 	if config.GetTrustedProxies() == "" {
 		dbLogger.Warn("TRUSTED_PROXIES is empty: behind a reverse proxy every client shares one rate-limit bucket")
 	}
 	if config.GetLogLevel() == "debug" {
-		return invalid("LOG_LEVEL", "must not be debug in production")
+		return invalid(config.EnvLogLevel, "must not be debug in production")
 	}
 	dbLogger.Info("Production mode validation passed")
 	return nil

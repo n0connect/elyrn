@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"elyrn/internal/apperr/opcode"
+	"elyrn/internal/config"
 	"elyrn/internal/cryptoengine"
 	"elyrn/internal/encryption"
 	"elyrn/internal/identity"
@@ -51,9 +52,10 @@ func (s *Service) VerifyKeys() error {
 		return err
 	}
 	delete(inUse, "") // rows from before key ids existed: no key and no code path opens them
+	// A missing or wrong master key is reported under MASTER_KEY_OLD (key ids are never logged)
 	for _, id := range sortedIDs(inUse) {
 		if !encryption.HasMasterKey(id) {
-			return opcode.Fail(opcode.KeyCheck, envOldKeys, "records are encrypted under a master key id that is not configured: "+
+			return opcode.Fail(opcode.KeyCheck, config.EnvMasterKeyOld, "records are encrypted under a master key id that is not configured: "+
 				"restore that key as MASTER_KEY_ACTIVE or in MASTER_KEY_OLD (the ids in use: SELECT DISTINCT master_key_id FROM users)")
 		}
 		opens, err := s.opensSample(id)
@@ -61,7 +63,7 @@ func (s *Service) VerifyKeys() error {
 			return err
 		}
 		if !opens {
-			return opcode.Fail(opcode.KeyCheck, envOldKeys, "a configured master key does not open the records stored under its id")
+			return opcode.Fail(opcode.KeyCheck, config.EnvMasterKeyOld, "a configured master key does not open the records stored under its id")
 		}
 	}
 	unused := 0
@@ -110,10 +112,7 @@ func (s *Service) opensSample(keyID string) (bool, error) {
 	return len(users)+len(members)+len(invites) == 0, nil
 }
 
-// envOldKeys names where a missing or wrong master key belongs (key ids are never logged)
-const envOldKeys = "MASTER_KEY_OLD"
-
-var errPepperChanged = opcode.Fail(opcode.KeyCheck, "ACCOUNT_LOOKUP_PEPPER",
+var errPepperChanged = opcode.Fail(opcode.KeyCheck, config.EnvAccountLookupPepper,
 	"is not the pepper this database was created with: restore the original (it can never change, every account is keyed by it)")
 
 // The pepper floor. A database whose accounts predate the pepper check, and whose stored

@@ -125,7 +125,7 @@ func serve(ctx context.Context, stop context.CancelCauseFunc) *http.Server {
 			if errors.Is(err, syscall.EADDRINUSE) {
 				detail = "the port is in use"
 			}
-			stop(opcode.Fail(opcode.Listen, "BACKEND_PORT", detail))
+			stop(opcode.Fail(opcode.Listen, config.EnvBackendPort, detail))
 		}
 	}()
 	mainLogger.Info("Server is ready to accept connections")
