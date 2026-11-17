@@ -49,7 +49,7 @@
 +------------------------------------------------------------------------+
 |                      POSTGRESQL 15 DATABASE                            |
 |  - Tables: users, invites, conversations, conversation_members,        |
-|            messages, rooms, room_notes, key_checks                     |
+|            messages, file_parts, rooms, room_notes, key_checks         |
 |  - Pseudonymous storage: isolated per-conversation HMAC tags           |
 |  - Coarse day-granular message retention dates (no timestamp tracking) |
 +------------------------------------------------------------------------+
@@ -189,19 +189,20 @@ AAD = "NADM" (4 bytes)
 | - member_ref_enc (AES-GCM)        |     | - master_key_id                   |
 | - peer_key_enc (AES-GCM)          |     | - expires_at                      |
 | - read_seq (int64)                |     +-----------------------------------+
+| - role (rooms: sealed, opaque)    |
 +---+-------------------------------+
     |
     | 1 : N (Scoped by conversation_id)
     v
-+-----------------------------------+
-|             messages              |
-| - conversation_id (PK, UUID)      |
-| - seq (PK, int64 per room)        |
-| - id (UUID, client-generated)     |
-| - sender_tag (per-room HMAC)      |
-| - ciphertext (text, padded)       |
-| - expires_on (Date, day-granular) |
-+-----------------------------------+
++-----------------------------------+     +-----------------------------------+
+|             messages              |     |            file_parts             |
+| - conversation_id (PK, UUID)      |     | - conversation_id (PK, UUID)      |
+| - seq (PK, int64 per room)        |     | - file_id (PK, UUID, client)      |
+| - id (UUID, client-generated)     |     | - part (PK, int)                  |
+| - sender_tag (per-room HMAC)      |     | - uploader_tag (per-room HMAC)    |
+| - ciphertext (text, padded)       |     | - data (bytea, 262160 bytes)      |
+| - expires_on (Date, day-granular) |     | - expires_on (Date, day-granular) |
++-----------------------------------+     +-----------------------------------+
 ```
 
 ### Key Architectural Upgrades:
@@ -209,6 +210,8 @@ AAD = "NADM" (4 bytes)
 2. **Per-Conversation Sequence Numbers:** `messages.seq` is generated atomically via `tx.NextSeq(conversationID)`. It is **not** a global counter.
 3. **No User Timestamps:** The `users` table contains zero `created_at` or `updated_at` columns.
 4. **Day-Granular Retention (`ExpiresOn`):** Messages store `ExpiresOn` (UTC date truncated to 00:00:00): the day of storage plus `MESSAGE_TTL_DAYS`. A message is served and kept while `expires_on` is today or later, so it lives more than `MESSAGE_TTL_DAYS` and at most `MESSAGE_TTL_DAYS` + 1 days. No fine-grained send timestamps are kept in the database.
+5. **File Parts (`file_parts`):** a file is stored as sealed parts of exactly 262160 bytes (262144 of plaintext), keyed by conversation, client-generated file id and part number, so a file id reveals nothing about another conversation's. Part 0's day rule is the messages' and later parts take part 0's day, so a file expires as one. `SchemaVersion` 2 introduced the table (and `conversation_members.role`): an older binary refuses a database stamped 2, because it would never purge the parts.
+6. **Roles (`conversation_members.role`):** a room member's role is a 93-byte blob sealed by a key derived from the room code and bound to the member's card; the server stores it without opening it and enforces only who may write it (the owner for anyone, a member for itself). It goes with the membership row.
 
 ---
 
@@ -218,7 +221,8 @@ Ciphertexts do not live forever. The backend launches a supervised background go
 - **Interval:** Runs immediately on startup, then every **5 minutes** (rooms expire on the hour and should not linger).
 - **Clock check:** a cycle in which the wall clock moved differently from the time that passed, or is behind the last pass (`retention-clock` in `key_checks`), deletes nothing and logs `E_CLOCK_JUMP`; reads never serve an expired message either way.
 - **Configuration:** `MESSAGE_TTL_DAYS` (default: 7 days, maximum: 365 days). A message stored on UTC day D gets `expires_on = D + MESSAGE_TTL_DAYS` and is deleted once that day has ended, so it lives between `MESSAGE_TTL_DAYS` and `MESSAGE_TTL_DAYS` + 1 days.
-- **Purge Operation:** Caps every stored `expires_on` at `today_utc + MESSAGE_TTL_DAYS` (so a lowered setting also shortens what is stored), then deletes all messages where `expires_on < today_utc`, all unredeemed invites and room notes where `expires_at <= now_utc`, and every room past its `expires_at` with all its members, messages and notes. An expired room already stops answering at that instant; the purge only removes its rows.
+- **Purge Operation:** Caps every stored `expires_on` (messages and file parts) at `today_utc + MESSAGE_TTL_DAYS` (so a lowered setting also shortens what is stored), then deletes all messages and file parts where `expires_on < today_utc`, all unredeemed invites and room notes where `expires_at <= now_utc`, and every room past its `expires_at` with all its members, messages, file parts and notes. An expired room already stops answering at that instant; the purge only removes its rows.
+- **File store count:** every cycle, paused or not, then counts the stored file parts afresh; `FILE_STORE_MAX_BYTES` is checked against that in-process count (taken at start too, and kept up to date by uploads and burns) before every upload.
 - **Client Visibility:** `GET /api/v2/me` returns `message_ttl_days` so the client UI can inform the user of room ephemerality.
 
 ---

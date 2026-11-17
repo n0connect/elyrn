@@ -122,7 +122,7 @@ being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too
 | CSP, Trusted Types, isolation headers | `nginx-site.conf` `add_header` (unchanged) |
 
 **API whitelist.** `/api/` mirrors the [input contract](../api/input-contract.md): one location
-per route group, exact anchored paths (`{id}`, `{note}` as canonical UUIDv4), the contract's
+per route group, exact anchored paths (`{id}`, `{note}`, `{file}` as canonical UUIDv4), the contract's
 methods (HEAD passes with GET and the backend answers it; OPTIONS passes for CORS preflight), and
 a body bound at the smallest round size above the contract's. Anything else under `/api/` ends
 in `location /api/ { include /etc/nginx/elyrn/api-errors.conf; return 404; }`.
@@ -135,8 +135,9 @@ in `location /api/ { include /etc/nginx/elyrn/api-errors.conf; return 404; }`.
 | `login`, `logout`, `invites`, `invites/redeem` | POST | 1k (≤ 292) |
 | `register`, `rooms`, `rooms/join` | POST | 2k (≤ 1351) |
 | `conversations/{id}/read` | POST | 1k (93) |
-| `conversations/{id}/members` | GET | 1k (none) |
+| `conversations/{id}/members` | GET, POST | 1k (290) |
 | `conversations/{id}/messages`, `…/notes` | GET, POST | 8k (≤ 7873) |
+| `conversations/{id}/files`, `…/files/{file}` | GET, POST | 342k (≤ 349695); request and response kept in memory (`client_body_buffer_size 342k`, `proxy_buffers 6 64k`, `proxy_max_temp_file_size 0`), never in a temporary file |
 | `conversations/{id}`, `conversations/{id}/notes/{note}` | DELETE | 1k (none) |
 
 A method outside the list answers 405, as the backend would; an unknown path 404; a body over

@@ -58,6 +58,9 @@ At startup the backend checks these keys against the database before it serves a
 | `MESSAGE_TTL_DAYS` | int | `7` | Days to retain ciphertext before day-granular deletion (1-365): a message stored on UTC day D is kept until day D + `MESSAGE_TTL_DAYS` ends, so between `MESSAGE_TTL_DAYS` and `MESSAGE_TTL_DAYS` + 1 days. Lowering it also shortens what is stored: the retention run (every five minutes) caps every stored message at the new limit, counted from that run. Raising it never extends stored messages. |
 | `ROOM_MAX_MEMBERS` | int | `16` | Largest room a member may create (2-32). A room message carries one 48-byte wrap per member, so this also bounds its size (5810 bytes at 32); the server refuses to start if such a message would not fit in `MAX_REQUEST_BODY_BYTES`. Lowering it affects new rooms only. |
 | `ROOM_MAX_TTL_HOURS` | int | `168` | Longest room lifetime, in hours (1-720). The browser offers 1 hour, 1 day and 7 days within it. A room is deleted, with everything in it, at the hour its code names. |
+| `MAX_FILE_BYTES` | int | `10485760` | Largest file one message may announce, in bytes (262144-104857600). Files are stored as sealed parts of 262144 bytes of plaintext each, so this allows `ceil(MAX_FILE_BYTES / 262144)` parts per file; `/me` reports it as `file_max_bytes`. Lowering it affects new uploads only. |
+| `FILE_CONVERSATION_QUOTA_BYTES` | int | `104857600` | How many bytes of stored parts one conversation may hold (262144-10737418240), counted as stored parts × 262144, expired parts included until retention removes them. A further upload answers `507 File quota reached`. |
+| `FILE_STORE_MAX_BYTES` | int | `2147483648` | How many bytes of stored parts the whole server may hold (262144-1099511627776), counted the same way against an in-process count of stored parts (taken at start, again every retention cycle, kept up to date by uploads and burns). A further upload answers `507 File store full`; so does every upload before the first count (fail closed). Parts are kept like messages (`MESSAGE_TTL_DAYS`) and go with their conversation. |
 | `POW_DIFFICULTY` | int | `20` | Proof-of-work target leading zero bits (18-24). |
 | `POW_CHALLENGE_TTL_SEC` | int | `300` | How long an issued challenge stays valid (1-3600). |
 
@@ -165,7 +168,7 @@ variable's **name** and its rule, never its value, and the process exits with st
 | `MASTER_KEY_ACTIVE_ID` | `[A-Za-z0-9._-]{1,32}` |
 | `MASTER_KEY_OLD` | `id:key` entries, ids as above, no repeat, not the active id or key |
 | `ACCOUNT_LOOKUP_PEPPER` | at least 32 bytes, hex or base64 |
-| `MAX_REQUEST_BODY_BYTES` | 1024-16777216 |
+| `MAX_REQUEST_BODY_BYTES` | 1024-16777216, and at least 524320 (twice a sealed file part, as for a message) |
 | `MAX_JSON_DEPTH` | 1-8 |
 | `INVITE_TTL_SEC` | 60-604800 |
 | `MAX_ACTIVE_INVITES` | 1-100 |
@@ -175,6 +178,9 @@ variable's **name** and its rule, never its value, and the process exits with st
 | `MESSAGE_TTL_DAYS` | 1-365 |
 | `ROOM_MAX_MEMBERS` | 2-32, and a message to a full room fits in `MAX_REQUEST_BODY_BYTES` |
 | `ROOM_MAX_TTL_HOURS` | 1-720 |
+| `MAX_FILE_BYTES` | 262144-104857600, and at most `FILE_CONVERSATION_QUOTA_BYTES` |
+| `FILE_CONVERSATION_QUOTA_BYTES` | 262144-10737418240, and at most `FILE_STORE_MAX_BYTES` |
+| `FILE_STORE_MAX_BYTES` | 262144-1099511627776 |
 | `POW_CHALLENGE_TTL_SEC` | 1-3600 |
 | `POW_DIFFICULTY` | 18-24 |
 | `INTERNAL_ID_LENGTH` | 16-24 |

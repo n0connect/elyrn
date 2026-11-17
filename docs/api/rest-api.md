@@ -4,10 +4,10 @@ All API endpoints are mounted under the base prefix `/api/v2`.
 Every request passes one input contract before any handler runs; the complete whitelist (each
 endpoint's methods, query parameters, body bound and every field with its pattern and refusal
 answer) is generated from the code in [input-contract.md](input-contract.md). In short:
-- **Request Body Size:** each endpoint's own bound, derived from its largest legitimate body (123 bytes for login, a few KiB for messages), never above `MAX_REQUEST_BODY_BYTES` (1 MiB).
+- **Request Body Size:** each endpoint's own bound, derived from its largest legitimate body (123 bytes for login, a few KiB for messages, 349695 bytes for a file part), never above `MAX_REQUEST_BODY_BYTES` (1 MiB).
 - **Content Type:** exactly `application/json`, no parameters (`415` otherwise).
 - **JSON:** one object, declared keys only (exact case), each once, each of its declared type; nesting only where declared (at most 2 levels); nothing after it.
-- **Query Parameters:** only the whitelisted ones (`?after=seq` or `?before=seq` on the messages route), raw and canonical; anything else is rejected with `400 Bad Request`.
+- **Query Parameters:** only the whitelisted ones (`?after=seq` or `?before=seq` on the messages route, the required `?part=n` on a file read), raw and canonical; anything else, or a required one missing, is rejected with `400 Bad Request`.
 
 ---
 
@@ -21,7 +21,7 @@ an expired session from none). Three shapes reach the wire:
 | Shape | Used by | Body |
 |---|---|---|
 | text | almost every failure | `<sentence>\n`, `text/plain` |
-| JSON | login's failures and `409 Id taken` | `{"success":false,"message":"<sentence>"}` |
+| JSON | login's failures, `409 Id taken`, and the role and file answers below (each shares its status with another answer of its route) | `{"success":false,"message":"<sentence>"}` |
 | empty | `HEAD` on register, login and the PoW challenge (`405`); the health endpoint | status line only |
 
 | Status | Sentence | Codes (server side) | Meaning |
@@ -32,11 +32,13 @@ an expired session from none). Three shapes reach the wire:
 | 401 | `Invalid credentials` (JSON) | `E_LOGIN_KEY_MALFORMED`, `E_LOGIN_NO_ACCOUNT`, `E_LOGIN_LEGACY_ACCOUNT` | login: no account for this key, whatever the reason |
 | 403 | `Forbidden` | `E_CROSS_ORIGIN`, `E_IDENTITY_UNSET`, `E_FORBIDDEN` | a cross-origin write, or an action the caller may not take |
 | 403 | `Invalid proof of work` | `E_POW_INVALID` | forged, expired, already used, below the issued difficulty, or issued before a restart |
+| 403 | `Role not allowed` (JSON) | `E_ROLE_NOT_ALLOWED` | a member who does not own the room set another member's role |
 | 404 | `Not Found` | `E_ROUTE_NOT_FOUND` | no such route (a malformed id answers the same) |
-| 404 | `Not found` | `E_NOT_FOUND` | no such conversation, room, invite or note *for the caller*: unknown, expired, burned, a wrong room code, or one the caller is not a member of |
+| 404 | `Not found` | `E_NOT_FOUND` | no such conversation, room, invite, note, member card or file part *for the caller*: unknown, expired, burned, a wrong room code, or one the caller is not a member of |
 | 405 | `Method not allowed` | `E_METHOD_NOT_ALLOWED`, `E_HEAD_NOT_ALLOWED` (empty) | another method |
 | 409 | `Conflict` | `E_CONFLICT` | the id holds the caller's own identical earlier attempt (stored); a room id that exists |
-| 409 | `Id taken` (JSON) | `E_ID_TAKEN` | a message or note id held by anything else: nothing stored, send again under a fresh id |
+| 409 | `Id taken` (JSON) | `E_ID_TAKEN` | a message or note id, or a file part, held by anything else: nothing stored, send again under a fresh id |
+| 409 | `File part out of order` (JSON) | `E_FILE_PART_OUT_OF_ORDER` | a later part of a file whose live part 0 the caller has not stored |
 | 409 | `Room full` | `E_ROOM_FULL` | no free seat |
 | 412 | `Proof of work required` | `E_POW_REQUIRED` | a PoW-gated request without `pow` |
 | 412 | `Roster changed` | `E_ROSTER_CHANGED` | a room message for a member list that is no longer current |
@@ -44,6 +46,8 @@ an expired session from none). Three shapes reach the wire:
 | 429 | `Too many requests` | `E_RATE_LIMITED`, `E_POW_RATE_LIMITED`, `E_SUBSCRIBER_LIMIT`, `E_LIMIT_REACHED` | any rate limit, stream share or per-account cap |
 | 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED`, `E_LOGIN_LOOKUP_FAILED` (JSON) | a server fault; on login, a lookup the server could not compute |
 | 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_ARGON2_BUSY`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full; retry later |
+| 507 | `File quota reached` (JSON) | `E_FILE_QUOTA_REACHED` | the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of file parts |
+| 507 | `File store full` (JSON) | `E_FILE_STORE_FULL` | the server holds `FILE_STORE_MAX_BYTES` of file parts, or has not counted them yet |
 
 `503 E_STORE_UNAVAILABLE` never means a key, session or conversation is gone: clients retry
 instead of logging out. A request's whole database work runs under one deadline derived from
@@ -64,7 +68,7 @@ and answers its own refusals without the backend, in JSON with a code
 |---|---|---|
 | 404 | `E_EDGE_NOT_FOUND` | a path outside the whitelist |
 | 405 | `E_EDGE_METHOD_NOT_ALLOWED` | a method the route does not take |
-| 413 | `E_BODY_TOO_LARGE` (`Request entity too large`) | a body over the route group's bound (1k, 2k or 8k) |
+| 413 | `E_BODY_TOO_LARGE` (`Request entity too large`) | a body over the route group's bound (1k, 2k, 8k, or 342k for file parts) |
 | 429 | `E_EDGE_RATE_LIMITED` | over 20 requests per second per client (burst 40) |
 | 503 | `E_BACKEND_UNAVAILABLE` | the backend is down, failed or too slow (also for 500, 502 and 504 from upstream) |
 
@@ -103,7 +107,10 @@ peers only (`200` or `503 E_HEALTH_UNAVAILABLE`, no body; any other peer gets `4
 | `GET` | `/api/v2/conversations/{id}/messages` | Session | Fetch encrypted messages (supports `?after=seq` or `?before=seq`) |
 | `POST` | `/api/v2/conversations/{id}/messages` | Session | Send E2E encrypted message ciphertext |
 | `POST` | `/api/v2/conversations/{id}/read` | Session | Update read sequence marker |
-| `GET` | `/api/v2/conversations/{id}/members` | Session | A room's member cards |
+| `GET` | `/api/v2/conversations/{id}/members` | Session | A room's member cards and sealed roles |
+| `POST` | `/api/v2/conversations/{id}/members` | Session | Store a member's sealed role (owner: anyone; member: itself) |
+| `POST` | `/api/v2/conversations/{id}/files` | Session | Store one sealed part of a file |
+| `GET` | `/api/v2/conversations/{id}/files/{file}` | Session | Fetch one stored part (`?part=n`, required) |
 | `GET` / `POST` | `/api/v2/conversations/{id}/notes` | Session | Sealed notes (friend requests) to / from a room member |
 | `DELETE` | `/api/v2/conversations/{id}/notes/{note}` | Session | Remove a note addressed to the caller |
 | `GET` | `/api/v2/events` | Session | Server-Sent Events (SSE) realtime poke stream |
@@ -240,9 +247,11 @@ Retrieves caller's public key and server retention policy.
   "message_ttl_days": 7,
   "room_max_members": 16,
   "room_max_ttl_hours": 168,
-  "message_page_limit": 200
+  "message_page_limit": 200,
+  "file_max_bytes": 10485760
 }
 ```
+`file_max_bytes` is `MAX_FILE_BYTES`, the largest file one message may announce.
 
 ---
 
@@ -479,11 +488,30 @@ The room's members, sorted by card so the order does not reveal who joined first
 ```json
 {
   "members": [
-    { "card": "60 bytes, base64url", "mine": true, "owner": true },
-    { "card": "60 bytes, base64url", "mine": false, "owner": false }
+    { "card": "60 bytes, base64url", "mine": true, "owner": true, "role": "" },
+    { "card": "60 bytes, base64url", "mine": false, "owner": false, "role": "93 bytes, base64url" }
   ]
 }
 ```
+Each entry has exactly these four fields. `role` is `""` for a member that never had one, else
+the sealed role the server stored without opening it.
+
+### `POST /api/v2/conversations/{id}/members`
+Stores a sealed role for the member whose card is `card`. The room's owner may set any member's
+role, any other member only its own. The server checks the blob's size only (93 bytes, 124
+base64url characters); it is sealed for the room and bound to `card`, so the server can neither
+read nor move it. A cleared role is the sealed empty role, never an empty string. Runs under the
+conversation's row lock; rate bucket `role`.
+
+- **Request Body:**
+```json
+{
+  "card": "the target's stored card, 80 base64url characters",
+  "role": "the sealed role, 124 base64url characters"
+}
+```
+- **Errors:** `400` out of shape; `403` `{"success":false,"message":"Role not allowed"}` (`E_ROLE_NOT_ALLOWED`) a member who does not own the room set another member's role; `404` (`E_NOT_FOUND`) the caller is not a member of this live room, the conversation is one-to-one or does not exist, or no current member has that card (one answer for all); `429` too many requests.
+- **Response:** `204 No Content`. Every member gets a `conv` event, the caller's other devices included.
 
 ---
 
@@ -506,6 +534,51 @@ The notes waiting for the caller in this room: `{"notes": [{"id": "…", "blob":
 
 ### `DELETE /api/v2/conversations/{id}/notes/{note}`
 Removes a note addressed to the caller (after accepting or ignoring it). `204`, or `404` if no such note is addressed to them.
+
+---
+
+## 4a. Files
+
+A file is encrypted on the client and stored as equal parts: 262144 bytes of plaintext each,
+sealed to exactly 262160 bytes (349547 base64url characters), so the server learns a file's size
+only in whole parts and never its name, type or bytes. The file's key travels in an ordinary
+message, so exactly the members who can read that message can open the file. Works in one-to-one
+conversations and rooms. Parts expire by the messages' day rule (`MESSAGE_TTL_DAYS`, day-granular,
+capped like messages) and go with their conversation (burn, room expiry, the owner's or a pair
+member's account deletion); leaving a room keeps the leaver's parts, like their messages.
+
+### `POST /api/v2/conversations/{id}/files`
+Stores one part. Part 0 opens the file for its uploader (and takes one token of the caller's `file`
+rate bucket; later parts take none); a later part needs that live part 0 stored by the same
+uploader and takes its deletion day, so a file expires as one. Parts after part 0 may come in any
+order. Runs under the conversation's row lock. Nothing is published: the announcing message is.
+
+- **Request Body:**
+```json
+{
+  "id": "the file's client-generated UUIDv4",
+  "part": 0,
+  "data": "the sealed part, 349547 base64url characters"
+}
+```
+`part` is below `ceil(MAX_FILE_BYTES / 262144)` (the contract admits up to 399, the bound's last
+part).
+- **Errors:**
+  - `400` out of shape, or a part number past `MAX_FILE_BYTES`;
+  - `404` (`E_NOT_FOUND`) the caller is not a member, the conversation does not exist, or the room expired;
+  - `409 Conflict` the caller's own identical part is already stored (the earlier attempt succeeded);
+  - `409` `{"success":false,"message":"Id taken"}` (`E_ID_TAKEN`) the part is stored with other bytes or by another member: nothing stored, upload the file again under a fresh `id`;
+  - `409` `{"success":false,"message":"File part out of order"}` (`E_FILE_PART_OUT_OF_ORDER`) a later part before the caller stored part 0 (or after part 0 expired);
+  - `507` `{"success":false,"message":"File quota reached"}` (`E_FILE_QUOTA_REACHED`) the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of parts;
+  - `507` `{"success":false,"message":"File store full"}` (`E_FILE_STORE_FULL`) the server holds `FILE_STORE_MAX_BYTES` of parts (or has not counted them yet: fail closed);
+  - `429` too many new files.
+- **Response:** `201 Created`, no body.
+
+### `GET /api/v2/conversations/{id}/files/{file}?part=n`
+One stored part, to a member of the conversation. `part` is required.
+
+- **Response (200 OK):** `{"data": "the sealed part, 349547 base64url characters"}`
+- **Errors:** `400` no or a malformed `part`; `404` (`E_NOT_FOUND`) the part is missing or past its deletion day, the room expired, or the caller is not a member (one answer for all).
 
 ---
 
