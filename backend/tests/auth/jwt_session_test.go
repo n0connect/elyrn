@@ -184,17 +184,7 @@ func TestVerifyToken_RejectsMalformedSubjectEvenWithValidSignature(t *testing.T)
 func TestTokens_PendingAndSessionAreNotInterchangeable(t *testing.T) {
 	setupPendingJWTEnv(t)
 
-	pendingID, err := auth.GeneratePendingID()
-	if err != nil {
-		t.Fatalf("GeneratePendingID: %v", err)
-	}
-	if err := auth.StorePendingRegistration(pendingID, testutil.NewPendingIdentity(t)); err != nil {
-		t.Fatalf("StorePendingRegistration: %v", err)
-	}
-	pending, err := auth.SignPendingRegistrationToken(pendingID)
-	if err != nil {
-		t.Fatalf("SignPendingRegistrationToken: %v", err)
-	}
+	_, _, pending := testutil.SignedPendingToken(t)
 	if _, err := auth.VerifyToken(pending); err == nil {
 		t.Fatal("pending-registration token accepted as a session")
 	}

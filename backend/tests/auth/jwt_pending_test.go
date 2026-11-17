@@ -21,23 +21,7 @@ func setupPendingJWTEnv(t *testing.T) {
 func TestSignPendingRegistrationToken_ContainsPendingID(t *testing.T) {
 	setupPendingJWTEnv(t)
 
-	// Generate pending ID
-	pendingID, err := auth.GeneratePendingID()
-	if err != nil {
-		t.Fatalf("GeneratePendingID() failed: %v", err)
-	}
-
-	// Store the derived identity server-side (never the AccountNumber itself)
-	pending := testutil.NewPendingIdentity(t)
-	if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
-		t.Fatalf("StorePendingRegistration() failed: %v", err)
-	}
-
-	// Sign token with pending ID (not AccountNumber)
-	token, err := auth.SignPendingRegistrationToken(pendingID)
-	if err != nil {
-		t.Fatalf("SignPendingRegistrationToken() failed: %v", err)
-	}
+	pendingID, pending, token := testutil.SignedPendingToken(t)
 
 	if token == "" {
 		t.Error("SignPendingRegistrationToken() returned empty token")
@@ -64,20 +48,7 @@ func TestSignPendingRegistrationToken_ContainsPendingID(t *testing.T) {
 func TestSignPendingRegistrationToken_NoAccountNumberInToken(t *testing.T) {
 	setupPendingJWTEnv(t)
 
-	pendingID, err := auth.GeneratePendingID()
-	if err != nil {
-		t.Fatalf("GeneratePendingID() failed: %v", err)
-	}
-
-	pending := testutil.NewPendingIdentity(t)
-	if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
-		t.Fatalf("StorePendingRegistration() failed: %v", err)
-	}
-
-	token, err := auth.SignPendingRegistrationToken(pendingID)
-	if err != nil {
-		t.Fatalf("SignPendingRegistrationToken() failed: %v", err)
-	}
+	_, pending, token := testutil.SignedPendingToken(t)
 
 	// The token is public to the client: it must carry neither the auth key nor the public key
 	for name, secret := range map[string]string{"auth key": pending.AuthKey, "public key": pending.PublicKey} {
@@ -135,17 +106,7 @@ func TestVerifyPendingRegistrationToken_RefusesSignatureMalleation(t *testing.T)
 	setupPendingJWTEnv(t)
 	t.Cleanup(auth.ResetPendingStoreForTesting)
 
-	pendingID, err := auth.GeneratePendingID()
-	if err != nil {
-		t.Fatalf("GeneratePendingID: %v", err)
-	}
-	if err := auth.StorePendingRegistration(pendingID, testutil.NewPendingIdentity(t)); err != nil {
-		t.Fatalf("StorePendingRegistration: %v", err)
-	}
-	token, err := auth.SignPendingRegistrationToken(pendingID)
-	if err != nil {
-		t.Fatalf("SignPendingRegistrationToken: %v", err)
-	}
+	_, _, token := testutil.SignedPendingToken(t)
 	if _, _, err := auth.VerifyPendingRegistrationToken(token); err != nil {
 		t.Fatalf("VerifyPendingRegistrationToken(genuine): %v", err)
 	}

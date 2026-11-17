@@ -89,33 +89,42 @@ func TestHashAndVerifyAccountNumber_DifferentSalts(t *testing.T) {
 	}
 }
 
+// hashedParts hashes a fresh auth key and returns the key, the stored encoding and its
+// $-separated parts (argon2id, m=, t=, p=, salt, hash).
+func hashedParts(t *testing.T) (authKey, encoded string, parts []string) {
+	t.Helper()
+	authKey = testutil.NewAuthKey(t)
+	encoded, err := auth.HashAccountNumber(authKey)
+	if err != nil {
+		t.Fatalf("HashAccountNumber() failed: %v", err)
+	}
+	return authKey, encoded, strings.Split(encoded, "$")
+}
+
+// joinHash puts $-separated hash parts back together.
+func joinHash(p ...string) string { return strings.Join(p, "$") }
+
 // TestVerifyAccountNumberHash_InvalidFormat_ShouldFail corrupts a real stored hash in every
 // way the parser must reject, and checks it fails closed without panicking
 func TestVerifyAccountNumberHash_InvalidFormat_ShouldFail(t *testing.T) {
 	setupAuthTestEnv(t)
 
-	authKey := testutil.NewAuthKey(t)
-	real, err := auth.HashAccountNumber(authKey)
-	if err != nil {
-		t.Fatalf("HashAccountNumber() failed: %v", err)
-	}
-	parts := strings.Split(real, "$") // argon2id, m=, t=, p=, salt, hash
-	join := func(p ...string) string { return strings.Join(p, "$") }
+	authKey, real, parts := hashedParts(t)
 
 	corrupted := map[string]string{
 		"empty string":         "",
-		"missing parts":        join(parts[:3]...),
-		"wrong prefix":         join(append([]string{"bcrypt"}, parts[1:]...)...),
-		"invalid memory":       join(parts[0], "m=x", parts[2], parts[3], parts[4], parts[5]),
-		"invalid time":         join(parts[0], parts[1], "t=x", parts[3], parts[4], parts[5]),
-		"invalid parallelism":  join(parts[0], parts[1], parts[2], "p=x", parts[4], parts[5]),
-		"empty salt":           join(parts[0], parts[1], parts[2], parts[3], "", parts[5]),
-		"empty hash":           join(parts[0], parts[1], parts[2], parts[3], parts[4], ""),
-		"non-hex salt":         join(parts[0], parts[1], parts[2], parts[3], "zz"+parts[4][2:], parts[5]),
-		"non-hex hash":         join(parts[0], parts[1], parts[2], parts[3], parts[4], "zz"+parts[5][2:]),
-		"too many parts":       join(append(parts, parts[5])...),
+		"missing parts":        joinHash(parts[:3]...),
+		"wrong prefix":         joinHash(append([]string{"bcrypt"}, parts[1:]...)...),
+		"invalid memory":       joinHash(parts[0], "m=x", parts[2], parts[3], parts[4], parts[5]),
+		"invalid time":         joinHash(parts[0], parts[1], "t=x", parts[3], parts[4], parts[5]),
+		"invalid parallelism":  joinHash(parts[0], parts[1], parts[2], "p=x", parts[4], parts[5]),
+		"empty salt":           joinHash(parts[0], parts[1], parts[2], parts[3], "", parts[5]),
+		"empty hash":           joinHash(parts[0], parts[1], parts[2], parts[3], parts[4], ""),
+		"non-hex salt":         joinHash(parts[0], parts[1], parts[2], parts[3], "zz"+parts[4][2:], parts[5]),
+		"non-hex hash":         joinHash(parts[0], parts[1], parts[2], parts[3], parts[4], "zz"+parts[5][2:]),
+		"too many parts":       joinHash(append(parts, parts[5])...),
 		"missing delimiters":   strings.ReplaceAll(real, "$", ""),
-		"truncated hash value": join(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5][:len(parts[5])-2]),
+		"truncated hash value": joinHash(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5][:len(parts[5])-2]),
 	}
 	for name, encoded := range corrupted {
 		t.Run(name, func(t *testing.T) {
@@ -151,24 +160,18 @@ func TestVerifyAccountNumberHash_Empty_ShouldFail(t *testing.T) {
 func TestVerifyAccountNumberHash_RejectsOutOfRangeParameters(t *testing.T) {
 	setupAuthTestEnv(t)
 
-	authKey := testutil.NewAuthKey(t)
-	real, err := auth.HashAccountNumber(authKey)
-	if err != nil {
-		t.Fatalf("HashAccountNumber() failed: %v", err)
-	}
-	parts := strings.Split(real, "$")
-	join := func(p ...string) string { return strings.Join(p, "$") }
+	authKey, real, parts := hashedParts(t)
 
 	corrupted := map[string]string{
-		"parallelism 0":     join(parts[0], parts[1], parts[2], "p=0", parts[4], parts[5]),
-		"parallelism 256":   join(parts[0], parts[1], parts[2], "p=256", parts[4], parts[5]),
-		"time 0":            join(parts[0], parts[1], "t=0", parts[3], parts[4], parts[5]),
-		"memory 0":          join(parts[0], "m=0", parts[2], parts[3], parts[4], parts[5]),
-		"memory over bound": join(parts[0], "m=4294967295", parts[2], parts[3], parts[4], parts[5]),
-		"trailing garbage":  join(parts[0], parts[1]+"abc", parts[2], parts[3], parts[4], parts[5]),
-		"signed number":     join(parts[0], "m=+"+strings.TrimPrefix(parts[1], "m="), parts[2], parts[3], parts[4], parts[5]),
-		"short salt":        join(parts[0], parts[1], parts[2], parts[3], parts[4][:16], parts[5]),
-		"short hash":        join(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5][:16]),
+		"parallelism 0":     joinHash(parts[0], parts[1], parts[2], "p=0", parts[4], parts[5]),
+		"parallelism 256":   joinHash(parts[0], parts[1], parts[2], "p=256", parts[4], parts[5]),
+		"time 0":            joinHash(parts[0], parts[1], "t=0", parts[3], parts[4], parts[5]),
+		"memory 0":          joinHash(parts[0], "m=0", parts[2], parts[3], parts[4], parts[5]),
+		"memory over bound": joinHash(parts[0], "m=4294967295", parts[2], parts[3], parts[4], parts[5]),
+		"trailing garbage":  joinHash(parts[0], parts[1]+"abc", parts[2], parts[3], parts[4], parts[5]),
+		"signed number":     joinHash(parts[0], "m=+"+strings.TrimPrefix(parts[1], "m="), parts[2], parts[3], parts[4], parts[5]),
+		"short salt":        joinHash(parts[0], parts[1], parts[2], parts[3], parts[4][:16], parts[5]),
+		"short hash":        joinHash(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5][:16]),
 	}
 	for name, encoded := range corrupted {
 		t.Run(name, func(t *testing.T) {

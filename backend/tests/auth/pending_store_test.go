@@ -63,18 +63,7 @@ func TestGeneratePendingID(t *testing.T) {
 func TestStoreAndPendingRegistration(t *testing.T) {
 	setupPendingStoreEnv(t)
 
-	pending := testutil.NewPendingIdentity(t)
-
-	// Generate pending ID
-	pendingID, err := auth.GeneratePendingID()
-	if err != nil {
-		t.Fatalf("GeneratePendingID() failed: %v", err)
-	}
-
-	// Store pending registration
-	if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
-		t.Fatalf("StorePendingRegistration() failed: %v", err)
-	}
+	pendingID, pending := testutil.StorePendingIdentity(t)
 
 	// Retrieve it
 	retrieved, err := auth.PendingRegistration(pendingID)
@@ -109,14 +98,7 @@ func TestPendingRegistration_NotFound(t *testing.T) {
 func TestPendingRegistration_ReadDoesNotUseItUp(t *testing.T) {
 	setupPendingStoreEnv(t)
 
-	pending := testutil.NewPendingIdentity(t)
-	pendingID, err := auth.GeneratePendingID()
-	if err != nil {
-		t.Fatalf("GeneratePendingID() failed: %v", err)
-	}
-	if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
-		t.Fatalf("StorePendingRegistration() failed: %v", err)
-	}
+	pendingID, pending := testutil.StorePendingIdentity(t)
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		if retrieved, err := auth.PendingRegistration(pendingID); err != nil || retrieved != pending {

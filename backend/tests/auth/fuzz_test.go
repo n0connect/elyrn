@@ -106,18 +106,7 @@ func FuzzVerifyPendingToken(f *testing.F) {
 		auth.ResetPendingStoreForTesting()
 		testutil.TeardownTestEnv(f)
 	})
-	pendingID, err := auth.GeneratePendingID()
-	if err != nil {
-		f.Fatalf("GeneratePendingID: %v", err)
-	}
-	stored := testutil.NewPendingIdentity(f)
-	if err := auth.StorePendingRegistration(pendingID, stored); err != nil {
-		f.Fatalf("StorePendingRegistration: %v", err)
-	}
-	genuine, err := auth.SignPendingRegistrationToken(pendingID)
-	if err != nil {
-		f.Fatalf("SignPendingRegistrationToken: %v", err)
-	}
+	pendingID, stored, genuine := testutil.SignedPendingToken(f)
 	session, err := auth.SignToken(testutil.NewInternalID(f), 0)
 	if err != nil {
 		f.Fatalf("SignToken: %v", err)
