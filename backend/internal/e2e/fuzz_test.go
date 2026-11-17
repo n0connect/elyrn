@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,9 +15,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// Decrypt never panics, and whatever it accepts for this key and AAD is a genuine sealing of
-// the vector message: a fuzzer cannot forge GCM, and non-canonical encodings are refused.
-func FuzzDecrypt(f *testing.F) {
+// sealedVector seals the vector message from account A to account B under their conversation
+// key, and returns both parties, the key and the ciphertext.
+func sealedVector(f *testing.F) (party, party, []byte, string) {
+	f.Helper()
 	a, b := load(f, accountA), load(f, accountB)
 	key, err := ConversationKey(a.private, b.public, vectorConversation)
 	if err != nil {
@@ -26,6 +28,13 @@ func FuzzDecrypt(f *testing.F) {
 	if err != nil {
 		f.Fatalf("Encrypt: %v", err)
 	}
+	return a, b, key, genuine
+}
+
+// Decrypt never panics, and whatever it accepts for this key and AAD is a genuine sealing of
+// the vector message: a fuzzer cannot forge GCM, and non-canonical encodings are refused.
+func FuzzDecrypt(f *testing.F) {
+	a, _, key, genuine := sealedVector(f)
 	f.Add(genuine)
 	f.Add(browserCiphertext)
 	f.Add("")
@@ -48,15 +57,7 @@ func FuzzDecrypt(f *testing.F) {
 
 // Mutating the message id or sender must fail authentication (they are bound by the AAD).
 func FuzzDecryptBindings(f *testing.F) {
-	a, b := load(f, accountA), load(f, accountB)
-	key, err := ConversationKey(a.private, b.public, vectorConversation)
-	if err != nil {
-		f.Fatalf("ConversationKey: %v", err)
-	}
-	genuine, err := Encrypt(key, vectorConversation, vectorMessage, a.public, vectorText, vectorSentAt, vectorCounter)
-	if err != nil {
-		f.Fatalf("Encrypt: %v", err)
-	}
+	a, b, key, genuine := sealedVector(f)
 	f.Add(vectorMessage.String(), a.public)
 	f.Add(vectorMessage.String(), b.public)
 	f.Add(uuid.New().String(), a.public)
@@ -206,15 +207,22 @@ func FuzzOpenRoomMessage(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, blob string) {
-		for _, reader := range []roomParty{v.a, v.b} {
-			if msg, err := v.room.OpenMessage(reader.member, v.messageID, blob); err == nil {
-				expectGenuineRoomMessage(t, v, msg, roomInteropText, vectorRoomCounter, blob, genuine)
-			}
-		}
-		if _, err := v.room.OpenMessage(v.c.member, v.messageID, blob); err == nil {
-			t.Fatalf("a member outside the roster opened %q", blob)
-		}
+		expectOnlyRosterOpens(t, v, blob, genuine, fmt.Sprintf("a member outside the roster opened %q", blob))
 	})
+}
+
+// expectOnlyRosterOpens: blob opens, if at all, to the genuine message for the roster's readers
+// (a and b), and never for the member outside it (c), which fails with outsiderOpened.
+func expectOnlyRosterOpens(t *testing.T, v vectorRoom, blob string, genuine []byte, outsiderOpened string) {
+	t.Helper()
+	for _, reader := range []roomParty{v.a, v.b} {
+		if msg, err := v.room.OpenMessage(reader.member, v.messageID, blob); err == nil {
+			expectGenuineRoomMessage(t, v, msg, roomInteropText, vectorRoomCounter, blob, genuine)
+		}
+	}
+	if _, err := v.room.OpenMessage(v.c.member, v.messageID, blob); err == nil {
+		t.Fatal(outsiderOpened)
+	}
 }
 
 // FuzzMutateRoomMessage flips bits at one position of the genuine blob: a change in the header
@@ -232,14 +240,7 @@ func FuzzMutateRoomMessage(f *testing.F) {
 		mutated := append([]byte(nil), genuine...)
 		mutated[int(index)%len(mutated)] ^= mask
 		blob := encode(mutated)
-		for _, reader := range []roomParty{v.a, v.b} {
-			if msg, err := v.room.OpenMessage(reader.member, v.messageID, blob); err == nil {
-				expectGenuineRoomMessage(t, v, msg, roomInteropText, vectorRoomCounter, blob, genuine)
-			}
-		}
-		if _, err := v.room.OpenMessage(v.c.member, v.messageID, blob); err == nil {
-			t.Fatal("a member outside the roster opened a mutated blob")
-		}
+		expectOnlyRosterOpens(t, v, blob, genuine, "a member outside the roster opened a mutated blob")
 	})
 }
 
