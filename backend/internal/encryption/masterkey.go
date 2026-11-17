@@ -21,13 +21,6 @@ var masterKeyLogger = utils.NewLogger("MASTER_KEY")
 
 const masterKeyBytes = 32
 
-// The variables that hold the master keys
-const (
-	envActiveKey   = "MASTER_KEY_ACTIVE"
-	envActiveKeyID = "MASTER_KEY_ACTIVE_ID"
-	envOldKeys     = "MASTER_KEY_OLD"
-)
-
 type masterKeySet struct {
 	activeID string
 	active   []byte
@@ -58,40 +51,40 @@ func InitMasterKeys() error {
 }
 
 func loadMasterKeys() (masterKeySet, error) {
-	activeID := strings.TrimSpace(config.GetEnv(envActiveKeyID, ""))
-	activeKeyRaw := strings.TrimSpace(config.GetEnv(envActiveKey, ""))
+	activeID := strings.TrimSpace(config.GetEnv(config.EnvMasterKeyActiveID, ""))
+	activeKeyRaw := strings.TrimSpace(config.GetEnv(config.EnvMasterKeyActive, ""))
 	if activeKeyRaw == "" {
-		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envActiveKey, "is required")
+		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyActive, "is required")
 	}
 	if !keyIDPattern.MatchString(activeID) {
-		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envActiveKeyID, "must match "+keyIDPattern.String())
+		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyActiveID, "must match "+keyIDPattern.String())
 	}
 	activeKey, err := decodeKeyMaterial(activeKeyRaw)
 	if err != nil {
-		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envActiveKey, err.Error())
+		return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyActive, err.Error())
 	}
 
 	oldKeys := make(map[string][]byte)
-	oldRaw := strings.TrimSpace(config.GetEnv(envOldKeys, ""))
+	oldRaw := strings.TrimSpace(config.GetEnv(config.EnvMasterKeyOld, ""))
 	if oldRaw != "" {
 		for _, entry := range strings.Split(oldRaw, ",") {
 			parts := strings.SplitN(strings.TrimSpace(entry), ":", 2)
 			if len(parts) != 2 {
-				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "entries must be id:key")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyOld, "entries must be id:key")
 			}
 			kid := strings.TrimSpace(parts[0])
 			if !keyIDPattern.MatchString(kid) || kid == activeID {
-				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "has an invalid key id or the active one")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyOld, "has an invalid key id or the active one")
 			}
 			if _, dup := oldKeys[kid]; dup {
-				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "repeats a key id")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyOld, "repeats a key id")
 			}
 			key, err := decodeKeyMaterial(strings.TrimSpace(parts[1]))
 			if err != nil {
-				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "has invalid key material")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyOld, "has invalid key material")
 			}
 			if subtle.ConstantTimeCompare(key, activeKey) == 1 {
-				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, envOldKeys, "repeats the active key")
+				return masterKeySet{}, opcode.Fail(opcode.ConfigInvalid, config.EnvMasterKeyOld, "repeats the active key")
 			}
 			oldKeys[kid] = key
 		}

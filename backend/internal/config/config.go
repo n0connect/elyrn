@@ -65,7 +65,7 @@ const (
 	minPoWDifficulty               = 18  // Minimum difficulty (low load)
 	maxPoWDifficulty               = 24  // Maximum difficulty (high load, DoS protection)
 	defaultPoWChallengeTTLSeconds  = 300 // A challenge must be solved and used within 5 minutes
-	maxPoWChallengeTTLSeconds      = 3600
+	MaxPoWChallengeTTLSeconds      = 3600
 	minPepperBytes                 = 32
 )
 
@@ -83,6 +83,106 @@ const (
 	MinArgon2HashBytes           = 16
 	MaxArgon2HashBytes           = 64
 	ProductionMinArgon2MemoryKiB = 19456 // OWASP minimum for Argon2id (19 MiB, t=2)
+)
+
+// Setting names: the environment variable each getter reads, also the name startup validation
+// reports a refused value under.
+const (
+	EnvJWTSecret                       = "JWT_SECRET"
+	EnvJWTSecretMinLen                 = "JWT_SECRET_MIN_LEN"
+	EnvJWTIssuer                       = "JWT_ISSUER"
+	EnvJWTAudience                     = "JWT_AUDIENCE"
+	EnvJWTExpirationMinutes            = "JWT_EXPIRATION_MINUTES"
+	EnvMaxRequestBodyBytes             = "MAX_REQUEST_BODY_BYTES"
+	EnvMaxJSONDepth                    = "MAX_JSON_DEPTH"
+	EnvInviteTTLSeconds                = "INVITE_TTL_SEC"
+	EnvMaxActiveInvites                = "MAX_ACTIVE_INVITES"
+	EnvMaxConversationsPerUser         = "MAX_CONVERSATIONS_PER_USER"
+	EnvRoomMaxMembers                  = "ROOM_MAX_MEMBERS"
+	EnvRoomMaxTTLHours                 = "ROOM_MAX_TTL_HOURS"
+	EnvMaxMessageBytes                 = "MAX_MESSAGE_BYTES"
+	EnvMessagePageLimit                = "MESSAGE_PAGE_LIMIT"
+	EnvMessageTTLDays                  = "MESSAGE_TTL_DAYS"
+	EnvAllowedOrigins                  = "ALLOWED_ORIGINS"
+	EnvAppEnv                          = "APP_ENV"
+	EnvLogLevel                        = "LOG_LEVEL"
+	EnvTrustedProxies                  = "TRUSTED_PROXIES"
+	EnvRateLimitMaxTokens              = "RATE_LIMIT_MAX_TOKENS"
+	EnvRateLimitRefillIntervalSeconds  = "RATE_LIMIT_REFILL_INTERVAL_SEC"
+	EnvRateLimitCleanupIntervalSeconds = "RATE_LIMIT_CLEANUP_INTERVAL_SEC"
+	EnvRateLimitMaxBuckets             = "RATE_LIMIT_MAX_BUCKETS"
+	EnvDBHost                          = "DB_HOST"
+	EnvDBPort                          = "DB_PORT"
+	EnvDBUser                          = "DB_USER"
+	EnvDBPassword                      = "DB_PASSWORD"
+	EnvDBName                          = "DB_NAME"
+	EnvDBSSLMode                       = "DB_SSL_MODE"
+	EnvArgon2MemoryKiB                 = "ARGON2_MEMORY_KIB"
+	EnvArgon2Time                      = "ARGON2_TIME"
+	EnvArgon2Parallelism               = "ARGON2_PARALLELISM"
+	EnvArgon2MaxConcurrent             = "ARGON2_MAX_CONCURRENT"
+	EnvArgon2SaltLength                = "ARGON2_SALT_LENGTH"
+	EnvArgon2HashLength                = "ARGON2_HASH_LENGTH"
+	EnvAccountLookupPepper             = "ACCOUNT_LOOKUP_PEPPER"
+	EnvPendingTokenTTLSeconds          = "PENDING_TOKEN_TTL_SEC"
+	EnvPendingCleanupIntervalSeconds   = "PENDING_CLEANUP_INTERVAL_SEC"
+	EnvPendingIDBytes                  = "PENDING_ID_BYTES"
+	EnvInternalIDLength                = "INTERNAL_ID_LENGTH"
+	EnvBackendPort                     = "BACKEND_PORT"
+	EnvServerReadHeaderTimeoutSeconds  = "SERVER_READ_HEADER_TIMEOUT_SEC"
+	EnvServerReadTimeoutSeconds        = "SERVER_READ_TIMEOUT_SEC"
+	EnvServerWriteTimeoutSeconds       = "SERVER_WRITE_TIMEOUT_SEC"
+	EnvServerIdleTimeoutSeconds        = "SERVER_IDLE_TIMEOUT_SEC"
+	EnvServerMaxHeaderBytes            = "SERVER_MAX_HEADER_BYTES"
+	EnvPoWDifficulty                   = "POW_DIFFICULTY"
+	EnvPoWChallengeTTLSeconds          = "POW_CHALLENGE_TTL_SEC"
+	EnvMasterKeyActive                 = "MASTER_KEY_ACTIVE"
+	EnvMasterKeyActiveID               = "MASTER_KEY_ACTIVE_ID"
+	EnvMasterKeyOld                    = "MASTER_KEY_OLD"
+)
+
+// Ranges accepted at startup (database.ValidateStartupConfig) for the settings whose getter
+// does not need its own bound; the bounds a getter applies are declared beside it.
+const (
+	MinJWTSecretMinLen = 32
+	MaxJWTSecretMinLen = 1024
+
+	MinRequestBodyBytes      = 1024
+	MaxRequestBodyBytesBound = 16 << 20
+	MaxJSONDepthBound        = 8
+
+	MinInviteTTLSeconds   = 60
+	MaxInviteTTLSeconds   = 7 * 24 * 3600
+	MaxActiveInvitesBound = 100
+
+	MinMessageBytes          = 512
+	MaxMessageBytesBound     = 65536
+	MaxMessagePageLimitBound = 1000
+
+	// MinInternalIDLength and MaxInternalIDLength: users.uuid is size:24
+	MinInternalIDLength = 16
+	MaxInternalIDLength = 24
+
+	MaxArgon2ConcurrentBound = 64
+
+	MinPendingTokenTTLSeconds = 30
+	MaxPendingTokenTTLSeconds = 3600
+	MaxPendingCleanupSeconds  = 3600
+	MinPendingIDBytes         = 16
+	MaxPendingIDBytes         = 64
+
+	MaxRateLimitTokensBound    = 10000
+	MaxRateLimitRefillSeconds  = 3600
+	MaxRateLimitCleanupSeconds = 86400
+	MinRateLimitBuckets        = 100
+	MaxRateLimitBucketsBound   = 1000000
+
+	MaxServerReadHeaderTimeoutSeconds = 60
+	MaxServerReadTimeoutSeconds       = 300
+	MaxServerWriteTimeoutSeconds      = 300
+	MaxServerIdleTimeoutSeconds       = 600
+	MinServerMaxHeaderBytes           = 1024
+	MaxServerMaxHeaderBytesBound      = 1 << 20
 )
 
 // ========================================
@@ -108,28 +208,38 @@ func getEnvIntDefault(key string, defaultValue int) int {
 	return parsed
 }
 
+// getEnvSecondsDefault reads a whole-seconds setting as a duration: anything that is not a
+// positive integer reads as 0 (fails its bound).
+func getEnvSecondsDefault(key string, defaultSeconds int) time.Duration {
+	seconds := getEnvIntDefault(key, defaultSeconds)
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 // ========================================
 // JWT CONFIGURATION
 // ========================================
 
 // GetJWTSecret returns JWT secret key from environment
 func GetJWTSecret() string {
-	return GetEnv("JWT_SECRET", "")
+	return GetEnv(EnvJWTSecret, "")
 }
 
 // GetJWTSecretMinLength returns minimum JWT secret length in characters
 func GetJWTSecretMinLength() int {
-	return getEnvIntDefault("JWT_SECRET_MIN_LEN", defaultJWTSecretMinLen)
+	return getEnvIntDefault(EnvJWTSecretMinLen, defaultJWTSecretMinLen)
 }
 
 // GetJWTIssuer returns JWT issuer value
 func GetJWTIssuer() string {
-	return strings.TrimSpace(GetEnv("JWT_ISSUER", defaultJWTIssuer))
+	return strings.TrimSpace(GetEnv(EnvJWTIssuer, defaultJWTIssuer))
 }
 
 // GetJWTAudience returns JWT audience value
 func GetJWTAudience() string {
-	return strings.TrimSpace(GetEnv("JWT_AUDIENCE", defaultJWTAudience))
+	return strings.TrimSpace(GetEnv(EnvJWTAudience, defaultJWTAudience))
 }
 
 // Session lifetime accepted at startup (JWT_EXPIRATION_MINUTES).
@@ -143,7 +253,7 @@ const (
 // GetJWTExpiration returns JWT token expiration duration. A value above
 // MaxJWTExpirationMinutes reads as 0 (refused at startup) before it can overflow time.Duration.
 func GetJWTExpiration() time.Duration {
-	minutes := getEnvIntDefault("JWT_EXPIRATION_MINUTES", defaultJWTExpirationMinutes)
+	minutes := getEnvIntDefault(EnvJWTExpirationMinutes, defaultJWTExpirationMinutes)
 	if minutes <= 0 || minutes > MaxJWTExpirationMinutes {
 		return 0
 	}
@@ -156,12 +266,12 @@ func GetJWTExpiration() time.Duration {
 
 // GetMaxRequestBodyBytes returns max request body size in bytes
 func GetMaxRequestBodyBytes() int {
-	return getEnvIntDefault("MAX_REQUEST_BODY_BYTES", defaultMaxRequestBodyBytes)
+	return getEnvIntDefault(EnvMaxRequestBodyBytes, defaultMaxRequestBodyBytes)
 }
 
 // GetMaxJSONDepth returns max JSON nesting depth
 func GetMaxJSONDepth() int {
-	return getEnvIntDefault("MAX_JSON_DEPTH", defaultMaxJSONDepth)
+	return getEnvIntDefault(EnvMaxJSONDepth, defaultMaxJSONDepth)
 }
 
 // ========================================
@@ -170,16 +280,12 @@ func GetMaxJSONDepth() int {
 
 // GetInviteTTL returns how long an unredeemed invite stays valid
 func GetInviteTTL() time.Duration {
-	seconds := getEnvIntDefault("INVITE_TTL_SEC", defaultInviteTTLSeconds)
-	if seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvInviteTTLSeconds, defaultInviteTTLSeconds)
 }
 
 // GetMaxActiveInvites returns the cap on unredeemed invites per user
 func GetMaxActiveInvites() int {
-	return getEnvIntDefault("MAX_ACTIVE_INVITES", defaultMaxActiveInvites)
+	return getEnvIntDefault(EnvMaxActiveInvites, defaultMaxActiveInvites)
 }
 
 // MaxConversationsPerUserBound is the highest MAX_CONVERSATIONS_PER_USER accepted. Stored
@@ -189,7 +295,7 @@ const MaxConversationsPerUserBound = 4096
 
 // GetMaxConversationsPerUser returns the cap on conversations per user
 func GetMaxConversationsPerUser() int {
-	return getEnvIntDefault("MAX_CONVERSATIONS_PER_USER", defaultMaxConversationsPerUser)
+	return getEnvIntDefault(EnvMaxConversationsPerUser, defaultMaxConversationsPerUser)
 }
 
 // Room limits accepted at startup: a room message carries one 48-byte wrap per member, so the
@@ -205,27 +311,27 @@ const (
 
 // GetRoomMaxMembers returns the largest room a member may create
 func GetRoomMaxMembers() int {
-	return getEnvIntDefault("ROOM_MAX_MEMBERS", defaultRoomMaxMembers)
+	return getEnvIntDefault(EnvRoomMaxMembers, defaultRoomMaxMembers)
 }
 
 // GetRoomMaxTTLHours returns the longest lifetime a room may be created with
 func GetRoomMaxTTLHours() int {
-	return getEnvIntDefault("ROOM_MAX_TTL_HOURS", defaultRoomMaxTTLHours)
+	return getEnvIntDefault(EnvRoomMaxTTLHours, defaultRoomMaxTTLHours)
 }
 
 // GetMaxMessageBytes returns the max raw ciphertext size of one message
 func GetMaxMessageBytes() int {
-	return getEnvIntDefault("MAX_MESSAGE_BYTES", defaultMaxMessageBytes)
+	return getEnvIntDefault(EnvMaxMessageBytes, defaultMaxMessageBytes)
 }
 
 // GetMessagePageLimit returns the max number of messages returned per request
 func GetMessagePageLimit() int {
-	return getEnvIntDefault("MESSAGE_PAGE_LIMIT", defaultMessagePageLimit)
+	return getEnvIntDefault(EnvMessagePageLimit, defaultMessagePageLimit)
 }
 
 // GetMessageTTLDays returns how many days ciphertext is kept before deletion
 func GetMessageTTLDays() int {
-	return getEnvIntDefault("MESSAGE_TTL_DAYS", defaultMessageTTLDays)
+	return getEnvIntDefault(EnvMessageTTLDays, defaultMessageTTLDays)
 }
 
 // MaxMessageTTLDays is the upper bound accepted for MESSAGE_TTL_DAYS
@@ -298,24 +404,30 @@ func GetFileAccountDailyBytes() int64 {
 
 // GetAllowedOrigins returns CORS allowed origins (comma-separated)
 func GetAllowedOrigins() string {
-	return GetEnv("ALLOWED_ORIGINS", defaultAllowedOrigins)
+	return GetEnv(EnvAllowedOrigins, defaultAllowedOrigins)
+}
+
+// GetAppEnv returns the deployment environment, lower-cased (startup validation lists the
+// accepted values)
+func GetAppEnv() string {
+	return strings.ToLower(strings.TrimSpace(GetEnv(EnvAppEnv, defaultAppEnv)))
 }
 
 // IsProductionMode returns true if running in production
 func IsProductionMode() bool {
-	env := strings.ToLower(strings.TrimSpace(GetEnv("APP_ENV", defaultAppEnv)))
+	env := GetAppEnv()
 	return env == "production" || env == "prod"
 }
 
 // GetLogLevel returns logging level
 // Values: debug, info, warn, error
 func GetLogLevel() string {
-	return strings.ToLower(strings.TrimSpace(GetEnv("LOG_LEVEL", defaultLogLevel)))
+	return strings.ToLower(strings.TrimSpace(GetEnv(EnvLogLevel, defaultLogLevel)))
 }
 
 // GetTrustedProxies returns comma-separated trusted proxy IPs/CIDRs
 func GetTrustedProxies() string {
-	return strings.TrimSpace(GetEnv("TRUSTED_PROXIES", ""))
+	return strings.TrimSpace(GetEnv(EnvTrustedProxies, ""))
 }
 
 // ========================================
@@ -324,22 +436,22 @@ func GetTrustedProxies() string {
 
 // GetRateLimitMaxTokens returns max tokens per bucket
 func GetRateLimitMaxTokens() int {
-	return getEnvIntDefault("RATE_LIMIT_MAX_TOKENS", defaultRateLimitMaxTokens)
+	return getEnvIntDefault(EnvRateLimitMaxTokens, defaultRateLimitMaxTokens)
 }
 
 // GetRateLimitRefillIntervalSeconds returns refill interval in seconds
 func GetRateLimitRefillIntervalSeconds() int {
-	return getEnvIntDefault("RATE_LIMIT_REFILL_INTERVAL_SEC", defaultRateLimitRefillSeconds)
+	return getEnvIntDefault(EnvRateLimitRefillIntervalSeconds, defaultRateLimitRefillSeconds)
 }
 
 // GetRateLimitCleanupIntervalSeconds returns cleanup interval in seconds
 func GetRateLimitCleanupIntervalSeconds() int {
-	return getEnvIntDefault("RATE_LIMIT_CLEANUP_INTERVAL_SEC", defaultRateLimitCleanupSeconds)
+	return getEnvIntDefault(EnvRateLimitCleanupIntervalSeconds, defaultRateLimitCleanupSeconds)
 }
 
 // GetRateLimitMaxBuckets returns max bucket count before cleanup
 func GetRateLimitMaxBuckets() int {
-	return getEnvIntDefault("RATE_LIMIT_MAX_BUCKETS", defaultRateLimitMaxBuckets)
+	return getEnvIntDefault(EnvRateLimitMaxBuckets, defaultRateLimitMaxBuckets)
 }
 
 // ========================================
@@ -348,34 +460,34 @@ func GetRateLimitMaxBuckets() int {
 
 // GetDBHost returns database host
 func GetDBHost() string {
-	return strings.TrimSpace(GetEnv("DB_HOST", defaultDBHost))
+	return strings.TrimSpace(GetEnv(EnvDBHost, defaultDBHost))
 }
 
 // GetDBPort returns database port
 func GetDBPort() string {
-	return strings.TrimSpace(GetEnv("DB_PORT", defaultDBPort))
+	return strings.TrimSpace(GetEnv(EnvDBPort, defaultDBPort))
 }
 
 // GetDBUser returns database user
 func GetDBUser() string {
-	return strings.TrimSpace(GetEnv("DB_USER", defaultDBUser))
+	return strings.TrimSpace(GetEnv(EnvDBUser, defaultDBUser))
 }
 
 // GetDBPassword returns the database password; there is no default (make setup generates one)
 func GetDBPassword() string {
-	return GetEnv("DB_PASSWORD", "")
+	return GetEnv(EnvDBPassword, "")
 }
 
 // GetDBName returns database name
 func GetDBName() string {
-	return strings.TrimSpace(GetEnv("DB_NAME", defaultDBName))
+	return strings.TrimSpace(GetEnv(EnvDBName, defaultDBName))
 }
 
 // GetDBSSLMode returns database SSL mode
 // Values: disable, require, verify-ca, verify-full
 func GetDBSSLMode() string {
 	// Note: Logging is handled in database.connection.go ValidateStartupConfig
-	return strings.TrimSpace(GetEnv("DB_SSL_MODE", defaultDBSSLMode))
+	return strings.TrimSpace(GetEnv(EnvDBSSLMode, defaultDBSSLMode))
 }
 
 // ========================================
@@ -384,32 +496,32 @@ func GetDBSSLMode() string {
 
 // GetArgon2MemoryKiB returns Argon2 memory in KiB
 func GetArgon2MemoryKiB() int {
-	return getEnvIntDefault("ARGON2_MEMORY_KIB", defaultArgon2MemoryKiB)
+	return getEnvIntDefault(EnvArgon2MemoryKiB, defaultArgon2MemoryKiB)
 }
 
 // GetArgon2Time returns Argon2 time cost
 func GetArgon2Time() int {
-	return getEnvIntDefault("ARGON2_TIME", defaultArgon2Time)
+	return getEnvIntDefault(EnvArgon2Time, defaultArgon2Time)
 }
 
 // GetArgon2Parallelism returns Argon2 parallelism
 func GetArgon2Parallelism() int {
-	return getEnvIntDefault("ARGON2_PARALLELISM", defaultArgon2Parallelism)
+	return getEnvIntDefault(EnvArgon2Parallelism, defaultArgon2Parallelism)
 }
 
 // GetArgon2MaxConcurrent returns how many Argon2id computations may run at once
 func GetArgon2MaxConcurrent() int {
-	return getEnvIntDefault("ARGON2_MAX_CONCURRENT", defaultArgon2MaxConcurrent)
+	return getEnvIntDefault(EnvArgon2MaxConcurrent, defaultArgon2MaxConcurrent)
 }
 
 // GetArgon2SaltLength returns Argon2 salt length in bytes
 func GetArgon2SaltLength() int {
-	return getEnvIntDefault("ARGON2_SALT_LENGTH", defaultArgon2SaltLength)
+	return getEnvIntDefault(EnvArgon2SaltLength, defaultArgon2SaltLength)
 }
 
 // GetArgon2HashLength returns Argon2 hash length in bytes
 func GetArgon2HashLength() int {
-	return getEnvIntDefault("ARGON2_HASH_LENGTH", defaultArgon2HashLength)
+	return getEnvIntDefault(EnvArgon2HashLength, defaultArgon2HashLength)
 }
 
 // MinPepperBytes returns the shortest account-lookup pepper accepted, in bytes.
@@ -420,7 +532,7 @@ func MinPepperBytes() int {
 // GetAccountLookupPepper returns the pepper for account lookup HMAC: at least 32 bytes of
 // key material encoded as hex or base64. Raw text is rejected (nil), never used as bytes.
 func GetAccountLookupPepper() []byte {
-	pepperStr := strings.TrimSpace(GetEnv("ACCOUNT_LOOKUP_PEPPER", ""))
+	pepperStr := strings.TrimSpace(GetEnv(EnvAccountLookupPepper, ""))
 	if pepperStr == "" {
 		return nil
 	}
@@ -439,25 +551,17 @@ func GetAccountLookupPepper() []byte {
 
 // GetPendingTokenTTL returns pending token TTL
 func GetPendingTokenTTL() time.Duration {
-	seconds := getEnvIntDefault("PENDING_TOKEN_TTL_SEC", defaultPendingTokenTTLSeconds)
-	if seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvPendingTokenTTLSeconds, defaultPendingTokenTTLSeconds)
 }
 
 // GetPendingCleanupInterval returns pending store cleanup interval
 func GetPendingCleanupInterval() time.Duration {
-	seconds := getEnvIntDefault("PENDING_CLEANUP_INTERVAL_SEC", defaultPendingCleanupSeconds)
-	if seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvPendingCleanupIntervalSeconds, defaultPendingCleanupSeconds)
 }
 
 // GetPendingIDBytes returns pending ID length in bytes
 func GetPendingIDBytes() int {
-	return getEnvIntDefault("PENDING_ID_BYTES", defaultPendingIDBytes)
+	return getEnvIntDefault(EnvPendingIDBytes, defaultPendingIDBytes)
 }
 
 // ========================================
@@ -466,7 +570,7 @@ func GetPendingIDBytes() int {
 
 // GetInternalIDLength returns internal UUID length
 func GetInternalIDLength() int {
-	return getEnvIntDefault("INTERNAL_ID_LENGTH", defaultInternalIDLength)
+	return getEnvIntDefault(EnvInternalIDLength, defaultInternalIDLength)
 }
 
 // ========================================
@@ -475,48 +579,32 @@ func GetInternalIDLength() int {
 
 // GetBackendPort returns backend server port
 func GetBackendPort() string {
-	return strings.TrimSpace(GetEnv("BACKEND_PORT", defaultBackendPort))
+	return strings.TrimSpace(GetEnv(EnvBackendPort, defaultBackendPort))
 }
 
 // GetServerReadHeaderTimeout returns read header timeout
 func GetServerReadHeaderTimeout() time.Duration {
-	seconds := getEnvIntDefault("SERVER_READ_HEADER_TIMEOUT_SEC", defaultServerReadHeaderTimeout)
-	if seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvServerReadHeaderTimeoutSeconds, defaultServerReadHeaderTimeout)
 }
 
 // GetServerReadTimeout returns read timeout
 func GetServerReadTimeout() time.Duration {
-	seconds := getEnvIntDefault("SERVER_READ_TIMEOUT_SEC", defaultServerReadTimeout)
-	if seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvServerReadTimeoutSeconds, defaultServerReadTimeout)
 }
 
 // GetServerWriteTimeout returns write timeout
 func GetServerWriteTimeout() time.Duration {
-	seconds := getEnvIntDefault("SERVER_WRITE_TIMEOUT_SEC", defaultServerWriteTimeout)
-	if seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvServerWriteTimeoutSeconds, defaultServerWriteTimeout)
 }
 
 // GetServerIdleTimeout returns idle timeout
 func GetServerIdleTimeout() time.Duration {
-	seconds := getEnvIntDefault("SERVER_IDLE_TIMEOUT_SEC", defaultServerIdleTimeout)
-	if seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
+	return getEnvSecondsDefault(EnvServerIdleTimeoutSeconds, defaultServerIdleTimeout)
 }
 
 // GetServerMaxHeaderBytes returns max header bytes
 func GetServerMaxHeaderBytes() int {
-	return getEnvIntDefault("SERVER_MAX_HEADER_BYTES", defaultServerMaxHeaderBytes)
+	return getEnvIntDefault(EnvServerMaxHeaderBytes, defaultServerMaxHeaderBytes)
 }
 
 // ========================================
@@ -525,13 +613,13 @@ func GetServerMaxHeaderBytes() int {
 
 // GetPoWDifficulty returns the PoW difficulty level
 func GetPoWDifficulty() int {
-	return getEnvIntDefault("POW_DIFFICULTY", defaultPoWDifficulty)
+	return getEnvIntDefault(EnvPoWDifficulty, defaultPoWDifficulty)
 }
 
 // GetPoWChallengeTTL returns how long an issued PoW challenge stays valid
 func GetPoWChallengeTTL() time.Duration {
-	seconds := getEnvIntDefault("POW_CHALLENGE_TTL_SEC", defaultPoWChallengeTTLSeconds)
-	if seconds <= 0 || seconds > maxPoWChallengeTTLSeconds {
+	seconds := getEnvIntDefault(EnvPoWChallengeTTLSeconds, defaultPoWChallengeTTLSeconds)
+	if seconds <= 0 || seconds > MaxPoWChallengeTTLSeconds {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second

@@ -34,6 +34,13 @@ func roomFixture(t testing.TB, maxMembers int) (*RoomCode, *Room) {
 	return code, room
 }
 
+// roomOfThree is a four-seat room fixture that accounts A, B and C have joined, in that order.
+func roomOfThree(t testing.TB) (*Room, roomParty, roomParty, roomParty) {
+	t.Helper()
+	_, room := roomFixture(t, 4)
+	return room, joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+}
+
 func joinAs(t testing.TB, room *Room, account string) roomParty {
 	t.Helper()
 	root, err := RoomsRoot(account)
@@ -216,8 +223,7 @@ func TestRoomVault_OpensOnlyForItsAccountAndRoom(t *testing.T) {
 }
 
 func TestRosterDigest_IgnoresOrderButNotMembership(t *testing.T) {
-	_, room := roomFixture(t, 4)
-	a, b, c := joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+	_, a, b, c := roomOfThree(t)
 	d1, err := RosterDigest(rosterOf(a, b, c))
 	if err != nil {
 		t.Fatalf("RosterDigest: %v", err)
@@ -236,8 +242,7 @@ func TestRosterDigest_IgnoresOrderButNotMembership(t *testing.T) {
 }
 
 func TestRoomMessage_EveryRecipientOpensItAndSeesTheSender(t *testing.T) {
-	_, room := roomFixture(t, 4)
-	a, b, c := joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+	room, a, b, c := roomOfThree(t)
 	id := uuid.New()
 	blob := sealFor(t, room, a, rosterOf(a, b, c), id, 5)
 	for name, p := range map[string]roomParty{"sender": a, "b": b, "c": c} {
@@ -252,8 +257,7 @@ func TestRoomMessage_EveryRecipientOpensItAndSeesTheSender(t *testing.T) {
 }
 
 func TestRoomMessage_MembersOutsideTheRosterCannotOpenIt(t *testing.T) {
-	_, room := roomFixture(t, 4)
-	a, b, c := joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+	room, a, b, c := roomOfThree(t)
 	id := uuid.New()
 	blob := sealFor(t, room, a, rosterOf(a, b), id, 1)
 	if _, err := room.OpenMessage(c.member, id, blob); err == nil {
@@ -262,8 +266,7 @@ func TestRoomMessage_MembersOutsideTheRosterCannotOpenIt(t *testing.T) {
 }
 
 func TestRoomMessage_AMemberCannotImpersonateAnother(t *testing.T) {
-	_, room := roomFixture(t, 4)
-	a, b, c := joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+	room, a, b, c := roomOfThree(t)
 	// C holds the code and A's public card, but not A's member key
 	forger := &RoomMember{private: c.member.private, Public: a.member.Public, Card: a.member.Card}
 	recipients, digest, err := room.Recipients(c.member, rosterOf(a, b, c))
@@ -321,8 +324,7 @@ func TestRoomMessage_RejectsEveryBinding(t *testing.T) {
 }
 
 func TestRoomMessage_WrapOrderDoesNotMatter(t *testing.T) {
-	_, room := roomFixture(t, 4)
-	a, b, c := joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+	room, a, b, c := roomOfThree(t)
 	id := uuid.New()
 	raw, _ := base64.RawURLEncoding.DecodeString(sealFor(t, room, a, rosterOf(a, b, c), id, 1))
 	first := append([]byte(nil), raw[roomHeaderSize:roomHeaderSize+roomWrapSize]...)
@@ -359,8 +361,7 @@ func TestRoomMessage_CommitmentMustMatchTheWrappedKey(t *testing.T) {
 }
 
 func TestRoomMessage_SizeIsHeaderWrapsAndAPaddedClass(t *testing.T) {
-	_, room := roomFixture(t, 4)
-	a, b, c := joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+	room, a, b, c := roomOfThree(t)
 	recipients, digest, _ := room.Recipients(a.member, rosterOf(a, b, c))
 	for _, tc := range []struct {
 		textLen int
@@ -406,8 +407,7 @@ func TestRoomRecipients_SkipBrokenCardsButCountThem(t *testing.T) {
 }
 
 func TestRoomNote_OnlyTheAddresseeOpensIt(t *testing.T) {
-	_, room := roomFixture(t, 4)
-	a, b, c := joinAs(t, room, accountA), joinAs(t, room, accountB), joinAs(t, room, accountC)
+	room, a, b, c := roomOfThree(t)
 	id := uuid.New()
 	note, err := room.SealNote(a.member, id, b.member.Card, "noaddx:invite", vectorSentAt)
 	if err != nil {

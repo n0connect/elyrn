@@ -121,13 +121,8 @@ func FuzzGateFileRead(f *testing.F) {
 		if err != nil {
 			return // not a request net/http would hand a handler
 		}
-		var in *Input
-		rec := httptest.NewRecorder()
-		Gate(func(w http.ResponseWriter, r *http.Request) { in, _ = InputOf(r) })(rec, r)
+		in := admittedByGate(t, r, strconv.Quote(target))
 		if in == nil {
-			if _, ok := testutil.RegisteredAnswer(rec); !ok || rec.Code >= http.StatusInternalServerError {
-				t.Fatalf("%q refused with the unregistered answer %d %q", target, rec.Code, rec.Body.String())
-			}
 			return
 		}
 		part, ok := in.Query(models.QueryPart)
@@ -324,17 +319,27 @@ func FuzzGateRequest(f *testing.F) {
 		if unknownLength {
 			r.ContentLength = -1
 		}
-		var in *Input
-		rec := httptest.NewRecorder()
-		Gate(func(w http.ResponseWriter, r *http.Request) { in, _ = InputOf(r) })(rec, r)
+		in := admittedByGate(t, r, method+" "+strconv.Quote(target))
 		if in == nil {
-			if _, ok := testutil.RegisteredAnswer(rec); !ok || rec.Code >= http.StatusInternalServerError {
-				t.Fatalf("%s %q refused with the unregistered answer %d %q", method, target, rec.Code, rec.Body.String())
-			}
 			return
 		}
 		expectAdmittedInput(t, r, in)
 	})
+}
+
+// admittedByGate runs r through the gate and returns what it admitted; nil when it refused r,
+// which must then be a registered answer below 500 (what names r in the failure).
+func admittedByGate(t *testing.T, r *http.Request, what string) *Input {
+	t.Helper()
+	var in *Input
+	rec := httptest.NewRecorder()
+	Gate(func(w http.ResponseWriter, r *http.Request) { in, _ = InputOf(r) })(rec, r)
+	if in == nil {
+		if _, ok := testutil.RegisteredAnswer(rec); !ok || rec.Code >= http.StatusInternalServerError {
+			t.Fatalf("%s refused with the unregistered answer %d %q", what, rec.Code, rec.Body.String())
+		}
+	}
+	return in
 }
 
 // expectAdmittedInput checks everything the gate promises about what it let through.

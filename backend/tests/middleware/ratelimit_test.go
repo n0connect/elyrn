@@ -18,6 +18,20 @@ import (
 	"elyrn/tests/testutil"
 )
 
+// throughRateLimit sends req through RateLimitMiddleware to a handler that answers 200, and
+// reports the answer and whether the handler ran.
+func throughRateLimit(req *http.Request) (rr *httptest.ResponseRecorder, handlerCalled bool) {
+	rr = httptest.NewRecorder()
+	testHandler := middleware.RateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := http.HandlerFunc(testHandler)
+	handler.ServeHTTP(rr, req)
+	return rr, handlerCalled
+}
+
 func TestRateLimitMiddleware_WithinLimit(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	defer testutil.TeardownTestEnv(t)
@@ -28,16 +42,7 @@ func TestRateLimitMiddleware_WithinLimit(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/v2/login", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 
-	rr := httptest.NewRecorder()
-
-	handlerCalled := false
-	testHandler := middleware.RateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		handlerCalled = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	handler := http.HandlerFunc(testHandler)
-	handler.ServeHTTP(rr, req)
+	rr, handlerCalled := throughRateLimit(req)
 
 	// Verify
 	if !handlerCalled {
@@ -138,16 +143,7 @@ func TestRateLimitMiddleware_XRealIP(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Real-IP", "192.168.1.100") // Trusted proxy header
 
-	rr := httptest.NewRecorder()
-
-	handlerCalled := false
-	testHandler := middleware.RateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		handlerCalled = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	handler := http.HandlerFunc(testHandler)
-	handler.ServeHTTP(rr, req)
+	_, handlerCalled := throughRateLimit(req)
 
 	// Verify handler was called
 	if !handlerCalled {

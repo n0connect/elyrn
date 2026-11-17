@@ -107,6 +107,24 @@ func joinRoom(t *testing.T, u *user, code *e2e.RoomCode) *roomSide {
 	return s
 }
 
+// roomOfTwo registers alice and bob, and alice creates a four-seat room for a day that bob
+// joins; the sides are returned in that order.
+func roomOfTwo(t *testing.T, mux http.Handler) (a, b *roomSide) {
+	t.Helper()
+	alice, bob := register(t, mux), register(t, mux)
+	a = createRoom(t, alice, 4, 24)
+	return a, joinRoom(t, bob, a.code)
+}
+
+// roomOfThree registers alice, bob and carol, and alice creates a four-seat room for a day that
+// bob and carol join; the sides are returned in that order.
+func roomOfThree(t *testing.T, mux http.Handler) (a, b, c *roomSide) {
+	t.Helper()
+	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
+	a = createRoom(t, alice, 4, 24)
+	return a, joinRoom(t, bob, a.code), joinRoom(t, carol, a.code)
+}
+
 func (s *roomSide) members(t *testing.T) []models.RoomMemberDTO {
 	t.Helper()
 	rr := s.u.do("GET", s.path("/members"), nil)
@@ -508,10 +526,8 @@ func TestRooms_MessageStructureIsWhitelisted(t *testing.T) {
 
 func TestRooms_LeaveKeepsTheRoomAndBurnEndsIt(t *testing.T) {
 	mux := setup(t)
-	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-	a := createRoom(t, alice, 4, 24)
-	b := joinRoom(t, bob, a.code)
-	c := joinRoom(t, carol, a.code)
+	a, b, c := roomOfThree(t, mux)
+	alice, bob, carol := a.u, b.u, c.u
 	c.say(t, "bye", 1)
 
 	expectStatus(t, carol.do("DELETE", c.path(""), nil), http.StatusNoContent, "carol leaves")
@@ -730,10 +746,8 @@ func (s *roomSide) notes(t *testing.T) []models.NoteDTO {
 
 func TestRoomNotes_AFriendRequestReachesOnlyItsAddressee(t *testing.T) {
 	mux := setup(t)
-	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-	a := createRoom(t, alice, 4, 24)
-	b := joinRoom(t, bob, a.code)
-	c := joinRoom(t, carol, a.code)
+	a, b, c := roomOfThree(t, mux)
+	alice, bob, carol := a.u, b.u, c.u
 
 	// The request carries an ordinary single-use invite, end to end
 	rr := alice.createInvite()

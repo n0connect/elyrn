@@ -1,8 +1,6 @@
 package database
 
 import (
-	"bytes"
-	"log"
 	"net"
 	"os"
 	"strconv"
@@ -139,6 +137,13 @@ func TestInstanceLock_LostConnectionIsReported(t *testing.T) {
 		t.Fatalf("acquire: %s", f.Error())
 	}
 	defer lock.Release()
+	expectLostOnSessionEnd(t, lost, 30*time.Second, "the lost lock was never reported")
+}
+
+// expectLostOnSessionEnd checks that ending the session holding the advisory lock is reported
+// to the holder as E_INSTANCE_LOCK_LOST within within (never fails the test when it is not).
+func expectLostOnSessionEnd(t *testing.T, lost <-chan *opcode.Failure, within time.Duration, never string) {
+	t.Helper()
 	if err := database.DB.Exec("SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND pid <> pg_backend_pid()").Error; err != nil {
 		t.Fatalf("terminate the lock's connection: %v", err)
 	}
@@ -147,8 +152,8 @@ func TestInstanceLock_LostConnectionIsReported(t *testing.T) {
 		if f.Code.ID != opcode.InstanceLockLost.ID {
 			t.Fatalf("lost lock reported as %s", f.Code.ID)
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("the lost lock was never reported")
+	case <-time.After(within):
+		t.Fatal(never)
 	}
 }
 
@@ -162,24 +167,6 @@ const (
 	stallSettle = time.Second
 	lostWithin  = 30 * time.Second
 )
-
-// lockedLog is a log destination the watcher's goroutine writes while the test reads it.
-type lockedLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *lockedLog) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
-}
-
-func (l *lockedLog) count(id string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return strings.Count(l.buf.String(), id)
-}
 
 // instanceLockHeld reports, through the pool (not the stalled path), whether some session holds
 // the single-instance lock.
@@ -205,10 +192,8 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 	proxy := testutil.StartStallingProxy(t, net.JoinHostPort(os.Getenv("DB_HOST"), os.Getenv("DB_PORT")))
 	t.Setenv("DB_HOST", "127.0.0.1")
 	t.Setenv("DB_PORT", proxy.Port())
-	logs := &lockedLog{}
-	previous := log.Writer()
-	log.SetOutput(logs)
-	defer log.SetOutput(previous)
+	logs := &testutil.LockedLog{}
+	defer testutil.RedirectStandardLog(logs)()
 
 	lost := make(chan *opcode.Failure, 1)
 	lock, f := database.AcquireInstanceLockForTesting(func(f *opcode.Failure) { lost <- f }, stallCheck, stallSlow)
@@ -226,7 +211,7 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 	if !instanceLockHeld(t) {
 		t.Fatal("checking an unanswering database released the lock")
 	}
-	if got := logs.count(opcode.InstanceLockUnreachable.ID); got != 1 {
+	if got := strings.Count(logs.String(), opcode.InstanceLockUnreachable.ID); got != 1 {
 		t.Fatalf("the outage was reported %d times, want once", got)
 	}
 
@@ -240,15 +225,5 @@ func TestInstanceLock_AnUnansweringDatabaseKeepsTheLock(t *testing.T) {
 		t.Fatal("the lock did not survive the outage")
 	}
 
-	if err := database.DB.Exec("SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND pid <> pg_backend_pid()").Error; err != nil {
-		t.Fatalf("terminate the lock's connection: %v", err)
-	}
-	select {
-	case f := <-lost:
-		if f.Code.ID != opcode.InstanceLockLost.ID {
-			t.Fatalf("lost lock reported as %s", f.Code.ID)
-		}
-	case <-time.After(lostWithin):
-		t.Fatal("after the outage, a lost lock was never reported")
-	}
+	expectLostOnSessionEnd(t, lost, lostWithin, "after the outage, a lost lock was never reported")
 }

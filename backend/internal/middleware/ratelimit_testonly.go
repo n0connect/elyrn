@@ -9,6 +9,8 @@ import "time"
 // SECURITY: This function is ONLY available in test builds (build tag: test)
 // It will NOT be compiled into production binaries, preventing security risks
 func ResetRateLimiterForTesting() {
+	// Test builds only. Every live path (RateLimitMiddleware, AllowKey) loads the settings again
+	// and fails closed on an error, so a bad setting still surfaces at the test's next request
 	_ = globalRateLimiter.loadConfig()
 	globalRateLimiter.mu.Lock()
 	defer globalRateLimiter.mu.Unlock()

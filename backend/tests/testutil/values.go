@@ -72,3 +72,30 @@ func NewPendingIdentity(t testing.TB) auth.PendingIdentity {
 	}
 	return auth.PendingIdentity{AuthKey: authKey, PublicKey: publicKey}
 }
+
+// StorePendingIdentity stores a fresh NewPendingIdentity server-side (never the AccountNumber
+// itself) under a freshly generated pending id, and returns both.
+func StorePendingIdentity(t testing.TB) (pendingID string, pending auth.PendingIdentity) {
+	t.Helper()
+	pendingID, err := auth.GeneratePendingID()
+	if err != nil {
+		t.Fatalf("GeneratePendingID() failed: %v", err)
+	}
+	pending = NewPendingIdentity(t)
+	if err := auth.StorePendingRegistration(pendingID, pending); err != nil {
+		t.Fatalf("StorePendingRegistration() failed: %v", err)
+	}
+	return pendingID, pending
+}
+
+// SignedPendingToken stores a pending identity (StorePendingIdentity) and signs a pending
+// registration token for its id (not the AccountNumber).
+func SignedPendingToken(t testing.TB) (pendingID string, pending auth.PendingIdentity, token string) {
+	t.Helper()
+	pendingID, pending = StorePendingIdentity(t)
+	token, err := auth.SignPendingRegistrationToken(pendingID)
+	if err != nil {
+		t.Fatalf("SignPendingRegistrationToken() failed: %v", err)
+	}
+	return pendingID, pending, token
+}

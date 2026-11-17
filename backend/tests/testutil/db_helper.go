@@ -9,16 +9,14 @@ import "os"
 // This should be called before StartDatabase in database tests
 // Automatically detects Docker environment and uses appropriate host
 func SetupTestDatabaseEnv() {
-	// Check if running in Docker
-	if IsRunningInDocker() {
-		// Use Docker service names
-		SetupTestDatabaseEnvForDocker()
-		return
-	}
+	setDatabaseDefaults(GetDatabaseHost())
+}
 
-	// Local testing - use localhost
+// setDatabaseDefaults gives every database variable that is still unset the test database's
+// value, with the database on host.
+func setDatabaseDefaults(host string) {
 	if os.Getenv("DB_HOST") == "" {
-		os.Setenv("DB_HOST", "localhost")
+		os.Setenv("DB_HOST", host)
 	}
 	if os.Getenv("DB_PORT") == "" {
 		os.Setenv("DB_PORT", "5432")

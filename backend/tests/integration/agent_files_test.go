@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,21 +91,7 @@ func TestAgent_AFileLimitOutOfBoundsLeavesNoSession(t *testing.T) {
 		if value == 0 || r.Method != http.MethodGet || r.URL.Path != models.PathMe {
 			return false
 		}
-		rr := httptest.NewRecorder()
-		mux.ServeHTTP(rr, r)
-		var me models.MeResponse
-		if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &me) != nil {
-			t.Errorf("the real /me answered %d", rr.Code)
-			return false
-		}
-		me.FileMaxBytes = value
-		for name, values := range rr.Header() {
-			w.Header()[name] = values
-		}
-		w.Header().Del("Content-Length") // the body below is re-encoded
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(&me)
-		return true
+		return serveAlteredMe(t, mux, w, r, func(me *models.MeResponse) { me.FileMaxBytes = value })
 	})
 	robot := newAgent(t, srv.URL, newIdentityPath(t.TempDir(), "robot"))
 	ctx := context.Background()

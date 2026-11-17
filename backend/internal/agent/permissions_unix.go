@@ -48,6 +48,7 @@ func lockFile(path string) (*os.File, error) {
 		return nil, fail(CodeIdentityFile, err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		// Nothing was written to f; the flock failure is the answer, a close error adds nothing
 		_ = f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, fail(CodeIdentityInUse, nil)

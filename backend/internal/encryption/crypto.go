@@ -132,8 +132,8 @@ func DecryptUserKey(encryptedKey string, keyID string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode user key: %w", err)
 	}
 
-	if len(userKey) != 32 {
-		cryptoLogger.Error("DecryptUserKey: invalid user key length: %d (expected 32)", len(userKey))
+	if len(userKey) != cryptoengine.AES256KeySize {
+		cryptoLogger.Error("DecryptUserKey: invalid user key length: %d (expected %d)", len(userKey), cryptoengine.AES256KeySize)
 		return nil, fmt.Errorf("invalid user key length")
 	}
 	cryptoLogger.Debug("DecryptUserKey: successfully decoded user key, length: %d", len(userKey))

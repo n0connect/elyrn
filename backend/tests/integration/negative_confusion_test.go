@@ -123,6 +123,18 @@ func TestNegative_CrossProtocolConfusion(t *testing.T) {
 	}
 }
 
+// firstMessageStored pairs alice and bob, and alice's first message to bob is stored under a
+// fresh id; it returns both, the conversation, the id and the stored ciphertext.
+func firstMessageStored(t *testing.T, mux http.Handler) (alice, bob *user, conv, id, first string) {
+	t.Helper()
+	alice, bob = register(t, mux), register(t, mux)
+	conv = pair(t, alice, bob)
+	id = newMessageID()
+	first = seal(t, alice, bob, conv, id, "first", 1)
+	expectStatus(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: first}), http.StatusCreated, "send")
+	return alice, bob, conv, id, first
+}
+
 // A message id is unique on the whole server (models.Message.ID: uniqueIndex), not per
 // conversation. A duplicate id answers 409 Conflict, the documented "your earlier attempt is
 // stored", only for the caller's own identical message in the same conversation (a resend after a
@@ -132,22 +144,14 @@ func TestNegative_CrossProtocolConfusion(t *testing.T) {
 func TestNegative_AnotherConversationsMessageID(t *testing.T) {
 	runScenarios(t, []scenario{
 		{"the same id and content after a lost answer is stored", func(t *testing.T, mux http.Handler) {
-			alice, bob := register(t, mux), register(t, mux)
-			conv := pair(t, alice, bob)
-			id := newMessageID()
-			first := seal(t, alice, bob, conv, id, "first", 1)
-			expectStatus(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: first}), http.StatusCreated, "send")
+			alice, bob, conv, id, first := firstMessageStored(t, mux)
 			before := countRows(t)
 			expectAnswer(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: first}), apperr.Conflict, "the resend")
 			expectRowsUnchanged(t, before, "the resend")
 			expectOnlyMessage(t, bob, conv, id, first)
 		}},
 		{"the same id with other content is taken", func(t *testing.T, mux http.Handler) {
-			alice, bob := register(t, mux), register(t, mux)
-			conv := pair(t, alice, bob)
-			id := newMessageID()
-			first := seal(t, alice, bob, conv, id, "first", 1)
-			expectStatus(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: first}), http.StatusCreated, "send")
+			alice, bob, conv, id, first := firstMessageStored(t, mux)
 			before := countRows(t)
 			expectAnswer(t, alice.do(http.MethodPost, messagesPath(conv), models.SendMessageRequest{ID: id, Ciphertext: seal(t, alice, bob, conv, id, "other", 2)}),
 				apperr.IDTaken, "other content under the id")
@@ -200,10 +204,8 @@ func TestNegative_AnotherConversationsMessageID(t *testing.T) {
 			expectRowsUnchanged(t, before, "the resend after a join")
 		}},
 		{"a note id: the same note is waiting, any other holder is taken", func(t *testing.T, mux http.Handler) {
-			alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
-			a := createRoom(t, alice, 4, 24)
-			b := joinRoom(t, bob, a.code)
-			c := joinRoom(t, carol, a.code)
+			a, b, c := roomOfThree(t, mux)
+			alice, bob := a.u, b.u
 			other := createRoom(t, alice, 2, 24)
 			otherB := joinRoom(t, bob, other.code)
 			noteID, note := a.note(t, b, "noaddx:first")

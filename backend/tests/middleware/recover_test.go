@@ -1,15 +1,12 @@
 package middleware
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 
 	"elyrn/internal/middleware"
@@ -80,38 +77,10 @@ var (
 	stackPCOffsets     = regexp.MustCompile(` \+0x[0-9a-f]+`)
 )
 
-// capturedLog is the standard logger's output while a test runs.
-type capturedLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (c *capturedLog) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.buf.Write(p)
-}
-
-func (c *capturedLog) String() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.buf.String()
-}
-
-// captureLog sends the standard logger to a buffer until the test ends.
-func captureLog(t testing.TB) *capturedLog {
-	t.Helper()
-	captured := &capturedLog{}
-	previous := log.Writer()
-	log.SetOutput(captured)
-	t.Cleanup(func() { log.SetOutput(previous) })
-	return captured
-}
-
 // panicked runs a handler that panics with value behind Recover and returns what it logged.
 func panicked(t testing.TB, value any) string {
 	t.Helper()
-	captured := captureLog(t)
+	captured := testutil.CaptureLog(t)
 	middleware.Recover(func(http.ResponseWriter, *http.Request) { panic(value) })(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
 	return captured.String()
 }

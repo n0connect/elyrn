@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -421,22 +420,34 @@ func storedExpiry(t *testing.T, conv string, seq int64) time.Time {
 	return stored.ExpiresOn.UTC()
 }
 
-// A clock moved back days and then corrected must not shorten any message's life: the cycle
-// behind the last purge deletes nothing and caps nothing (E_CLOCK_JUMP).
-func TestRetention_ClockMovedBackKillsNothingEarly(t *testing.T) {
+// oneStoredMessage pairs two new accounts, stores one message from alice to bob and returns bob,
+// the conversation and the message's stored expiry.
+func oneStoredMessage(t *testing.T) (bob *user, conv string, expires time.Time) {
+	t.Helper()
 	mux := setup(t)
 	alice, bob := register(t, mux), register(t, mux)
-	conv := pair(t, alice, bob)
+	conv = pair(t, alice, bob)
 	send(t, alice, bob, conv, 1)
-	want := storedExpiry(t, conv, 1)
+	return bob, conv, storedExpiry(t, conv, 1)
+}
 
+// purgeAt runs one service's retention cycles at each clock reading, in order.
+func purgeAt(t *testing.T, readings ...time.Time) {
+	t.Helper()
 	svc := chat.NewService()
-	now := time.Now()
-	for _, at := range []time.Time{now, now.AddDate(0, 0, -5), now} {
+	for _, at := range readings {
 		if err := svc.PurgeExpired(at); err != nil {
 			t.Fatalf("PurgeExpired(%v): %v", at, err)
 		}
 	}
+}
+
+// A clock moved back days and then corrected must not shorten any message's life: the cycle
+// behind the last purge deletes nothing and caps nothing (E_CLOCK_JUMP).
+func TestRetention_ClockMovedBackKillsNothingEarly(t *testing.T) {
+	_, conv, want := oneStoredMessage(t)
+	now := time.Now()
+	purgeAt(t, now, now.AddDate(0, 0, -5), now)
 	if got := storedExpiry(t, conv, 1); !got.Equal(want) {
 		t.Fatalf("expires_on moved from %v to %v by a clock that went back", want, got)
 	}
@@ -445,20 +456,10 @@ func TestRetention_ClockMovedBackKillsNothingEarly(t *testing.T) {
 // A clock far ahead of the last purge at boot (the first cycle) deletes nothing: it waits for a
 // steady cycle, and the mark stays where it was, so the corrected clock purges normally.
 func TestRetention_ForwardJumpDoesNotPurgeOnTheFirstCycle(t *testing.T) {
-	mux := setup(t)
-	alice, bob := register(t, mux), register(t, mux)
-	conv := pair(t, alice, bob)
-	send(t, alice, bob, conv, 1)
-	want := storedExpiry(t, conv, 1)
-
-	svc := chat.NewService()
+	bob, conv, want := oneStoredMessage(t)
 	now := time.Now()
 	farAhead := now.AddDate(0, 0, 2*365+1) // past twice the longest MESSAGE_TTL_DAYS
-	for _, at := range []time.Time{now, farAhead, now} {
-		if err := svc.PurgeExpired(at); err != nil {
-			t.Fatalf("PurgeExpired(%v): %v", at, err)
-		}
-	}
+	purgeAt(t, now, farAhead, now)
 	if got := storedExpiry(t, conv, 1); !got.Equal(want) {
 		t.Fatalf("expires_on = %v after a forward jump, want %v", got, want)
 	}
@@ -574,30 +575,10 @@ func TestBurn_RacingSendsLeaveNoCiphertext(t *testing.T) {
 func logsDuring(t *testing.T, fn func()) string {
 	t.Helper()
 	t.Setenv("LOG_LEVEL", "info")
-	var buf lockedBuffer
-	previous := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(previous)
+	var buf testutil.LockedLog
+	defer testutil.RedirectStandardLog(&buf)()
 	fn()
 	return buf.String()
-}
-
-// lockedBuffer is a log sink safe for the server's goroutines.
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }
 
 // brokenDatabaseText is what the driver's own text says of breakDatabase's address: the

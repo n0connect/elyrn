@@ -215,14 +215,22 @@ func TestFiles_PartZeroOpensTheFileForItsUploader(t *testing.T) {
 	expectStatus(t, alice.uploadPart(conv, file, last, newFilePart(t)), http.StatusBadRequest, "a part past MAX_FILE_BYTES")
 }
 
+// firstPartStored pairs alice and bob, and alice stores part 0 of a new file in their
+// conversation; it returns both, the conversation, the file id and the part.
+func firstPartStored(t *testing.T, mux http.Handler) (alice, bob *user, conv, file, data string) {
+	t.Helper()
+	alice, bob = register(t, mux), register(t, mux)
+	conv = pair(t, alice, bob)
+	file, data = uuid.NewString(), newFilePart(t)
+	expectStatus(t, alice.uploadPart(conv, file, 0, data), http.StatusCreated, "part 0")
+	return alice, bob, conv, file, data
+}
+
 // A resend after a lost answer is told apart from a clash, as for messages: the same uploader's
 // identical part answers 409 Conflict ("stored"), anything else 409 Id taken, and nothing moves.
 func TestFiles_IdenticalResendIsStoredAlteredIsTaken(t *testing.T) {
 	mux := filesSetup(t)
-	alice, bob := register(t, mux), register(t, mux)
-	conv := pair(t, alice, bob)
-	file, data := uuid.NewString(), newFilePart(t)
-	expectStatus(t, alice.uploadPart(conv, file, 0, data), http.StatusCreated, "part 0")
+	alice, bob, conv, file, data := firstPartStored(t, mux)
 	expectAnswer(t, alice.uploadPart(conv, file, 0, data), apperr.Conflict, "the identical part again")
 	raw, _ := base64.RawURLEncoding.DecodeString(data)
 	raw[len(raw)-1] ^= 1
@@ -397,10 +405,7 @@ func TestFiles_BudgetsOnlyForAuthenticatedAccounts(t *testing.T) {
 // gets 503 E_FILE_REQUESTS_BUSY at once, and a flood without a session leaves the pool as it was.
 func TestFiles_OnlyAuthenticatedRequestsTakeASlot(t *testing.T) {
 	mux := filesSetup(t)
-	alice, bob := register(t, mux), register(t, mux)
-	conv := pair(t, alice, bob)
-	file, data := uuid.NewString(), newFilePart(t)
-	expectStatus(t, alice.uploadPart(conv, file, 0, data), http.StatusCreated, "part 0")
+	alice, bob, conv, file, data := firstPartStored(t, mux)
 	free := handlers.FileRequestSlotsFreeForTesting()
 	if free != handlers.MaxConcurrentFileRequestsForTesting() {
 		t.Fatalf("%d of %d slots free before the test", free, handlers.MaxConcurrentFileRequestsForTesting())
