@@ -52,6 +52,31 @@ test('the size a header declares is read for PNG, JPEG (past other segments) and
     assert.equal(I.declaredSize(bytes([0xff, 0xd8, 0x00, 0x00]), 'jpeg'), null);
 });
 
+const segment = (marker, body) => [0xff, marker, ...u16be(body.length + 2), ...body];
+const chunk = (type, data) => [...u32be(data.length), ...ascii(type), ...data, 0, 0, 0, 0];
+const has = (bytes, text) => String.fromCharCode(...bytes).includes(text);
+
+test('what an engine\'s encoder adds beside the pixels is dropped: JPEG APP1..APP15 and comments, PNG text, time and Exif', () => {
+    const scan = [0xff, 0xda, 0, 8, 1, 2, 3, 4, 5, 6, 0x11, 0x22, 0xff, 0xd9];
+    const jpegIn = bytes([0xff, 0xd8], segment(0xe0, ascii('JFIF\0')), segment(0xe1, ascii('Exif\0\0engine-exif')),
+        segment(0xed, ascii('Photoshop 3.0')), segment(0xfe, ascii('a comment')), segment(0xdb, [0, 1, 2]), scan);
+    const jpegOut = I.stripMetadata(jpegIn, 'jpeg');
+    assert.deepEqual([...jpegOut], [0xff, 0xd8, ...segment(0xe0, ascii('JFIF\0')), ...segment(0xdb, [0, 1, 2]), ...scan]);
+    for (const text of ['Exif', 'engine-exif', 'Photoshop', 'a comment']) assert.equal(has(jpegOut, text), false, text);
+    const pngIn = bytes([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]),
+        chunk('tEXt', ascii('Author\0me')), chunk('eXIf', [1, 2]), chunk('tIME', [7, 7]), chunk('iTXt', ascii('x')),
+        chunk('zTXt', ascii('y')), chunk('sRGB', [0]), chunk('IDAT', [9, 9, 9]), chunk('IEND', []));
+    const pngOut = I.stripMetadata(pngIn, 'png');
+    assert.deepEqual([...pngOut], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]),
+        ...chunk('sRGB', [0]), ...chunk('IDAT', [9, 9, 9]), ...chunk('IEND', [])]);
+    // Anything that does not parse is no image to send
+    assert.equal(I.stripMetadata(jpegIn.subarray(0, 30), 'jpeg'), null);
+    assert.equal(I.stripMetadata(bytes([0xff, 0xd8, 0x00]), 'jpeg'), null);
+    assert.equal(I.stripMetadata(pngIn.subarray(0, pngIn.length - 1), 'png'), null);
+    assert.equal(I.stripMetadata(bytes([...pngIn, 0]), 'png'), null);
+    assert.equal(I.stripMetadata(pngIn, 'webp'), null);
+});
+
 test('the pixel limit is named and drawn by every engine; JPEG quality is named', () => {
     assert.equal(I.MAX_IMAGE_PIXELS, 4096 * 4096);
     assert.ok(I.JPEG_QUALITY > 0 && I.JPEG_QUALITY <= 1);

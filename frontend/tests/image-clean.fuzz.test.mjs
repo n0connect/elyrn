@@ -24,6 +24,9 @@ test('image recognition and header reading are total on any bytes', async () => 
         const kind = I.kindOf(bytes);
         assert.ok(kind === null || KINDS.includes(kind));
         for (const asked of KINDS) {
+            // Dropping metadata is total too, and never leaves a segment it drops
+            const stripped = I.stripMetadata(bytes, asked);
+            assert.ok(stripped === null || stripped.length <= bytes.length);
             const size = I.declaredSize(bytes, asked);
             if (size !== null) {
                 assert.ok(Number.isSafeInteger(size.width) && size.width >= 0, JSON.stringify(size));

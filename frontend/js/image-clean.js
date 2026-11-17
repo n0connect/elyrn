@@ -42,6 +42,14 @@ const ImageClean = (() => {
     const JPEG_SOS = 0xda;
     const JPEG_EOI = 0xd9;
     const JPEG_STANDALONE = new Set([0x01, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7]);
+    // What an engine's own encoder may write beside the pixels (WebKit writes an Exif segment of
+    // its own): JPEG application segments APP1..APP15 and comments, PNG text, time and Exif
+    // chunks. They are dropped from the encoded image, so only the pixels leave.
+    const JPEG_APP1 = 0xe1;
+    const JPEG_APP15 = 0xef;
+    const JPEG_COM = 0xfe;
+    const PNG_DROPPED = new Set(['tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME']);
+    const PNG_CHUNK_OVERHEAD = 12;
 
     function startsWith(bytes, magic, offset = 0) {
         if (bytes.length < offset + magic.length) return false;
@@ -107,6 +115,50 @@ const ImageClean = (() => {
         return null;
     }
 
+    // A JPEG without its APP1..APP15 and COM segments (everything up to the first scan is walked;
+    // the scan and what follows it are kept as they are), or null when the segments do not parse
+    function stripJpeg(b) {
+        const kept = [b.subarray(0, 2)];
+        let i = 2;
+        while (i + 3 < b.length) {
+            if (b[i] !== 0xff) return null;
+            const marker = b[i + 1];
+            if (marker === JPEG_SOS) {
+                kept.push(b.subarray(i));
+                return ElyrnCrypto.concat(...kept);
+            }
+            if (JPEG_STANDALONE.has(marker) || marker === 0xff) return null;
+            const end = i + 2 + u16be(b, i + 2);
+            if (end > b.length) return null;
+            const dropped = (marker >= JPEG_APP1 && marker <= JPEG_APP15) || marker === JPEG_COM;
+            if (!dropped) kept.push(b.subarray(i, end));
+            i = end;
+        }
+        return null;
+    }
+
+    // A PNG without its text, time and Exif chunks, or null when the chunks do not parse
+    function stripPng(b) {
+        const kept = [b.subarray(0, PNG_MAGIC.length)];
+        let i = PNG_MAGIC.length;
+        while (i + PNG_CHUNK_OVERHEAD <= b.length) {
+            const end = i + PNG_CHUNK_OVERHEAD + u32be(b, i);
+            if (end > b.length) return null;
+            const type = String.fromCharCode(b[i + 4], b[i + 5], b[i + 6], b[i + 7]);
+            if (!PNG_DROPPED.has(type)) kept.push(b.subarray(i, end));
+            i = end;
+            if (type === 'IEND') return i === b.length ? ElyrnCrypto.concat(...kept) : null;
+        }
+        return null;
+    }
+
+    // The encoded image with nothing but what draws it, or null when it does not parse
+    function stripMetadata(bytes, kind) {
+        if (kind === KIND.JPEG) return stripJpeg(bytes);
+        if (kind === KIND.PNG) return stripPng(bytes);
+        return null;
+    }
+
     function withinLimit(size) {
         return Boolean(size) && size.width > 0 && size.height > 0 && size.width * size.height <= MAX_IMAGE_PIXELS;
     }
@@ -154,9 +206,10 @@ const ImageClean = (() => {
             canvas.getContext('2d').drawImage(bitmap, 0, 0);
             const blob = await encode(canvas, output);
             if (!blob) return refused(Errors.CODES.E_FILE_IMAGE_NOT_CLEANED);
-            const cleaned = new Uint8Array(await blob.arrayBuffer());
-            // The engine wrote what was asked, or nothing is sent
-            if (kindOf(cleaned) !== output.kind) return refused(Errors.CODES.E_FILE_IMAGE_NOT_CLEANED);
+            const encoded = new Uint8Array(await blob.arrayBuffer());
+            // The engine wrote what was asked, without what it adds of its own, or nothing is sent
+            const cleaned = kindOf(encoded) === output.kind ? stripMetadata(encoded, output.kind) : null;
+            if (!cleaned) return refused(Errors.CODES.E_FILE_IMAGE_NOT_CLEANED);
             if (cleaned.length > maxBytes) return refused(Errors.CODES.E_FILE_CLEANED_TOO_LARGE, { max: formatFileSize(maxBytes) });
             return { ok: true, bytes: cleaned, name: newName(output.ext), cleaned: true };
         } catch (error) {
@@ -172,5 +225,5 @@ const ImageClean = (() => {
         }
     }
 
-    return Object.freeze({ MAX_IMAGE_PIXELS, JPEG_QUALITY, kindOf, declaredSize, decode, prepare });
+    return Object.freeze({ MAX_IMAGE_PIXELS, JPEG_QUALITY, kindOf, declaredSize, stripMetadata, decode, prepare });
 })();
