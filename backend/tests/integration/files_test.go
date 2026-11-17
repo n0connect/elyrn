@@ -13,6 +13,7 @@ import (
 	"elyrn/internal/chat"
 	"elyrn/internal/config"
 	"elyrn/internal/database"
+	"elyrn/internal/middleware"
 	"elyrn/internal/models"
 	"elyrn/internal/utils"
 
@@ -365,6 +366,29 @@ func TestFiles_OnlyPartZeroIsRateLimited(t *testing.T) {
 		expectStatus(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "new file "+strconv.Itoa(i))
 	}
 	expectAnswer(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.RateLimited, "one new file too many")
+}
+
+// A file budget is created only for an authenticated account: requests without a session never
+// reach the handler that takes one (the session gate refuses them first), so a flood of them
+// cannot fill the bounded budget map.
+func TestFiles_BudgetsOnlyForAuthenticatedAccounts(t *testing.T) {
+	mux := filesSetup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	before := middleware.FileBudgetCountForTesting()
+	for i := 0; i < 5; i++ {
+		anonymous := newClient(t, mux)
+		expectAnswer(t, anonymous.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.NoSession, "an upload without a session")
+		forged := withCookie(t, mux, "not-a-session")
+		expectAnswer(t, forged.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.NoSession, "an upload with a forged cookie")
+	}
+	if after := middleware.FileBudgetCountForTesting(); after != before {
+		t.Fatalf("requests without a session created %d budgets", after-before)
+	}
+	expectStatus(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice uploads")
+	if after := middleware.FileBudgetCountForTesting(); after != before+1 {
+		t.Fatalf("an authenticated upload created %d budgets, want 1", after-before)
+	}
 }
 
 // FILE_ACCOUNT_DAILY_BYTES is one budget per account across all its conversations: every stored

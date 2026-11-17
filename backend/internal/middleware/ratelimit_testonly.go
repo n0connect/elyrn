@@ -17,6 +17,13 @@ func ResetRateLimiterForTesting() {
 	rateLimitLogger.Debug("RateLimiter: reset for testing")
 }
 
+// ResetFileBudgetsForTesting drops every file budget, as a restart does.
+func ResetFileBudgetsForTesting() {
+	fileBudgets.mu.Lock()
+	defer fileBudgets.mu.Unlock()
+	fileBudgets.buckets = make(map[string]*TokenBucket)
+}
+
 // FileBudgetCountForTesting reports how many file budgets are held.
 func FileBudgetCountForTesting() int {
 	fileBudgets.mu.RLock()

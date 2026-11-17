@@ -66,6 +66,15 @@ func (tb *TokenBucket) Allow() bool {
 	return false
 }
 
+// full reports whether the bucket holds, or by now would hold after refilling, all its tokens:
+// dropping it then hands nothing back that a new bucket would not have.
+func (tb *TokenBucket) full(now time.Time) bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	missing := tb.maxTokens - tb.tokens
+	return missing <= 0 || now.Sub(tb.lastRefill) >= time.Duration(missing)*tb.refillRate
+}
+
 // Refund gives back one token that Allow took for work that was then not done, never above the
 // bucket's size.
 func (tb *TokenBucket) Refund() {
@@ -83,9 +92,12 @@ type limiterSettings struct {
 	refillInterval  time.Duration
 	cleanupInterval time.Duration
 	maxBuckets      int
-	// idleLimit: a bucket untouched this long is dropped; it must be at least the time the
-	// bucket takes to refill, or dropping it would hand back tokens early
+	// idleLimit: a bucket untouched this long is dropped (keepSpent false)
 	idleLimit time.Duration
+	// keepSpent: a bucket is dropped only once it would be full again, never earlier (dropping
+	// it would hand its tokens back), and a limiter full of such buckets refuses a new key
+	// instead of evicting one (fail closed)
+	keepSpent bool
 }
 
 // RateLimiter stores token buckets per client key (Lock order: rl.mu before bucket.mu)
@@ -99,6 +111,7 @@ type RateLimiter struct {
 	refillInterval  time.Duration
 	maxBuckets      int
 	idleLimit       time.Duration
+	keepSpent       bool
 }
 
 var globalRateLimiter = &RateLimiter{
@@ -133,6 +146,7 @@ func (rl *RateLimiter) loadConfig() error {
 	rl.cleanupInterval = s.cleanupInterval
 	rl.maxBuckets = s.maxBuckets
 	rl.idleLimit = s.idleLimit
+	rl.keepSpent = s.keepSpent
 	if rl.lastCleanup.IsZero() {
 		rl.lastCleanup = time.Now()
 	}
@@ -144,7 +158,8 @@ const inactivityThreshold = time.Hour
 
 // getBucket returns the bucket for key, creating it if needed. The bucket count is bounded
 // at insertion: when the limiter is full, the least recently used tenth is evicted in one
-// O(n log n) pass, so a flood of new keys costs amortised O(log n) and bounded memory.
+// O(n log n) pass, so a flood of new keys costs amortised O(log n) and bounded memory. A
+// keepSpent limiter evicts no bucket that is not full again: full of those, it answers nil.
 func (rl *RateLimiter) getBucket(key string) *TokenBucket {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -161,6 +176,9 @@ func (rl *RateLimiter) getBucket(key string) *TokenBucket {
 		rl.evictInactiveLocked(now)
 	}
 	if len(rl.buckets) >= rl.maxBuckets {
+		if rl.keepSpent {
+			return nil
+		}
 		rl.evictOldestLocked(len(rl.buckets) - rl.maxBuckets + 1 + rl.maxBuckets/10)
 	}
 	bucket := NewTokenBucket(rl.maxTokens, rl.refillInterval)
@@ -174,10 +192,11 @@ func (rl *RateLimiter) lastAccess(bucket *TokenBucket) time.Time {
 	return bucket.lastAccess
 }
 
-// evictInactiveLocked removes buckets idle past the limiter's idle limit. Caller holds rl.mu.
+// evictInactiveLocked removes the buckets that can go without changing an answer: idle past
+// the idle limit, or, for a keepSpent limiter, full again. Caller holds rl.mu.
 func (rl *RateLimiter) evictInactiveLocked(now time.Time) {
 	for key, bucket := range rl.buckets {
-		if now.Sub(rl.lastAccess(bucket)) > rl.idleLimit {
+		if rl.keepSpent && bucket.full(now) || !rl.keepSpent && now.Sub(rl.lastAccess(bucket)) > rl.idleLimit {
 			delete(rl.buckets, key)
 		}
 	}

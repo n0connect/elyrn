@@ -218,14 +218,17 @@ func TestRateLimiter_BucketCountIsBoundedAtInsertion(t *testing.T) {
 
 // The file budgets are bounded like the rate buckets (RATE_LIMIT_MAX_BUCKETS), hold
 // FILE_ACCOUNT_DAILY_BYTES / 262144 parts each, give a refunded part back, and never touch the
-// shared limiter.
+// shared limiter. At the bound no spent budget is evicted (that would hand its account a fresh
+// one): a new budget is refused until one of them is full again.
 func TestFileBudget_SizeRefundAndBound(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	defer testutil.TeardownTestEnv(t)
 	t.Setenv("RATE_LIMIT_MAX_BUCKETS", "100")
 	t.Setenv(config.EnvFileAccountDailyBytes, strconv.Itoa(3*utils.FilePartBytes))
 	middleware.ResetRateLimiterForTesting()
+	middleware.ResetFileBudgetsForTesting()
 	t.Cleanup(middleware.ResetRateLimiterForTesting)
+	t.Cleanup(middleware.ResetFileBudgetsForTesting)
 	shared := middleware.RateLimiterBucketCountForTesting()
 
 	budget := middleware.FileBudget("budget-size:" + strconv.FormatInt(time.Now().UnixNano(), 10))
@@ -248,13 +251,33 @@ func TestFileBudget_SizeRefundAndBound(t *testing.T) {
 		t.Fatal("a budget without an account")
 	}
 
-	for i := 0; i < 1000; i++ {
-		if b := middleware.FileBudget("budget-flood:" + strconv.Itoa(i)); b == nil || !b.Allow() {
-			t.Fatalf("fresh budget %d refused", i)
+	// 99 more accounts, each with a part spent: the bound of 100 is reached with no full budget
+	flood := make([]*middleware.TokenBucket, 0, 99)
+	for i := 0; i < 99; i++ {
+		b := middleware.FileBudget("budget-flood:" + strconv.Itoa(i))
+		if b == nil || !b.Allow() {
+			t.Fatalf("fresh budget %d refused below the bound", i)
 		}
-		if n := middleware.FileBudgetCountForTesting(); n > 100 {
-			t.Fatalf("after %d accounts %d budgets are held, cap is 100", i+1, n)
+		flood = append(flood, b)
+	}
+	for i := 0; i < 10; i++ {
+		if middleware.FileBudget("budget-late:"+strconv.Itoa(i)) != nil {
+			t.Fatal("a new budget evicted a spent one at the bound")
 		}
+		if n := middleware.FileBudgetCountForTesting(); n != 100 {
+			t.Fatalf("%d budgets held at the bound of 100", n)
+		}
+	}
+	if again := middleware.FileBudget("budget-flood:0"); again != flood[0] || again.Allow() && again.Allow() && again.Allow() {
+		t.Fatal("a spent budget was replaced by a fresh one")
+	}
+	// Once one budget is full again it may go, and a new account gets its budget
+	flood[1].Refund()
+	if middleware.FileBudget("budget-late:full") == nil {
+		t.Fatal("no new budget although one held budget was full again")
+	}
+	if n := middleware.FileBudgetCountForTesting(); n != 100 {
+		t.Fatalf("%d budgets held after replacing a full one, want 100", n)
 	}
 	if middleware.RateLimiterBucketCountForTesting() != shared {
 		t.Fatal("file budgets landed in the shared limiter")
