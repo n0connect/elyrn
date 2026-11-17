@@ -29,6 +29,7 @@ import (
 const (
 	exampleConversation = "3b241101-e2bb-4255-8caf-4136c566a962"
 	exampleNote         = "8e7d6c5b-4a39-4281-9f0e-0d1c2b3a4958"
+	exampleFile         = "c5a1f0e2-9d3b-4c7a-a1e4-5f6b7c8d9e0f"
 	exampleSolution     = "48213"
 	exampleSeq          = 1
 	exampleTTL          = 300
@@ -64,7 +65,7 @@ func exampleString(t testing.TB, p *Pattern) string {
 	switch p {
 	case patternUUIDv4:
 		return uuid.NewString()
-	case patternKey32, patternInviteToken, patternRoomCard, patternRoomVault, patternRoomRole:
+	case patternKey32, patternInviteToken, patternRoomCard, patternRoomVault, patternRoomRole, patternFilePart:
 		return base64.RawURLEncoding.EncodeToString(randomBytes(t, base64.RawURLEncoding.DecodedLen(p.MaxLen)))
 	case patternChallenge, patternSalt:
 		return hex.EncodeToString(randomBytes(t, p.MaxLen/2))
@@ -99,6 +100,8 @@ func exampleInt(t testing.TB, r *IntRange) int64 {
 		return exampleTTL
 	case rangeDifficulty:
 		return exampleDifficulty
+	case rangeFilePart:
+		return 0
 	}
 	t.Fatalf("no example for range %s", r.Name)
 	return 0
@@ -144,9 +147,30 @@ func exampleValue(t testing.TB, f *Field, path string, m mutation) string {
 	}
 }
 
-// requestFor builds the canonical request of op on e, with the given body and query.
+// examplePath is a template with every parameter replaced by its example id.
+func examplePath(template string) string {
+	return strings.NewReplacer(paramConversation, exampleConversation, paramNote, exampleNote, paramFile, exampleFile).Replace(template)
+}
+
+// canonicalQuery carries every required query parameter of op at its range's minimum
+// (TestCanonicalRequestsAdmitted proves the gate admits it).
+func canonicalQuery(op *Op) string {
+	var pairs []string
+	for i := range op.Query {
+		if q := &op.Query[i]; q.Required {
+			pairs = append(pairs, q.Name+"="+strconv.FormatInt(q.Int.Min, 10))
+		}
+	}
+	return strings.Join(pairs, "&")
+}
+
+// requestFor builds the canonical request of op on e, with the given body and query (an empty
+// query stands for the canonical one: every required parameter at its example value).
 func requestFor(e *Endpoint, op *Op, body, query string) *http.Request {
-	path := strings.NewReplacer(paramConversation, exampleConversation, paramNote, exampleNote).Replace(e.Template)
+	path := examplePath(e.Template)
+	if query == "" {
+		query = canonicalQuery(op)
+	}
 	if query != "" {
 		path += "?" + query
 	}
@@ -224,6 +248,7 @@ func TestBodiesBindToTheirModels(t *testing.T) {
 		OpReadMark:     func() any { return &models.MarkReadRequest{} },
 		OpNoteSend:     func() any { return &models.SendNoteRequest{} },
 		OpMemberRole:   func() any { return &models.SetRoleRequest{} },
+		OpFileUpload:   func() any { return &models.UploadFilePartRequest{} },
 	}
 	forEachOp(func(e *Endpoint, op *Op) {
 		if op.Body == nil {
@@ -400,13 +425,27 @@ func TestQueries(t *testing.T) {
 		name := op.Method + " " + e.Template
 		refused := []string{"x=1", "x", "&", "after=1&after=1", "after=1&before=2", "after=1&", "after=%31", "After=1",
 			"after=", "after=-1", "after=01", "after=1e3", "after=+1", "after=99999999999999999999", "after=9223372036854775808"}
-		if len(op.Query) == 0 {
-			refused = append(refused, "after=1", "before=1")
-		} else {
+		var admitted []string
+		switch op.ID {
+		case OpMessageList:
 			refused = append(refused, "before=0", "before=-1", "before=0x10")
-			for _, q := range []string{"after=0", "after=42", "before=1", "before=9223372036854775807"} {
-				expectAdmitted(t, requestFor(e, op, body, q), name+" ?"+q)
+			admitted = []string{"after=0", "after=42", "before=1", "before=9223372036854775807"}
+		case OpFileRead:
+			last := strconv.FormatInt(maxFilePart, 10)
+			refused = append(refused, "after=1", "before=1", "part=-1", "part=01", "part=+1", "part=1e2", "part=",
+				"part", "part=0&part=0", "part=0&after=1", "Part=0", "part=%30", "part="+strconv.FormatInt(maxFilePart+1, 10),
+				"part=99999999999999999999", "part=0x1")
+			admitted = []string{"part=0", "part=1", "part=" + last}
+			// The part is required: no query at all is refused like a malformed one
+			expectRefused(t, httptest.NewRequest(op.Method, examplePath(e.Template), nil), apperr.InvalidRequest, name+" without a part")
+		default:
+			if len(op.Query) != 0 {
+				t.Fatalf("%s: declares a query this test does not cover", name)
 			}
+			refused = append(refused, "after=1", "before=1", "part=0")
+		}
+		for _, q := range admitted {
+			expectAdmitted(t, requestFor(e, op, body, q), name+" ?"+q)
 		}
 		for _, q := range refused {
 			expectRefused(t, requestFor(e, op, body, q), apperr.InvalidRequest, name+" ?"+q)
@@ -422,7 +461,7 @@ func TestMethods(t *testing.T) {
 			if e.opFor(method) != nil {
 				continue
 			}
-			r := httptest.NewRequest(method, strings.NewReplacer(paramConversation, exampleConversation, paramNote, exampleNote).Replace(e.Template), nil)
+			r := httptest.NewRequest(method, examplePath(e.Template), nil)
 			want := apperr.MethodNotAllowed
 			if method == http.MethodHead && e.BareHead {
 				want = apperr.HeadNotAllowed
@@ -444,6 +483,13 @@ func TestPaths(t *testing.T) {
 		conversations + exampleConversation + "/notes/x",
 		conversations + exampleConversation + "/notes/" + exampleNote + "/x",
 		conversations + exampleConversation + "/roster",
+		conversations + exampleConversation + "/files/",
+		conversations + exampleConversation + "/files/x",
+		conversations + exampleConversation + "/files/" + strings.ToUpper(exampleFile),
+		conversations + exampleConversation + "/files/" + exampleFile + "/0",
+		conversations + exampleConversation + "/files/" + exampleFile + "/",
+		conversations + exampleConversation + "/file/" + exampleFile,
+		conversations + exampleConversation + "/members/" + exampleFile + "/role",
 		conversations + strings.ToUpper(exampleConversation),
 		conversations + "3b241101-e2bb-1255-8caf-4136c566a962", // version 1
 		conversations + "3b241101-e2bb-4255-cfaf-4136c566a962", // variant 110
@@ -456,14 +502,29 @@ func TestPaths(t *testing.T) {
 	}
 }
 
-// TestPathIDsParsed: the handler receives the parsed conversation and note ids.
+// TestPathIDsParsed: the handler receives each parsed id at its own position, and nothing at a
+// position its template does not have.
 func TestPathIDsParsed(t *testing.T) {
-	r := httptest.NewRequest(http.MethodDelete, "/api/v2/conversations/"+exampleConversation+"/notes/"+exampleNote, nil)
-	var got *Input
-	Gate(func(w http.ResponseWriter, r *http.Request) { got, _ = InputOf(r) })(httptest.NewRecorder(), r)
-	if got == nil || got.Op.ID != OpNoteDelete || got.PathID(PathConversation).String() != exampleConversation ||
-		got.PathID(PathNote).String() != exampleNote {
-		t.Fatalf("admitted %+v", got)
+	const conversation = "/api/v2/conversations/" + exampleConversation
+	for _, c := range []struct {
+		method, target string
+		op             OpID
+		want           [maxPathParams]string
+	}{
+		{http.MethodDelete, conversation + "/notes/" + exampleNote, OpNoteDelete, [maxPathParams]string{exampleConversation, exampleNote, uuid.Nil.String()}},
+		{http.MethodGet, conversation + "/files/" + exampleFile + "?part=0", OpFileRead, [maxPathParams]string{exampleConversation, uuid.Nil.String(), exampleFile}},
+		{http.MethodGet, conversation + "/members", OpMemberList, [maxPathParams]string{exampleConversation, uuid.Nil.String(), uuid.Nil.String()}},
+	} {
+		var got *Input
+		Gate(func(w http.ResponseWriter, r *http.Request) { got, _ = InputOf(r) })(httptest.NewRecorder(), httptest.NewRequest(c.method, c.target, nil))
+		if got == nil || got.Op.ID != c.op {
+			t.Fatalf("%s %s: admitted %+v", c.method, c.target, got)
+		}
+		for position, want := range c.want {
+			if id := got.PathID(position).String(); id != want {
+				t.Errorf("%s %s: position %d = %s, want %s", c.method, c.target, position, id, want)
+			}
+		}
 	}
 }
 

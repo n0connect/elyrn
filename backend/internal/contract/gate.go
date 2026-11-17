@@ -20,10 +20,11 @@ const (
 	queryAssign    = "="
 )
 
-// segment is one piece of a path template: a literal, or a UUIDv4 parameter.
+// segment is one piece of a path template: a literal, or a UUIDv4 parameter and its position.
 type segment struct {
-	literal string
-	param   bool
+	literal  string
+	param    bool
+	position int
 }
 
 // Input is what the gate admitted: the operation, its parsed path parameters, its query values
@@ -35,7 +36,8 @@ type Input struct {
 	body   []byte
 }
 
-// PathID returns the path parameter at position i (PathConversation, PathNote), or uuid.Nil.
+// PathID returns the path parameter at position i (PathConversation, PathNote, PathFile), or
+// uuid.Nil when the template has none there.
 func (in *Input) PathID(i int) uuid.UUID {
 	if i < 0 || i >= maxPathParams {
 		return uuid.Nil
@@ -74,8 +76,8 @@ func buildTable(table []Endpoint) []Endpoint {
 		parts := strings.Split(table[i].Template, pathSeparator)
 		table[i].segments = make([]segment, len(parts))
 		for j, part := range parts {
-			isParam := part == paramConversation || part == paramNote
-			table[i].segments[j] = segment{literal: part, param: isParam}
+			position, isParam := paramPositions[part]
+			table[i].segments[j] = segment{literal: part, param: isParam, position: position}
 		}
 	}
 	return table
@@ -100,8 +102,10 @@ func match(path string) (*Endpoint, [maxPathParams]uuid.UUID, bool) {
 		return nil, params, false
 	}
 	for i := range endpoints {
-		if fits(endpoints[i].segments, parts, &params) {
-			return &endpoints[i], params, true
+		// Fresh per template: one that fails half-way leaves no id behind for the next
+		var candidate [maxPathParams]uuid.UUID
+		if fits(endpoints[i].segments, parts, &candidate) {
+			return &endpoints[i], candidate, true
 		}
 	}
 	return nil, params, false
@@ -112,7 +116,6 @@ func fits(segments []segment, parts []string, params *[maxPathParams]uuid.UUID) 
 	if len(segments) != len(parts) {
 		return false
 	}
-	found := 0
 	for i, seg := range segments {
 		if !seg.param {
 			if parts[i] != seg.literal {
@@ -120,15 +123,14 @@ func fits(segments []segment, parts []string, params *[maxPathParams]uuid.UUID) 
 			}
 			continue
 		}
-		if found >= maxPathParams || !patternUUIDv4.Accepts(parts[i]) {
+		if !patternUUIDv4.Accepts(parts[i]) {
 			return false
 		}
 		id, err := uuid.Parse(parts[i]) // canonical v4 already: this only converts
 		if err != nil {
 			return false
 		}
-		params[found] = id
-		found++
+		params[seg.position] = id
 	}
 	return true
 }
@@ -190,9 +192,24 @@ func admit(r *http.Request) (*Input, apperr.Code, bool) {
 }
 
 // parseQuery admits the raw query: pairs "name=value" separated by "&", each name declared,
-// once, at most op.MaxQuery of them, each value matching its pattern and range. Values are
-// matched as sent (not percent-decoded): the declared alphabets need no escaping.
+// once, at most op.MaxQuery of them, each value matching its pattern and range, and every
+// required one present. Values are matched as sent (not percent-decoded): the declared
+// alphabets need no escaping.
 func parseQuery(raw string, op *Op) (map[string]int64, bool) {
+	values, ok := parsePairs(raw, op)
+	if !ok {
+		return nil, false
+	}
+	for _, param := range op.Query {
+		if _, present := values[param.Name]; param.Required && !present {
+			return nil, false
+		}
+	}
+	return values, true
+}
+
+// parsePairs reads the pairs of a raw query (none when it is empty).
+func parsePairs(raw string, op *Op) (map[string]int64, bool) {
 	if raw == "" {
 		return nil, true
 	}

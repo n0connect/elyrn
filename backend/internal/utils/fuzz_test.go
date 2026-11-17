@@ -310,6 +310,23 @@ func FuzzDecodeExact(f *testing.F) {
 	})
 }
 
+// FuzzFilePartCount: for every file size the settings allow, the parts hold the file and one
+// part fewer would not.
+func FuzzFilePartCount(f *testing.F) {
+	for _, size := range []int64{1, FilePartBytes - 1, FilePartBytes, FilePartBytes + 1, config.MaxFileBytesBound} {
+		f.Add(size)
+	}
+	f.Fuzz(func(t *testing.T, size int64) {
+		if size < 1 || size > config.MaxFileBytesBound {
+			return
+		}
+		parts := FilePartCount(size)
+		if parts < 1 || parts*FilePartBytes < size || (parts-1)*FilePartBytes >= size {
+			t.Fatalf("a file of %d bytes takes %d parts", size, parts)
+		}
+	})
+}
+
 // roomBlobSeed builds a structurally valid room blob: magic, version, wraps and a padded frame.
 func roomBlobSeed(magic string, wraps, frame int) string {
 	raw := make([]byte, RoomHeaderBytes+wraps*RoomWrapBytes+frame+cryptoengine.GCMTagSize)

@@ -587,6 +587,8 @@ func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]stri
 		}
 	}
 	var streams []string
+	var parts int64
+	since := s.partsMark()
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
 		if _, err := s.requireMembership(tx, me, conversationID); err != nil {
 			return err
@@ -599,7 +601,7 @@ func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]stri
 		if err != nil {
 			return err
 		}
-		if err := tx.DeleteConversation(conversationID); err != nil {
+		if parts, err = tx.DeleteConversation(conversationID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return ErrNotFound
 			}
@@ -625,6 +627,7 @@ func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]stri
 	if err != nil {
 		return nil, err
 	}
+	s.partsRemoved(parts, since)
 	s.logger.Debug("BurnConversation: conversation burned")
 	return streams, nil
 }
@@ -643,6 +646,8 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 		return nil, err
 	}
 	var streams []string
+	var parts int64
+	since := s.partsMark()
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
 		if err := tx.DeleteInvites(me.inviteTag); err != nil {
 			return err
@@ -673,9 +678,11 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 			if err != nil {
 				return err
 			}
-			if err := s.forget(tx, id, member); err != nil {
+			removed, err := s.forget(tx, id, member)
+			if err != nil {
 				return err
 			}
+			parts += removed
 			streams = append(streams, peers...)
 		}
 		if err := tx.DeleteUser(me.UserUUID); err != nil {
@@ -689,27 +696,30 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.partsRemoved(parts, since)
 	s.logger.Debug("DeleteAccount: account erased")
 	return streams, nil
 }
 
 // forget removes one of a deleted account's conversations: a room it joined loses only its
-// membership (taken under the conversation lock, as leaving does), anything else is burned.
-func (s *Service) forget(tx store.ChatRepository, id uuid.UUID, member *models.ConversationMember) error {
+// membership (taken under the conversation lock, as leaving does; its file parts stay with its
+// messages), anything else is burned. Returns the file parts removed.
+func (s *Service) forget(tx store.ChatRepository, id uuid.UUID, member *models.ConversationMember) (int64, error) {
 	room, err := tx.FindRoom(id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
+		return 0, err
 	}
 	if room != nil && room.OwnerTag != member.MemberTag {
 		if _, err := tx.LockConversation(id); err != nil {
-			return err
+			return 0, err
 		}
-		return tx.DeleteMember(id, member.MemberTag)
+		return 0, tx.DeleteMember(id, member.MemberTag)
 	}
-	if err := tx.DeleteConversation(id); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return err
+	parts, err := tx.DeleteConversation(id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return 0, err
 	}
-	return nil
+	return parts, nil
 }
 
 // ---------- messages ----------
@@ -954,8 +964,14 @@ func (s *Service) PurgeExpired(now time.Time) error {
 // deletes nothing and logs E_CLOCK_JUMP): ciphertext past its deletion day, expired invites and
 // notes, and expired rooms with everything in them, and keeps no ciphertext past the deletion
 // day of a message sent now (MESSAGE_TTL_DAYS may have shrunk). The mark moves to now once
-// the pass has run, also when a step failed: the clock was trusted either way.
+// the pass has run, also when a step failed: the clock was trusted either way. Every cycle, paused
+// or not, then counts the stored file parts afresh (RecountFileParts).
 func (s *Service) retentionCycle(now, prev time.Time) error {
+	return errors.Join(s.purgeCycle(now, prev), s.RecountFileParts())
+}
+
+// purgeCycle is retentionCycle's purge, run only on a trusted clock.
+func (s *Service) purgeCycle(now, prev time.Time) error {
 	mark, _, err := s.keys.RetentionMark()
 	if err != nil {
 		return err
@@ -967,8 +983,8 @@ func (s *Service) retentionCycle(now, prev time.Time) error {
 		return nil
 	}
 	counts, purgeErr := s.chats.PurgeExpired(deletionCutoff(now), expiryDay(now), now.UTC())
-	s.logger.Debug("PurgeExpired: removed %d messages, %d invites, %d notes, %d rooms",
-		counts.Messages, counts.Invites, counts.Notes, counts.Rooms)
+	s.logger.Debug("PurgeExpired: removed %d messages, %d file parts, %d invites, %d notes, %d rooms",
+		counts.Messages, counts.FileParts, counts.Invites, counts.Notes, counts.Rooms)
 	return errors.Join(purgeErr, s.keys.SaveRetentionMark(now))
 }
 

@@ -33,12 +33,17 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
   row before anything else for the same reason
 - `conversations` row lock (`ChatRepository.NextSeq`, `UPDATE … RETURNING`, and
   `ChatRepository.LockConversation`): serialises senders of one conversation until the transaction
-  ends. Room joins, leaves, notes and role changes (`SetRole`) take it too, so a message is always
-  checked against the roster it is stored under and a role is written only for a current member.
-  Never held while acquiring a `users` or `rooms` row lock.
+  ends. Room joins, leaves, notes, role changes (`SetRole`) and file part uploads
+  (`UploadFilePart`) take it too, so a message is always checked against the roster it is stored
+  under, a role is written only for a current member, and a conversation's file quota is counted
+  exactly. Never held while acquiring a `users` or `rooms` row lock.
   `DeleteConversation` takes it (`LockConversation`) right after the `rooms` delete and **before**
-  deleting the children (messages, memberships, notes) and the conversation row itself, so a sender
-  holding it finishes first and nothing it stores outlives the delete
+  deleting the children (messages, file parts, memberships, notes) and the conversation row itself,
+  so a sender or uploader holding it finishes first and nothing it stores outlives the delete
+- Stored file parts counter (`chat.storedParts.mu`, `utils.SafeMutex`, 5 s timeout, leaf): held
+  for the counter's arithmetic only, never across a statement. An upload takes it while it holds
+  the conversation row lock (to reserve its part); burns, account deletions and retention take it
+  after their transaction. Nothing is acquired while it is held
 
 Order in one transaction: `invites` → `users` → `rooms` → `conversations`.
 - Master key re-wrapping (`KeyRepository.Rewrap*`): single-row updates outside any transaction,
@@ -112,7 +117,8 @@ rl.mu.Lock()
 
 - Locks held across channel operations or I/O use `utils.SafeMutex` (a bounded wait, 5 s by
   default; on timeout the caller gets an error and logs it): the realtime hub (5 s), the agent's call lock
-  and the MCP write lock (their own timeouts, above)
+  and the MCP write lock (their own timeouts, above). The stored file parts counter uses it too,
+  because it is taken inside a database transaction
 - Map-guarding locks (`sync.Mutex`/`sync.RWMutex`) protect short, non-blocking critical
   sections only: no I/O, no channel operation, no call that can wait while they are held
 

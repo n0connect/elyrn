@@ -5,11 +5,11 @@
 The server accepts exactly what this document lists and refuses everything else, before any
 handler runs (`contract.Gate`). Checks run in this order and the first failure answers:
 
-1. Path: one of the templates below; `{id}` and `{note}` are canonical UUIDv4. A
-   percent-encoded path is refused. Refusal: 404.
+1. Path: one of the templates below; `{id}`, `{note}` and `{file}` are canonical
+   UUIDv4. A percent-encoded path is refused. Refusal: 404.
 2. Method: one of the listed methods. Refusal: 405 (a bare 405 for HEAD where noted).
 3. Query: only the listed parameters, raw (never percent-decoded), each once, at most as many
-   as listed. Refusal: 400.
+   as listed, every required one present. Refusal: 400.
 4. Content type: a request with a body, and every POST to an operation that requires one, sends
    exactly one `Content-Type: application/json` (no parameters). Refusal: 415. A body sent
    to an operation that takes none: 400.
@@ -28,10 +28,12 @@ named constants. Integers are canonical JSON integer literals (no fraction, expo
 |---|---|---|---|
 | base64url-16 | `^[A-Za-z0-9_-]{21}[AQgw]$` | 22 | utils.DecodeExact(16) |
 | base64url-32 | `^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$` | 43 | utils.DecodeExact(32) |
+| file-part | `^[A-Za-z0-9_-]+$` | 349547 | utils.DecodeExact(262160) |
 | hex-challenge | `^[0-9a-f]{32}$` | 32 | - |
 | hex-salt | `^[0-9a-f]{32}$` | 32 | - |
 | message-ciphertext | `^[A-Za-z0-9_-]+$` | 379..7747 | utils.ValidateCiphertext, or utils.ParseRoomBlob(NADR, up to 32 wraps) |
 | note-blob | `^[A-Za-z0-9_-]+$` | 643..5763 | utils.ParseRoomBlob(NADN, 1 wrap) |
+| part-query | `^(?:0\|[1-9][0-9]*)$` | 1..3 | - |
 | pending-token | `^(?:[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)?$` | 0..1024 | - |
 | pow-solution | `^(?:0\|[1-9][0-9]*)$` | 1..20 | canonical uint64 |
 | room-card | `^[A-Za-z0-9_-]{80}$` | 80 | utils.DecodeExact(60) |
@@ -45,6 +47,7 @@ named constants. Integers are canonical JSON integer literals (no fraction, expo
 | Name | Minimum | Maximum | Validator |
 |---|---|---|---|
 | after | 0 | 9223372036854775807 | - |
+| file-part-number | 0 | 399 | - |
 | pow-difficulty | 1 | 256 | - |
 | pow-ttl | 1 | 9223372036854775807 | - |
 | room-expiry | 1 | 9223372036854775807 | a multiple of 3600 |
@@ -281,4 +284,24 @@ HEAD: bare 405 (`E_HEAD_NOT_ALLOWED`).
 ### DELETE
 
 - Query: none.
+- Body: none.
+
+## `/api/v2/conversations/{id}/files`
+
+### POST
+
+- Query: none.
+- Body: required, at most 349695 bytes; shape refused with 400 `E_INVALID_REQUEST`.
+
+| Field | Type | Required | Whitelist | Missing | Invalid |
+|---|---|---|---|---|---|
+| `id` | string | true | uuid-v4 | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
+| `part` | integer | true | file-part-number | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
+| `data` | string | true | file-part | 400 `E_INVALID_REQUEST` | 400 `E_INVALID_REQUEST` |
+
+## `/api/v2/conversations/{id}/files/{file}`
+
+### GET
+
+- Query: at most 1 of `part` (part-query, file-part-number, required).
 - Body: none.

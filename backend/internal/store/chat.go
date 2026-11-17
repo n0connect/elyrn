@@ -37,7 +37,8 @@ type ChatRepository interface {
 	FindMembershipsByTags(memberTags []string) (map[uuid.UUID]models.ConversationMember, error)
 	ListMembers(conversationID uuid.UUID) ([]models.ConversationMember, error)
 	LastSeqs(conversationIDs []uuid.UUID) (map[uuid.UUID]int64, error)
-	DeleteConversation(conversationID uuid.UUID) error
+	// DeleteConversation burns a conversation and returns how many file parts went with it
+	DeleteConversation(conversationID uuid.UUID) (int64, error)
 
 	NextSeq(conversationID uuid.UUID) (int64, error)
 	CreateMessage(message *models.Message) error
@@ -65,6 +66,8 @@ type ChatRepository interface {
 	ListNotes(conversationID uuid.UUID, recipientTag string, now time.Time) ([]models.RoomNote, error)
 	DeleteNote(conversationID, noteID uuid.UUID, recipientTag string) error
 
+	FileRepository
+
 	PurgeExpired(today, latest, now time.Time) (PurgeCounts, error)
 
 	// WithContext is this repository bound to a request's context (its deadline); an open
@@ -74,7 +77,7 @@ type ChatRepository interface {
 
 // PurgeCounts reports what one retention pass removed.
 type PurgeCounts struct {
-	Messages, Invites, Rooms, Notes int64
+	Messages, Invites, Rooms, Notes, FileParts int64
 }
 
 // MessageWindow selects one page of a conversation: seq above Floor and, when Ceiling is
@@ -325,7 +328,9 @@ func (r *chatRepository) LastSeqs(conversationIDs []uuid.UUID) (map[uuid.UUID]in
 // first and its message is deleted here; a send waiting for it then finds no conversation
 // (ErrNotFound). Deleting the messages first would miss one committed in between and leave its
 // ciphertext behind with no conversation. Burn, room expiry and account deletion all end here.
-func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) error {
+// File parts go with the messages, under the same lock (an upload holds it too).
+func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) (int64, error) {
+	var parts int64
 	err := r.db().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where(whereID, conversationID).Delete(&models.Room{}).Error; err != nil {
 			return err
@@ -336,6 +341,11 @@ func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) error {
 		if err := tx.Where(whereConversation, conversationID).Delete(&models.Message{}).Error; err != nil {
 			return err
 		}
+		result := tx.Where(whereConversation, conversationID).Delete(&models.FilePart{})
+		if result.Error != nil {
+			return result.Error
+		}
+		parts = result.RowsAffected
 		if err := tx.Where(whereConversation, conversationID).Delete(&models.ConversationMember{}).Error; err != nil {
 			return err
 		}
@@ -344,10 +354,13 @@ func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) error {
 		}
 		return tx.Where(whereID, conversationID).Delete(&models.Conversation{}).Error
 	})
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		chatRepoLogger.LogError("ChatRepository.DeleteConversation", err)
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			chatRepoLogger.LogError("ChatRepository.DeleteConversation", err)
+		}
+		return 0, err
 	}
-	return err
+	return parts, nil
 }
 
 // ---------- messages ----------
@@ -421,7 +434,8 @@ func (r *chatRepository) AdvanceReadSeq(conversationID uuid.UUID, memberTag stri
 
 // ---------- retention ----------
 
-// PurgeExpired deletes ciphertext past its deletion day, invites and notes past expiry, and
+// PurgeExpired deletes ciphertext (messages and file parts) past its deletion day, invites and
+// notes past expiry, and
 // expired rooms with everything in them. Nothing is kept past latest either: a lowered
 // MESSAGE_TTL_DAYS also shortens what is already stored. Every step runs on its own, so one that
 // fails (and is logged) does not starve the others; their errors come back joined.
@@ -430,10 +444,12 @@ func (r *chatRepository) PurgeExpired(today, latest, now time.Time) (PurgeCounts
 	_, capErr := r.bulk("cap", func(tx *gorm.DB) *gorm.DB {
 		return tx.Model(&models.Message{}).Where("expires_on > ?", latest).UpdateColumn("expires_on", latest)
 	})
-	var messagesErr, invitesErr, notesErr error
+	partsCapErr := r.capFileParts(latest)
+	var messagesErr, partsErr, invitesErr, notesErr error
 	counts.Messages, messagesErr = r.bulk("messages", func(tx *gorm.DB) *gorm.DB {
 		return tx.Where(whereMessageExpired, today).Delete(&models.Message{})
 	})
+	counts.FileParts, partsErr = r.purgeFileParts(today)
 	counts.Invites, invitesErr = r.bulk("invites", func(tx *gorm.DB) *gorm.DB {
 		return tx.Where(whereExpired, now).Delete(&models.Invite{})
 	})
@@ -441,8 +457,10 @@ func (r *chatRepository) PurgeExpired(today, latest, now time.Time) (PurgeCounts
 		return tx.Where(whereExpired, now).Delete(&models.RoomNote{})
 	})
 	var roomsErr error
-	counts.Rooms, roomsErr = r.purgeRooms(now)
-	return counts, errors.Join(capErr, messagesErr, invitesErr, notesErr, roomsErr)
+	var roomParts int64
+	counts.Rooms, roomParts, roomsErr = r.purgeRooms(now)
+	counts.FileParts += roomParts
+	return counts, errors.Join(capErr, partsCapErr, messagesErr, partsErr, invitesErr, notesErr, roomsErr)
 }
 
 // bulk runs one retention statement in its own transaction, allowed the longer retention
@@ -461,23 +479,25 @@ func (r *chatRepository) bulk(step string, statement func(tx *gorm.DB) *gorm.DB)
 }
 
 // purgeRooms burns up to roomPurgeBatch expired rooms, each on its own: one that fails is
-// retried next pass and does not keep the others.
-func (r *chatRepository) purgeRooms(now time.Time) (int64, error) {
+// retried next pass and does not keep the others. Returns the rooms and file parts removed.
+func (r *chatRepository) purgeRooms(now time.Time) (int64, int64, error) {
 	var expired []uuid.UUID
 	if err := r.db().Model(&models.Room{}).Where(whereExpired, now).Limit(roomPurgeBatch).Pluck(colID, &expired).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.PurgeExpired (rooms)", err)
-		return 0, err
+		return 0, 0, err
 	}
-	var purged int64
+	var purged, parts int64
 	var errs []error
 	for _, id := range expired {
-		if err := r.DeleteConversation(id); err != nil && !errors.Is(err, ErrNotFound) {
+		removed, err := r.DeleteConversation(id)
+		if err != nil && !errors.Is(err, ErrNotFound) {
 			errs = append(errs, err)
 			continue
 		}
 		purged++
+		parts += removed
 	}
-	return purged, errors.Join(errs...)
+	return purged, parts, errors.Join(errs...)
 }
 
 // ---------- rooms ----------

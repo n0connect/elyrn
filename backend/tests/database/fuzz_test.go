@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"elyrn/internal/apperr/opcode"
+	"elyrn/internal/config"
 	"elyrn/internal/database"
 	"elyrn/internal/encryption"
 	"elyrn/tests/testutil"
@@ -28,6 +29,7 @@ var validatedVariables = []string{
 	"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME", "DB_SSL_MODE", "ALLOWED_ORIGINS", "TRUSTED_PROXIES",
 	"SERVER_READ_HEADER_TIMEOUT_SEC", "SERVER_READ_TIMEOUT_SEC", "SERVER_WRITE_TIMEOUT_SEC", "SERVER_IDLE_TIMEOUT_SEC",
 	"SERVER_MAX_HEADER_BYTES", "HSTS_MAX_AGE", "HSTS_INCLUDE_SUBDOMAINS", "HSTS_PRELOAD",
+	config.EnvMaxFileBytes, config.EnvFileConversationQuotaBytes, config.EnvFileStoreMaxBytes,
 }
 
 // printableASCII reports whether s holds only printable ASCII: every rule and sentence a

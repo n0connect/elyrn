@@ -96,3 +96,20 @@ type Message struct {
 func (Message) TableName() string {
 	return "messages"
 }
+
+// FilePart is one sealed part of a file; the file is announced by an ordinary message whose
+// ciphertext carries its key. The key spans the conversation, so nothing about another
+// conversation's file ids can be probed. Every part has one size and, like a message, only a
+// day-granular deletion date.
+type FilePart struct {
+	ConversationID uuid.UUID `gorm:"type:uuid;primaryKey"`
+	FileID         uuid.UUID `gorm:"type:uuid;primaryKey"` // client-generated, bound into the parts' encryption
+	Part           int       `gorm:"primaryKey;autoIncrement:false"`
+	UploaderTag    string    `gorm:"size:64;not null"` // the uploader's member tag in this conversation
+	Data           []byte    `gorm:"type:bytea;not null"`
+	ExpiresOn      time.Time `gorm:"type:date;index;not null"`
+}
+
+func (FilePart) TableName() string {
+	return "file_parts"
+}

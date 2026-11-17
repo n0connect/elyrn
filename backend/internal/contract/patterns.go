@@ -19,7 +19,9 @@ import (
 
 // Every pattern below is an anchored RE2 expression (Go's regexp: linear time in the input, no
 // backtracking, so no ReDoS), compiled once at package init from named constants, never from
-// request data. Each is plain: character classes, one optional group, counted repeats <= 124.
+// request data. Each is plain: character classes, one optional group, counted repeats <= 124
+// (RE2 allows 1000; a file part, far longer, is the alphabet alone, bounded by length and its
+// validator).
 
 // Pattern is the whitelist of one string value: its anchored expression, its length bounds
 // (checked first, so the expression never sees an oversized value), and, where a regular
@@ -122,8 +124,17 @@ var (
 		CheckName: fmt.Sprintf("utils.ParseRoomBlob(%s, %d wrap)", utils.RoomNoteMagic, noteWraps)}
 	// patternRoomRole: the server only checks a role's size; what it says is sealed for the room
 	patternRoomRole = base64URLExact("room-role", utils.RoomRoleBytes)
+	// patternFilePart: exactly one sealed part; too long for a counted repeat, so the alphabet,
+	// the exact length and the strict decode together say what base64URLExact says for the others
+	patternFilePart = &Pattern{Name: "file-part", re: regexp.MustCompile(exprBase64URL),
+		MinLen:    base64.RawURLEncoding.EncodedLen(utils.FilePartSealedBytes),
+		MaxLen:    base64.RawURLEncoding.EncodedLen(utils.FilePartSealedBytes),
+		check:     func(s string) bool { _, ok := utils.DecodeExact(s, utils.FilePartSealedBytes); return ok },
+		CheckName: fmt.Sprintf("utils.DecodeExact(%d)", utils.FilePartSealedBytes)}
 	// patternSeqQuery is a page cursor's text: canonical decimal of at most 19 digits
 	patternSeqQuery = &Pattern{Name: "seq-query", re: regexp.MustCompile(exprDecimal), MinLen: 1, MaxLen: maxInt64Digits}
+	// patternPartQuery is a file part number's text: canonical decimal, no longer than the largest
+	patternPartQuery = &Pattern{Name: "part-query", re: regexp.MustCompile(exprDecimal), MinLen: 1, MaxLen: len(strconv.FormatInt(maxFilePart, 10))}
 
 	rangeSeq        = &IntRange{Name: "seq", Min: chat.FirstSeq, Max: math.MaxInt64}
 	rangeAfter      = &IntRange{Name: "after", Min: 0, Max: math.MaxInt64}
@@ -132,7 +143,13 @@ var (
 	rangeUnixTime   = &IntRange{Name: "unix-seconds", Min: firstUnixSecond, Max: math.MaxInt64}
 	rangeTTL        = &IntRange{Name: "pow-ttl", Min: 1, Max: math.MaxInt64}
 	rangeDifficulty = &IntRange{Name: "pow-difficulty", Min: minDifficulty, Max: maxDifficulty}
+	// rangeFilePart: any part a file of MAX_FILE_BYTES' bound can have; the setting itself is
+	// state, checked by the chat service
+	rangeFilePart = &IntRange{Name: "file-part-number", Min: 0, Max: maxFilePart}
 )
+
+// maxFilePart is the last part of the largest file MAX_FILE_BYTES allows
+var maxFilePart = utils.FilePartCount(config.MaxFileBytesBound) - 1
 
 // noteWraps: a note is sealed for exactly one addressee
 const noteWraps = 1

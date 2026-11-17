@@ -253,6 +253,56 @@ func MaxMessageTTLDays() int {
 	return maxMessageTTLDays
 }
 
+// File settings: their names (startup validation reports them), the upper bound of each (the
+// floor, one stored part, is utils.FilePartBytes: this package sits below utils) and defaults.
+// int64: the quota and store bounds do not fit a 32-bit int, and this package is compiled into
+// the agent for every target.
+const (
+	EnvMaxFileBytes               = "MAX_FILE_BYTES"
+	EnvFileConversationQuotaBytes = "FILE_CONVERSATION_QUOTA_BYTES"
+	EnvFileStoreMaxBytes          = "FILE_STORE_MAX_BYTES"
+
+	MaxFileBytesBound             int64 = 100 << 20 // 104857600
+	MaxFileConversationQuotaBound int64 = 10 << 30  // 10737418240
+	MaxFileStoreBytesBound        int64 = 1 << 40   // 1099511627776
+
+	defaultMaxFileBytes          int64 = 10 << 20  // 10485760
+	defaultFileConversationQuota int64 = 100 << 20 // 104857600
+	defaultFileStoreMaxBytes     int64 = 2 << 30   // 2147483648
+
+	decimalBase = 10
+	int64Bits   = 64
+)
+
+// getEnvInt64Default reads a positive int64 setting as getEnvIntDefault reads an int: missing or
+// empty is the default, anything that is not a positive integer reads as 0 (fails its bound).
+func getEnvInt64Default(key string, defaultValue int64) int64 {
+	value := strings.TrimSpace(GetEnv(key, ""))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.ParseInt(value, decimalBase, int64Bits)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}
+
+// GetMaxFileBytes returns the largest file one message may announce (its plaintext size)
+func GetMaxFileBytes() int64 {
+	return getEnvInt64Default(EnvMaxFileBytes, defaultMaxFileBytes)
+}
+
+// GetFileConversationQuotaBytes returns how many bytes of stored parts one conversation may hold
+func GetFileConversationQuotaBytes() int64 {
+	return getEnvInt64Default(EnvFileConversationQuotaBytes, defaultFileConversationQuota)
+}
+
+// GetFileStoreMaxBytes returns how many bytes of stored parts the whole server may hold
+func GetFileStoreMaxBytes() int64 {
+	return getEnvInt64Default(EnvFileStoreMaxBytes, defaultFileStoreMaxBytes)
+}
+
 // ========================================
 // SECURITY CONFIGURATION
 // ========================================

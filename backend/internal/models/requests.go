@@ -27,10 +27,13 @@ const (
 	SubRead     = "read"
 	SubMembers  = "members"
 	SubNotes    = "notes"
+	SubFiles    = "files"
 
 	// The page cursors the messages route accepts
 	QueryAfter  = "after"
 	QueryBefore = "before"
+	// QueryPart names which part of a file a read asks for
+	QueryPart = "part"
 )
 
 type LoginRequest struct {
@@ -101,6 +104,7 @@ type MeResponse struct {
 	RoomMaxMembers   int    `json:"room_max_members"`   // largest room a member may create
 	RoomMaxTTLHours  int    `json:"room_max_ttl_hours"` // longest room lifetime, in hours
 	MessagePageLimit int    `json:"message_page_limit"` // most messages per page: a shorter page is the last
+	FileMaxBytes     int64  `json:"file_max_bytes"`     // largest file one message may announce
 }
 
 type CreateInviteRequest struct {
@@ -168,6 +172,18 @@ type RoomMemberDTO struct {
 type SetRoleRequest struct {
 	Card string `json:"card"`
 	Role string `json:"role"`
+}
+
+// UploadFilePartRequest stores one sealed part of a file
+type UploadFilePartRequest struct {
+	ID   string `json:"id"`   // the file's client-generated UUIDv4
+	Part int    `json:"part"` // 0..parts-1; part 0 opens the file for its uploader
+	Data string `json:"data"` // base64url of the sealed part
+}
+
+// FilePartResponse is one stored part
+type FilePartResponse struct {
+	Data string `json:"data"`
 }
 
 type RoomMembersResponse struct {

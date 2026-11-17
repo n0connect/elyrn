@@ -3,6 +3,7 @@ package chat
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,93 @@ func FuzzClockTrusted(f *testing.F) {
 		default:
 			if !trusted {
 				t.Fatalf("a steady clock was refused: now %v prev %v mark %v", now, prev, mark)
+			}
+		}
+	})
+}
+
+// Operations FuzzPartCounter drives the stored-parts counter with, one per script byte
+const (
+	counterSet = iota
+	counterReserve
+	counterCommit
+	counterRollBack
+	counterMark
+	counterDrop
+	counterOps
+)
+
+// FuzzPartCounter runs arbitrary scripts of counts, reservations, settlements and deletions on a
+// counter of its own: a reservation is granted only while the count is known and stored plus
+// reserved stays below the limit, refused (ErrFileStoreFull) otherwise; nothing goes negative;
+// a deletion marked before a recount subtracts nothing; a recount sets exactly its value.
+func FuzzPartCounter(f *testing.F) {
+	f.Add([]byte{counterReserve, 5, counterSet, 2, counterReserve, 3, counterReserve, 3, counterCommit, counterReserve, 3})
+	f.Add([]byte{counterSet, 9, counterMark, counterSet, 9, counterDrop, 4})
+	f.Add([]byte{counterSet, 1, counterMark, counterDrop, 200, counterReserve, 1, counterRollBack})
+	f.Fuzz(func(t *testing.T, script []byte) {
+		c := &partCounter{mu: utils.NewSafeMutex()}
+		outstanding := int64(0)
+		var marked uint64
+		next := func(i *int) int64 {
+			*i++
+			if *i < len(script) {
+				return int64(script[*i])
+			}
+			return 0
+		}
+		for i := 0; i < len(script); i++ {
+			op := int(script[i]) % counterOps
+			before := partCounter{known: c.known, stored: c.stored, reserved: c.reserved, generation: c.generation}
+			switch op {
+			case counterSet:
+				n := next(&i)
+				if err := c.set(n); err != nil || c.stored != n || !c.known || c.generation != before.generation+1 {
+					t.Fatalf("set(%d) after %+v: stored %d known %v (%v)", n, before, c.stored, c.known, err)
+				}
+			case counterReserve:
+				limit := next(&i)
+				err := c.reserve(limit)
+				granted := before.known && before.stored+before.reserved < limit
+				if granted != (err == nil) || (err != nil && !errors.Is(err, ErrFileStoreFull)) {
+					t.Fatalf("reserve(%d) after %+v answered %v", limit, before, err)
+				}
+				if err == nil {
+					outstanding++
+				}
+			case counterCommit, counterRollBack:
+				if outstanding == 0 {
+					continue
+				}
+				committed := op == counterCommit
+				if err := c.settle(committed); err != nil {
+					t.Fatal(err)
+				}
+				outstanding--
+				want := before.stored
+				if committed {
+					want++
+				}
+				if c.stored != want {
+					t.Fatalf("settle(%v) moved stored from %d to %d", committed, before.stored, c.stored)
+				}
+			case counterMark:
+				generation, err := c.mark()
+				if err != nil {
+					t.Fatal(err)
+				}
+				marked = generation
+			case counterDrop:
+				n := next(&i)
+				if err := c.drop(n, marked); err != nil {
+					t.Fatal(err)
+				}
+				if marked != before.generation && c.stored != before.stored {
+					t.Fatalf("a deletion marked before a recount subtracted %d", before.stored-c.stored)
+				}
+			}
+			if c.stored < 0 || c.reserved != outstanding {
+				t.Fatalf("stored %d reserved %d with %d reservations outstanding", c.stored, c.reserved, outstanding)
 			}
 		}
 	})

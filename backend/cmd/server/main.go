@@ -95,7 +95,13 @@ func start(lockLost func(*opcode.Failure)) *database.InstanceLock {
 	}
 	// Fail closed on keys that cannot open this database (a regenerated .env, a master key
 	// dropped too early): starting anyway would answer every account with errors
-	if err := chat.NewBackgroundService().VerifyKeys(); err != nil {
+	background := chat.NewBackgroundService()
+	if err := background.VerifyKeys(); err != nil {
+		fail(opcode.As(err, opcode.DBUnreachable))
+	}
+	// The file store's bound is checked against an in-process count: without one every upload
+	// is refused (fail closed), so it is taken before the first request
+	if err := background.RecountFileParts(); err != nil {
 		fail(opcode.As(err, opcode.DBUnreachable))
 	}
 	return lock

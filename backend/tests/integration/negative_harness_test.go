@@ -17,6 +17,7 @@ import (
 
 	"elyrn/internal/apperr"
 	"elyrn/internal/auth"
+	"elyrn/internal/chat"
 	"elyrn/internal/contract"
 	"elyrn/internal/database"
 	"elyrn/internal/models"
@@ -27,11 +28,12 @@ import (
 )
 
 // The path parameters of the table's templates (contract: "{id}" the conversation, "{note}" the
-// note); a template left with a brace after substitution names a parameter this harness does
-// not know, and fails loudly.
+// note, "{file}" a file); a template left with a brace after substitution names a parameter this
+// harness does not know, and fails loudly.
 const (
 	templateConversation = "{id}"
 	templateNote         = "{note}"
+	templateFile         = "{file}"
 	templateBrace        = "{"
 	// unsolvedNonce answers a real challenge with a nonce that (almost surely) does not meet its
 	// difficulty: the body passes the gate's shape check and never reaches a valid proof
@@ -53,10 +55,11 @@ var publicOps = map[contract.OpID]bool{
 	contract.OpHealth:       true,
 }
 
-// cursorValues are valid values of each page cursor the table accepts (the lowest each admits)
+// cursorValues are valid values of each query parameter the table accepts (the lowest each admits)
 var cursorValues = map[string]string{
 	models.QueryAfter:  "0",
 	models.QueryBefore: "1",
+	models.QueryPart:   "0",
 }
 
 // route is one operation of the table, optionally with one of its query parameters.
@@ -79,11 +82,13 @@ func (r route) conversationScoped() bool {
 	return strings.Contains(r.template, templateConversation)
 }
 
-// path fills the template with conv and note and appends the query.
+// path fills the template with conv and note (a file id takes the note's: the harness addresses
+// an item inside the conversation, whichever kind) and appends the query.
 func (r route) path(t *testing.T, conv, note uuid.UUID) string {
 	t.Helper()
 	path := strings.ReplaceAll(r.template, templateConversation, conv.String())
 	path = strings.ReplaceAll(path, templateNote, note.String())
+	path = strings.ReplaceAll(path, templateFile, note.String())
 	if strings.Contains(path, templateBrace) {
 		t.Fatalf("%s: the template has a parameter this harness does not know", r.label())
 	}
@@ -93,20 +98,28 @@ func (r route) path(t *testing.T, conv, note uuid.UUID) string {
 	return path
 }
 
-// tableRoutes is every operation of the input contract's table, once bare and once per accepted
-// query parameter (each alone, at a valid value).
+// tableRoutes is every operation of the input contract's table, once bare (unless a query
+// parameter is required: the gate refuses it bare) and once per accepted query parameter (each
+// alone, at a valid value).
 func tableRoutes(t *testing.T) []route {
 	t.Helper()
 	var routes []route
 	for _, endpoint := range contract.Endpoints() {
 		for _, op := range endpoint.Ops {
-			routes = append(routes, route{op: op, template: endpoint.Template})
+			bare := true
 			for _, q := range op.Query {
 				value, ok := cursorValues[q.Name]
 				if !ok {
 					t.Fatalf("%s %s: query parameter %q has no valid value in this harness", op.Method, endpoint.Template, q.Name)
 				}
+				bare = bare && !q.Required
 				routes = append(routes, route{op: op, template: endpoint.Template, query: q.Name + "=" + value})
+			}
+			if len(op.Query) > 1 && !bare {
+				t.Fatalf("%s %s: a required query parameter beside others; teach this harness to combine them", op.Method, endpoint.Template)
+			}
+			if bare {
+				routes = append(routes, route{op: op, template: endpoint.Template})
 			}
 		}
 	}
@@ -183,6 +196,7 @@ func shapedBodies(t *testing.T, mux http.Handler, owner *user) map[contract.OpID
 		contract.OpReadMark:     models.MarkReadRequest{Seq: 1},
 		contract.OpNoteSend:     models.SendNoteRequest{ID: noteID, To: side.member.Card, Blob: note},
 		contract.OpMemberRole:   models.SetRoleRequest{Card: side.member.Card, Role: newRole(t)},
+		contract.OpFileUpload:   models.UploadFilePartRequest{ID: newMessageID(), Part: chat.FirstFilePart, Data: newFilePart(t)},
 	}
 	for _, r := range tableRoutes(t) {
 		if r.op.Body == nil || publicOps[r.op.ID] {
@@ -229,7 +243,7 @@ func expectIdentical(t *testing.T, got, want *httptest.ResponseRecorder, what st
 // negativeTables are the tables a refused request must leave as they were.
 var negativeTables = []any{
 	&models.User{}, &models.Invite{}, &models.Conversation{}, &models.ConversationMember{},
-	&models.Message{}, &models.Room{}, &models.RoomNote{},
+	&models.Message{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{},
 }
 
 // rowCounts is the number of rows of every table in negativeTables, by table type.

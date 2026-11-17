@@ -18,11 +18,11 @@ const docHeader = `# Input Contract
 The server accepts exactly what this document lists and refuses everything else, before any
 handler runs (` + "`contract.Gate`" + `). Checks run in this order and the first failure answers:
 
-1. Path: one of the templates below; ` + "`{id}`" + ` and ` + "`{note}`" + ` are canonical UUIDv4. A
-   percent-encoded path is refused. Refusal: 404.
+1. Path: one of the templates below; ` + "`{id}`" + `, ` + "`{note}`" + ` and ` + "`{file}`" + ` are canonical
+   UUIDv4. A percent-encoded path is refused. Refusal: 404.
 2. Method: one of the listed methods. Refusal: 405 (a bare 405 for HEAD where noted).
 3. Query: only the listed parameters, raw (never percent-decoded), each once, at most as many
-   as listed. Refusal: 400.
+   as listed, every required one present. Refusal: 400.
 4. Content type: a request with a body, and every POST to an operation that requires one, sends
    exactly one ` + "`Content-Type: application/json`" + ` (no parameters). Refusal: 415. A body sent
    to an operation that takes none: 400.
@@ -78,7 +78,11 @@ func renderQuery(b *strings.Builder, op *Op) {
 	}
 	names := make([]string, 0, len(op.Query))
 	for _, q := range op.Query {
-		names = append(names, fmt.Sprintf("`%s` (%s, %s)", q.Name, q.Text.Name, q.Int.Name))
+		presence := ""
+		if q.Required {
+			presence = ", required"
+		}
+		names = append(names, fmt.Sprintf("`%s` (%s, %s%s)", q.Name, q.Text.Name, q.Int.Name, presence))
 	}
 	fmt.Fprintf(b, "- Query: at most %d of %s.\n", op.MaxQuery, strings.Join(names, ", "))
 }

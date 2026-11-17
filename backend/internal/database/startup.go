@@ -123,8 +123,9 @@ func failureDetail(err error) string {
 // from before versioning) is the baseline, migrated and stamped as usual.
 const (
 	// SchemaVersion is the schema this binary migrates to. Raise it with every change to the
-	// models that a previous binary must not run against.
-	SchemaVersion     = 1
+	// models that a previous binary must not run against. 2: file_parts (a binary that does not
+	// know the table would never purge it) and conversation_members.role.
+	SchemaVersion     = 2
 	schemaVersionName = "schema-version"
 	// migrationLockKey: one transaction-level advisory lock serialises instances that migrate at
 	// once ("elyrnMIG" in ASCII); it is released with the transaction
@@ -153,7 +154,7 @@ func Migrate(db *gorm.DB) *opcode.Failure {
 			return errSchemaNewer
 		}
 		if err := tx.AutoMigrate(&models.User{}, &models.Invite{}, &models.Conversation{}, &models.ConversationMember{},
-			&models.Message{}, &models.KeyCheck{}, &models.Room{}, &models.RoomNote{}); err != nil {
+			&models.Message{}, &models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}); err != nil {
 			return err
 		}
 		return tx.Clauses(clause.OnConflict{

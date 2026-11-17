@@ -38,7 +38,7 @@ func TestDatabaseMigration(t *testing.T) {
 	}
 
 	for _, table := range []interface{}{&models.Invite{}, &models.Conversation{}, &models.ConversationMember{}, &models.Message{},
-		&models.KeyCheck{}, &models.Room{}, &models.RoomNote{}} {
+		&models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}} {
 		if !database.DB.Migrator().HasTable(table) {
 			t.Errorf("%T table should exist after migration", table)
 		}
@@ -115,6 +115,7 @@ func TestChatTableSchema(t *testing.T) {
 		&models.Conversation{}:       {"id", "last_seq"},
 		&models.ConversationMember{}: {"conversation_id", "member_tag", "member_ref_enc", "master_key_id", "peer_key_enc", "read_seq"},
 		&models.Message{}:            {"conversation_id", "seq", "id", "sender_tag", "ciphertext", "expires_on"},
+		&models.FilePart{}:           {"conversation_id", "file_id", "part", "uploader_tag", "data", "expires_on"},
 	}
 	for model, columns := range expected {
 		for _, column := range columns {
@@ -125,7 +126,7 @@ func TestChatTableSchema(t *testing.T) {
 	}
 
 	// Zero-identifier schema: no user UUID or timestamp columns on messaging tables
-	for _, model := range []interface{}{&models.ConversationMember{}, &models.Message{}, &models.Conversation{}} {
+	for _, model := range []interface{}{&models.ConversationMember{}, &models.Message{}, &models.Conversation{}, &models.FilePart{}} {
 		for _, forbidden := range []string{"user_uuid", "created_at", "updated_at"} {
 			if database.DB.Migrator().HasColumn(model, forbidden) {
 				t.Errorf("%T must not have column %q", model, forbidden)

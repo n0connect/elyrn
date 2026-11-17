@@ -22,11 +22,12 @@ import (
 // is the one reported.
 
 // bounded is one numeric setting with its inclusive range (RULES.md §5.1: type, range,
-// whitelist). Unparseable values read as 0 and fail the range check.
-type bounded struct {
+// whitelist). Unparseable values read as 0 and fail the range check. Most settings are int; the
+// file sizes are int64 (config: their bounds do not fit a 32-bit int).
+type bounded[T int | int64] struct {
 	key      string
-	value    int
-	min, max int
+	value    T
+	min, max T
 }
 
 // invalid is the E_CONFIG_INVALID failure for variable with its rule.
@@ -34,7 +35,7 @@ func invalid(variable, rule string) error {
 	return opcode.Fail(opcode.ConfigInvalid, variable, rule)
 }
 
-func checkBounds(settings []bounded) error {
+func checkBounds[T int | int64](settings []bounded[T]) error {
 	for _, s := range settings {
 		if s.value < s.min || s.value > s.max {
 			return invalid(s.key, fmt.Sprintf("must be an integer between %d and %d", s.min, s.max))
@@ -79,6 +80,7 @@ func ValidateStartupConfig() error {
 	minJWTLen := config.GetJWTSecretMinLength()
 	for _, check := range []func() error{
 		func() error { return checkBounds(startupBounds(minJWTLen)) },
+		func() error { return checkBounds(fileBounds()) },
 		func() error { return checkSecrets(minJWTLen) },
 		checkSizesFit,
 		checkConnections,
@@ -106,12 +108,12 @@ func portNumber(raw string) int {
 
 // startupBounds is the range of every numeric setting. It holds data only, one row per
 // setting, so it is kept as one linear table (RULES.md 7.1 exception for data initialization).
-func startupBounds(minJWTLen int) []bounded {
+func startupBounds(minJWTLen int) []bounded[int] {
 	argon2Floor := config.MinArgon2MemoryKiB
 	if config.IsProductionMode() {
 		argon2Floor = config.ProductionMinArgon2MemoryKiB
 	}
-	return []bounded{
+	return []bounded[int]{
 		{"JWT_SECRET_MIN_LEN", minJWTLen, 32, 1024},
 		{"JWT_EXPIRATION_MINUTES", int(config.GetJWTExpiration() / time.Minute), config.MinJWTExpirationMinutes, config.MaxJWTExpirationMinutes},
 		{"MAX_REQUEST_BODY_BYTES", config.GetMaxRequestBodyBytes(), 1024, 16 << 20},
@@ -150,6 +152,15 @@ func startupBounds(minJWTLen int) []bounded {
 	}
 }
 
+// fileBounds is the range of every file setting, each at least one stored part.
+func fileBounds() []bounded[int64] {
+	return []bounded[int64]{
+		{config.EnvMaxFileBytes, config.GetMaxFileBytes(), utils.FilePartBytes, config.MaxFileBytesBound},
+		{config.EnvFileConversationQuotaBytes, config.GetFileConversationQuotaBytes(), utils.FilePartBytes, config.MaxFileConversationQuotaBound},
+		{config.EnvFileStoreMaxBytes, config.GetFileStoreMaxBytes(), utils.FilePartBytes, config.MaxFileStoreBytesBound},
+	}
+}
+
 // checkSecrets insists on the signing secret, the token claims, the master keys and the pepper.
 func checkSecrets(minJWTLen int) error {
 	if len(config.GetJWTSecret()) < minJWTLen {
@@ -170,13 +181,24 @@ func checkSecrets(minJWTLen int) error {
 	return nil
 }
 
-// checkSizesFit insists that the largest message, direct or to a full room, fits a request body.
+// checkSizesFit insists that the largest message, direct or to a full room, and a file part fit
+// a request body, and that a file fits a conversation's quota and that quota the store.
 func checkSizesFit() error {
 	if config.GetMaxMessageBytes() > config.GetMaxRequestBodyBytes()/2 {
 		return invalid("MAX_MESSAGE_BYTES", "must fit (base64) inside MAX_REQUEST_BODY_BYTES")
 	}
 	if utils.RoomMaxBlobBytes(config.GetRoomMaxMembers()) > config.GetMaxRequestBodyBytes()/2 {
 		return invalid("ROOM_MAX_MEMBERS", "a message to a full room must fit (base64) inside MAX_REQUEST_BODY_BYTES")
+	}
+	// The same rule as a message: twice the raw size covers base64 and the JSON around it
+	if utils.FilePartSealedBytes > config.GetMaxRequestBodyBytes()/2 {
+		return invalid("MAX_REQUEST_BODY_BYTES", fmt.Sprintf("must hold a file part upload (at least %d bytes)", 2*utils.FilePartSealedBytes))
+	}
+	if config.GetMaxFileBytes() > config.GetFileConversationQuotaBytes() {
+		return invalid(config.EnvMaxFileBytes, "must not exceed "+config.EnvFileConversationQuotaBytes)
+	}
+	if config.GetFileConversationQuotaBytes() > config.GetFileStoreMaxBytes() {
+		return invalid(config.EnvFileConversationQuotaBytes, "must not exceed "+config.EnvFileStoreMaxBytes)
 	}
 	return nil
 }

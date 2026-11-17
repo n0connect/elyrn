@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -58,6 +59,11 @@ func TestValidateStartupConfig_RejectsOutOfRangeValues(t *testing.T) {
 		"session lifetime over a year":  {"JWT_EXPIRATION_MINUTES", "525601"},
 		"conversations per user absurd": {"MAX_CONVERSATIONS_PER_USER", "1000000"},
 		"non-numeric value":             {"MAX_ACTIVE_INVITES", "five"},
+		"file below one part":           {config.EnvMaxFileBytes, "262143"},
+		"file above its bound":          {config.EnvMaxFileBytes, "104857601"},
+		"file quota below one part":     {config.EnvFileConversationQuotaBytes, "1"},
+		"file store above its bound":    {config.EnvFileStoreMaxBytes, "1099511627777"},
+		"file store not a number":       {config.EnvFileStoreMaxBytes, "2GiB"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -107,6 +113,73 @@ func TestValidateStartupConfig_SessionLifetimeBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The file settings default to the specified sizes, accept exactly their bounds (one part up to
+// their maximum), and must nest: a file fits a conversation's quota, the quota the store, and a
+// part upload the request body bound. A refusal names the setting that breaks the rule.
+func TestValidateStartupConfig_FileLimits(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+	for _, key := range []string{config.EnvMaxFileBytes, config.EnvFileConversationQuotaBytes, config.EnvFileStoreMaxBytes} {
+		t.Setenv(key, "")
+	}
+	if config.GetMaxFileBytes() != 10485760 || config.GetFileConversationQuotaBytes() != 104857600 || config.GetFileStoreMaxBytes() != 2147483648 {
+		t.Fatalf("defaults %d, %d, %d", config.GetMaxFileBytes(), config.GetFileConversationQuotaBytes(), config.GetFileStoreMaxBytes())
+	}
+	if err := validate(t); err != nil {
+		t.Fatalf("the default file settings were refused: %v", err)
+	}
+
+	onePart := strconv.Itoa(utils.FilePartBytes)
+	accepted := []map[string]string{
+		{config.EnvMaxFileBytes: onePart, config.EnvFileConversationQuotaBytes: onePart, config.EnvFileStoreMaxBytes: onePart},
+		{config.EnvMaxFileBytes: strconv.FormatInt(config.MaxFileBytesBound, 10)},
+		{config.EnvFileConversationQuotaBytes: strconv.FormatInt(config.MaxFileConversationQuotaBound, 10),
+			config.EnvFileStoreMaxBytes: strconv.FormatInt(config.MaxFileStoreBytesBound, 10)},
+		{"MAX_REQUEST_BODY_BYTES": strconv.Itoa(2 * utils.FilePartSealedBytes)},
+	}
+	for _, settings := range accepted {
+		t.Run("accepts "+describe(settings), func(t *testing.T) {
+			for key, value := range settings {
+				t.Setenv(key, value)
+			}
+			if err := validate(t); err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+		})
+	}
+
+	refused := []struct {
+		settings map[string]string
+		variable string
+	}{
+		{map[string]string{config.EnvMaxFileBytes: "104857600", config.EnvFileConversationQuotaBytes: "104857599"}, config.EnvMaxFileBytes},
+		{map[string]string{config.EnvFileConversationQuotaBytes: "2147483649"}, config.EnvFileConversationQuotaBytes},
+		{map[string]string{config.EnvFileStoreMaxBytes: onePart}, config.EnvFileConversationQuotaBytes},
+		{map[string]string{"MAX_REQUEST_BODY_BYTES": strconv.Itoa(2*utils.FilePartSealedBytes - 1)}, "MAX_REQUEST_BODY_BYTES"},
+	}
+	for _, c := range refused {
+		t.Run("refuses "+describe(c.settings), func(t *testing.T) {
+			for key, value := range c.settings {
+				t.Setenv(key, value)
+			}
+			var f *opcode.Failure
+			if err := validate(t); !errors.As(err, &f) || f.Code.ID != opcode.ConfigInvalid.ID || f.Variable != c.variable {
+				t.Fatalf("got %v, want %s naming %s", err, opcode.ConfigInvalid.ID, c.variable)
+			}
+		})
+	}
+}
+
+// describe names a set of settings for a subtest, in a fixed order.
+func describe(settings map[string]string) string {
+	pairs := make([]string, 0, len(settings))
+	for key, value := range settings {
+		pairs = append(pairs, key+"="+value)
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, ",")
 }
 
 // Production mode raises the floors: verified TLS to the database and OWASP Argon2 memory.
@@ -210,6 +283,9 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 		{"MESSAGE_TTL_DAYS", "leak-ttl-days", false},
 		{"ROOM_MAX_MEMBERS", "leak-room-members", false},
 		{"ROOM_MAX_TTL_HOURS", "leak-room-ttl", false},
+		{config.EnvMaxFileBytes, "leak-file-bytes", false},
+		{config.EnvFileConversationQuotaBytes, "leak-file-quota", false},
+		{config.EnvFileStoreMaxBytes, "leak-file-store", false},
 		{"POW_CHALLENGE_TTL_SEC", "leak-pow-ttl", false},
 		{"POW_DIFFICULTY", "leak-pow-difficulty", false},
 		{"INTERNAL_ID_LENGTH", "leak-id-length", false},

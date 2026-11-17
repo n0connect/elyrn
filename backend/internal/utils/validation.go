@@ -228,6 +228,19 @@ const (
 	RoomRoleBytes = cryptoengine.GCMNonceSize + roomRolePlainBytes + cryptoengine.GCMTagSize
 )
 
+// File parts: a file is stored as equal parts of FilePartBytes of plaintext, each sealed with
+// its tag and no nonce (every part has its own key), so every stored part has exactly
+// FilePartSealedBytes and the server learns a file's size only in whole parts.
+const (
+	FilePartBytes       = 1 << 18 // 262144
+	FilePartSealedBytes = FilePartBytes + cryptoengine.GCMTagSize
+)
+
+// FilePartCount is how many parts a file of size bytes takes (rounded up).
+func FilePartCount(size int64) int64 {
+	return (size + FilePartBytes - 1) / FilePartBytes
+}
+
 // DecodeExact whitelists canonical base64url (no padding) of exactly size bytes.
 func DecodeExact(encoded string, size int) ([]byte, bool) {
 	if size <= 0 || len(encoded) != base64.RawURLEncoding.EncodedLen(size) || !accountNumberPattern.MatchString(encoded) {

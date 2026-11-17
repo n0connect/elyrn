@@ -51,11 +51,12 @@ type Body struct {
 }
 
 // QueryParam is one accepted query parameter: raw text (never percent-decoded) checked by a
-// pattern, then its integer value by a range.
+// pattern, then its integer value by a range. A Required one must be present.
 type QueryParam struct {
-	Name string
-	Text *Pattern
-	Int  *IntRange
+	Name     string
+	Text     *Pattern
+	Int      *IntRange
+	Required bool
 }
 
 // OpID names one operation (path + method); handlers dispatch on it.
@@ -82,6 +83,8 @@ const (
 	OpNoteSend
 	OpNoteDelete
 	OpMemberRole
+	OpFileUpload
+	OpFileRead
 	OpEvents
 	OpHealth
 )
@@ -96,8 +99,9 @@ type Op struct {
 	Body     *Body // nil: the operation takes no body
 }
 
-// Endpoint is one path template with its operations. Path parameters ("{id}", "{note}") are
-// canonical UUIDv4s, handed to the handler parsed, in order (PathConversation, PathNote).
+// Endpoint is one path template with its operations. Path parameters ("{id}", "{note}",
+// "{file}") are canonical UUIDv4s, handed to the handler parsed, each at its own position
+// (PathConversation, PathNote, PathFile).
 type Endpoint struct {
 	Template string
 	// BareHead: HEAD answers a bare 405 (apperr.HeadNotAllowed), as these routes always did
@@ -106,10 +110,11 @@ type Endpoint struct {
 	segments []segment
 }
 
-// Path parameter positions, in template order
+// Path parameter positions: each name has its own, whatever template it appears in
 const (
 	PathConversation = iota
 	PathNote
+	PathFile
 	maxPathParams
 )
 
@@ -117,7 +122,15 @@ const (
 const (
 	paramConversation = "{id}"
 	paramNote         = "{note}"
+	paramFile         = "{file}"
 )
+
+// paramPositions maps each template parameter to its position in Input
+var paramPositions = map[string]int{
+	paramConversation: PathConversation,
+	paramNote:         PathNote,
+	paramFile:         PathFile,
+}
 
 // Fields shared by several bodies
 var (
@@ -221,6 +234,11 @@ func chatEndpoints() []Endpoint {
 				Field{Name: "blob", Kind: KindString, Required: true, Str: patternNote})},
 		}},
 		{Template: conversation + "/" + models.SubNotes + "/" + paramNote, Ops: []Op{{ID: OpNoteDelete, Method: http.MethodDelete}}},
+		{Template: conversation + "/" + models.SubFiles, Ops: []Op{{ID: OpFileUpload, Method: http.MethodPost, Body: jsonBody(idField,
+			Field{Name: "part", Kind: KindInt, Required: true, Int: rangeFilePart},
+			Field{Name: "data", Kind: KindString, Required: true, Str: patternFilePart})}}},
+		{Template: conversation + "/" + models.SubFiles + "/" + paramFile, Ops: []Op{{ID: OpFileRead, Method: http.MethodGet,
+			Query: []QueryParam{{Name: models.QueryPart, Text: patternPartQuery, Int: rangeFilePart, Required: true}}, MaxQuery: 1}}},
 	}
 }
 

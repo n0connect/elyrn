@@ -29,6 +29,7 @@ const (
 	bucketJoin   = "join"
 	bucketNote   = "note"
 	bucketRole   = "role"
+	bucketFile   = "file" // taken by a file's part 0 only: one token per file
 )
 
 // pageCursors maps each page query the contract admits to its cursor kind
@@ -116,6 +117,7 @@ func MeHandler(w http.ResponseWriter, r *http.Request) {
 		RoomMaxMembers:   config.GetRoomMaxMembers(),
 		RoomMaxTTLHours:  config.GetRoomMaxTTLHours(),
 		MessagePageLimit: config.GetMessagePageLimit(),
+		FileMaxBytes:     config.GetMaxFileBytes(),
 	}, http.StatusOK)
 }
 
@@ -214,6 +216,10 @@ func ConversationsHandler(w http.ResponseWriter, r *http.Request) {
 		deleteNote(w, svc, me, id, in.PathID(contract.PathNote))
 	case contract.OpMemberRole:
 		setRole(w, r, svc, me, id)
+	case contract.OpFileUpload:
+		uploadFilePart(w, r, svc, me, id)
+	case contract.OpFileRead:
+		readFilePart(w, in, svc, me, id)
 	default:
 		// The table routed another endpoint's operation here: a wiring fault
 		apperr.Write(w, "ConversationsHandler", apperr.InputUnchecked)

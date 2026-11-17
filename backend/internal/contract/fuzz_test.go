@@ -74,6 +74,69 @@ func FuzzPatternRoomRole(f *testing.F) {
 	fuzzBase64(f, patternRoomRole, base64Seeds(f, patternRoomRole)...)
 }
 
+// FuzzPatternFilePart: a part is long, so the fuzzer mostly mutates the seeds' edges; whatever it
+// accepts decodes to exactly one sealed part and re-encodes to itself.
+func FuzzPatternFilePart(f *testing.F) {
+	fuzzBase64(f, patternFilePart, base64Seeds(f, patternFilePart)...)
+}
+
+// FuzzPatternPartQuery: a part number's text either parses into an integer that formats back to
+// it, or parseQuery refuses it at the integer step.
+func FuzzPatternPartQuery(f *testing.F) {
+	for _, seed := range []string{"0", "1", "01", "399", "400", "999", "1000", "-0", ""} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if !patternPartQuery.Accepts(s) {
+			return
+		}
+		if v, ok := parseInteger(s); ok && strconv.FormatInt(v, 10) != s {
+			t.Fatalf("accepted the non-canonical %q", s)
+		}
+	})
+}
+
+// FuzzGateFileRead: whatever conversation id, file id and query a file read carries, an admitted
+// request names exactly those two ids, each at its own position (none at the note's), and one
+// part number in range, written canonically.
+func FuzzGateFileRead(f *testing.F) {
+	for _, seed := range []struct{ conversation, file, query string }{
+		{exampleConversation, exampleFile, "part=0"},
+		{exampleConversation, exampleFile, "part=" + strconv.FormatInt(maxFilePart, 10)},
+		{exampleConversation, exampleFile, "part=" + strconv.FormatInt(maxFilePart+1, 10)},
+		{exampleConversation, exampleFile, ""},
+		{exampleConversation, exampleFile, "part=0&part=1"},
+		{exampleFile, exampleConversation, "part=01"},
+		{strings.ToUpper(exampleConversation), exampleFile, "part=0"},
+		{exampleConversation, exampleNote + "/x", "part=0"},
+	} {
+		f.Add(seed.conversation, seed.file, seed.query)
+	}
+	f.Fuzz(func(t *testing.T, conversation, file, query string) {
+		target := models.PathConversations + "/" + conversation + "/" + models.SubFiles + "/" + file
+		if query != "" {
+			target += "?" + query
+		}
+		r, err := http.NewRequest(http.MethodGet, "http://"+gateHost+target, nil)
+		if err != nil {
+			return // not a request net/http would hand a handler
+		}
+		var in *Input
+		rec := httptest.NewRecorder()
+		Gate(func(w http.ResponseWriter, r *http.Request) { in, _ = InputOf(r) })(rec, r)
+		if in == nil {
+			if _, ok := testutil.RegisteredAnswer(rec); !ok || rec.Code >= http.StatusInternalServerError {
+				t.Fatalf("%q refused with the unregistered answer %d %q", target, rec.Code, rec.Body.String())
+			}
+			return
+		}
+		part, ok := in.Query(models.QueryPart)
+		if in.Op.ID != OpFileRead || in.PathID(PathConversation).String() != conversation || in.PathID(PathFile).String() != file ||
+			in.PathID(PathNote) != uuid.Nil || !ok || !rangeFilePart.Accepts(part) || models.QueryPart+"="+strconv.FormatInt(part, 10) != r.URL.RawQuery {
+			t.Fatalf("%q admitted as %+v", target, in)
+		}
+	})
+}
 func FuzzPatternMessage(f *testing.F) {
 	fuzzBase64(f, patternMessage, exampleString(f, patternMessage), roomBlob(f, utils.RoomMessageMagic, 2), roomBlob(f, utils.RoomNoteMagic, 1))
 }
@@ -203,13 +266,16 @@ const gateHost = "elyrn.test"
 // values, wrong content types, unknown lengths, percent-encoded paths and malformed queries.
 func addGateSeeds(f *testing.F) {
 	forEachOp(func(e *Endpoint, op *Op) {
-		path := strings.NewReplacer(paramConversation, exampleConversation, paramNote, exampleNote).Replace(e.Template)
+		path := examplePath(e.Template)
 		body := ""
 		if op.Body != nil {
 			body = buildBody(f, op.Body.Fields, "", mutation{})
 		}
 		f.Add(op.Method, path, jsonContentType, body, false)
 		f.Add(op.Method, path+"?after=1", jsonContentType, body, true)
+		if query := canonicalQuery(op); query != "" {
+			f.Add(op.Method, path+"?"+query, jsonContentType, body, false)
+		}
 	})
 	key := exampleString(f, patternKey32)
 	messages := models.PathConversations + "/" + exampleConversation + "/" + models.SubMessages
@@ -281,6 +347,11 @@ func expectAdmittedInput(t *testing.T, r *http.Request, in *Input) {
 	for name, v := range in.query {
 		if param := in.Op.queryParam(name); param == nil || !param.Int.Accepts(v) || len(in.query) > in.Op.MaxQuery {
 			t.Fatalf("%q: query %s=%d admitted", r.URL.String(), name, v)
+		}
+	}
+	for _, param := range in.Op.Query {
+		if _, present := in.query[param.Name]; param.Required && !present {
+			t.Fatalf("%q: admitted without the required %s", r.URL.String(), param.Name)
 		}
 	}
 	if in.Op.Body == nil {

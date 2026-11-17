@@ -84,15 +84,19 @@ jobs:
           fuzz ./internal/chat FuzzClockTrusted
           fuzz ./internal/chat FuzzMessageWindow
           fuzz ./internal/chat FuzzParseRoomInput
+          fuzz ./internal/chat FuzzPartCounter
           fuzz ./internal/chat FuzzRosterDigestMatchesClient
+          fuzz ./internal/contract FuzzGateFileRead
           fuzz ./internal/contract FuzzGateLoginBody
           fuzz ./internal/contract FuzzGateRequest
           fuzz ./internal/contract FuzzIntegerLiteral
           fuzz ./internal/contract FuzzPatternChallenge
+          fuzz ./internal/contract FuzzPatternFilePart
           fuzz ./internal/contract FuzzPatternInviteToken
           fuzz ./internal/contract FuzzPatternKey32
           fuzz ./internal/contract FuzzPatternMessage
           fuzz ./internal/contract FuzzPatternNote
+          fuzz ./internal/contract FuzzPatternPartQuery
           fuzz ./internal/contract FuzzPatternPendingToken
           fuzz ./internal/contract FuzzPatternRoomCard
           fuzz ./internal/contract FuzzPatternRoomRole
@@ -127,6 +131,7 @@ jobs:
           fuzz ./internal/utils FuzzAdmitLine
           fuzz ./internal/utils FuzzClockSteady
           fuzz ./internal/utils FuzzDecodeExact
+          fuzz ./internal/utils FuzzFilePartCount
           fuzz ./internal/utils FuzzParseOrigins
           fuzz ./internal/utils FuzzParseProxyList
           fuzz ./internal/utils FuzzParseRoomBlob
