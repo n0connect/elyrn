@@ -43,7 +43,7 @@ Two conditions of the design, stated once: every key is derived again from the a
 - **[Verifying the Client](docs/security/verifying-the-client.md)** — Signed frontend manifest per release and `make verify-frontend`
 - **[REST API Reference](docs/api/rest-api.md)** — Every `/api/v2/*` endpoint with its JSON, error codes and Server-Sent Events
 - **[Input Contract](docs/api/input-contract.md)** — The generated whitelist of every method, query, body bound and field
-- **[Configuration & Tuning](docs/operations/configuration-and-tuning.md)** — Every environment variable, master key rotation with re-wrapping, Argon2id memory tuning
+- **[Configuration & Tuning](docs/operations/configuration-and-tuning.md)** — Every environment variable, master key rotation with re-wrapping, file and room limits
 - **[Deployment](docs/operations/deployment.md)** — Putting an instance on a public server: `.env` for production, TLS in front, upgrades, backups, what to monitor
 - **[Onion Service (Tor)](docs/operations/onion-service.md)** — `make onion`, per-circuit abuse control, onion key custody
 - **[Disaster Recovery](docs/operations/disaster-recovery.md)** — What each failure does, startup refusals, accounts-only backups and the restore drill
@@ -110,7 +110,7 @@ The `robot` door in the main menu shows this command with the instance's address
 AccountNumber (256-bit CSPRNG, base64url, 43 chars) - generated at signup, shown ONCE
    |
    +-- HKDF-SHA256(salt: "noaddx.v1", info: "noaddx/auth") -----------> auth key (sent at login)
-   |                                                                          server keeps HMAC + Argon2id only
+   |                                                                          server keeps a keyed HMAC only
    `-- HKDF-SHA256(salt: "noaddx.v1", info: "noaddx/identity/x25519") -> X25519 identity (stays in browser)
                                                                              server keeps the public key only
 ```
@@ -160,7 +160,7 @@ The message ID is a client-generated UUIDv4 bound into the AAD. A ciphertext can
 
 | Table | Columns Stored | Readable Without Master Key / Pepper? |
 |---|---|---|
-| `users` | `id` (serial), `uuid`, `account_lookup`, `account_hash`, `public_key`, `session_epoch`, `encrypted_key`, `master_key_id`, `conv_index_enc` | **The public key, the order in which accounts registered (serial `id`) and how often each logged out (`session_epoch`)**. Account number cannot be derived. No creation or update timestamps exist. |
+| `users` | `id` (serial), `uuid`, `account_lookup`, `public_key`, `session_epoch`, `encrypted_key`, `master_key_id`, `conv_index_enc` | **The public key, the order in which accounts registered (serial `id`) and how often each logged out (`session_epoch`)**. Account number cannot be derived. No creation or update timestamps exist. |
 | `invites` | `lookup` (HMAC), `creator_tag` (HMAC), `creator_ref_enc` (AES-GCM), `master_key_id`, `expires_at` | **Expiry, rounded up to the whole hour (and so the creation hour), and how many open invites one unnamed creator holds**. Token and creator reference are unreadable. |
 | `conversations` | `id` (UUIDv4), `last_seq` | That a conversation exists and how many messages it has had; participants remain anonymous. |
 | `conversation_members` | `conversation_id`, `member_tag` (HMAC per conversation), `member_ref_enc` (AES-GCM), `master_key_id`, `peer_key_enc` (AES-GCM), `read_seq`, `card`, `vault`, `joined_seq` (rooms) | **Read and join sequence numbers only**. Member tags are unique per conversation; cards and vaults are sealed by keys the server never sees. |
@@ -239,7 +239,6 @@ make agent-cross GOOS=linux GOARCH=arm64  # a static native-engine agent for ano
 | [HKDF-SHA-256 · RFC 5869](https://www.rfc-editor.org/rfc/rfc5869) | Deriving the auth key, identity key and conversation keys |
 | [AES-256-GCM · NIST SP 800-38D](https://csrc.nist.gov/pubs/sp/800/38/d/final) | Messages in the browser, sensitive columns at rest |
 | [HMAC-SHA-256 · RFC 2104](https://www.rfc-editor.org/rfc/rfc2104) | Account lookup and per-conversation pseudonyms |
-| [Argon2id · RFC 9106](https://www.rfc-editor.org/rfc/rfc9106) | Hashing the auth key on the server |
 | [JWT · RFC 7519](https://www.rfc-editor.org/rfc/rfc7519) | HS256 session token, HttpOnly cookie only |
 | [PKCS #8 for X25519 · RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) | Importing the derived key as a non-extractable `CryptoKey` |
 | [Base64url · RFC 4648 §5](https://www.rfc-editor.org/rfc/rfc4648#section-5) | Account numbers, keys, invite codes, ciphertext |
