@@ -8,12 +8,15 @@
 // The AccountNumber itself is never stored anywhere.
 //
 // Which form of the identity is kept is decided by what this browser proves it can read back,
-// never by its name: save() stores the key itself and reads it back through load()'s own path.
-// An engine that stores an X25519 key and cannot read it back (WebKit, Nov 2026) gets the sealed
-// form instead (ElyrnCrypto.unsealIdentity: the PKCS#8 wrapped under a non-extractable AES device
-// key, weaker at rest, docs/security/threat-model.md). Both live under RECORD, so one form at a
-// time exists and every wipe removes either. When neither reads back, nothing is kept and the
-// user is told once (W_IDENTITY_NOT_KEPT).
+// never by its name. Before an identity is derived, keepsKeys() stores a throwaway
+// non-extractable X25519 key, reads it back in a new transaction and deletes it (once per page
+// load). Only an engine that fails it (WebKit, Nov 2026: it stores the key and reads back null)
+// is asked to make the sealed form at all (ElyrnCrypto.unsealIdentity: the PKCS#8 wrapped under
+// a non-extractable AES device key, weaker at rest, docs/security/threat-model.md); everywhere
+// else the wrapped form never exists. save() still proves what it stored by reading it back
+// through load()'s own path. Both forms live under RECORD, so one form at a time exists and
+// every wipe removes either. When nothing reads back, nothing is kept and the user is told once
+// (W_IDENTITY_NOT_KEPT).
 //
 // It also remembers which conversations the user verified (safety number compared),
 // bound to the peer key that was verified, and, per conversation, the counter record that
@@ -55,6 +58,8 @@ const Keystore = (() => {
     const USE_STAMP = 'counterUse';
     // Web Locks name of one conversation's counter record, shared by every tab of this browser
     const COUNTER_LOCK_PREFIX = 'elyrn-counter-';
+    // Where keepsKeys() puts its throwaway key for the moment of the test
+    const PROBE = 'keyProbe';
 
     // A storage that refuses once (private window) refuses every time: say it once, not per sync
     let storageWarned = false;
@@ -63,6 +68,8 @@ const Keystore = (() => {
     // This tab is deleting the database itself (wipeAll): its own versionchange is no news
     let wiping = false;
     let lockWarned = false;
+    // keepsKeys()'s answer, asked once per page load
+    let keepsKeysAnswer = null;
 
     // A failed operation: logged under its own code and told to the user, both once per page load
     function unavailable(logCode, error) {
@@ -150,6 +157,31 @@ const Keystore = (() => {
 
     function transact(mode, action, storeName = STORE) {
         return run(storeName, mode, tx => action(tx.objectStore(storeName)));
+    }
+
+    // Whether this engine gives a stored non-extractable X25519 key back (see the top of this
+    // file). A storage failure counts as "cannot": the sealed form is then made, and save() finds
+    // out for itself whether anything is kept.
+    function keepsKeys() {
+        if (!keepsKeysAnswer) keepsKeysAnswer = probeKeys();
+        return keepsKeysAnswer;
+    }
+
+    async function probeKeys() {
+        let kept = false;
+        try {
+            const key = await ElyrnCrypto.throwawayKey();
+            await transact('readwrite', store => store.put(key, PROBE));
+            kept = ElyrnCrypto.isThrowawayKey(await transact('readonly', store => store.get(PROBE)));
+        } catch (e) {
+            Log.warn(Errors.INTERNAL.W_KEY_PROBE_FAILED, e);
+        }
+        try {
+            await transact('readwrite', store => store.delete(PROBE));
+        } catch (e) {
+            Log.warn(Errors.INTERNAL.W_KEY_PROBE_FAILED, e);
+        }
+        return kept;
     }
 
     // Stores the identity, and first clears the records of any other account (see OWNER above).
@@ -379,7 +411,7 @@ const Keystore = (() => {
     }
 
     return Object.freeze({
-        save, load, wipeIdentity, wipeAll, setVerified, isVerified,
+        keepsKeys, save, load, wipeIdentity, wipeAll, setVerified, isVerified,
         loadCounters, saveCounters, forgetCounters, pruneCounters, withCounterLock
     });
 })();

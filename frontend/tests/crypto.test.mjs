@@ -60,6 +60,27 @@ test('only a kept session derives the sealed form; it opens to the same non-extr
     assert.deepEqual(await sharedWith(opened, b.publicKey), await sharedWith(id.privateKey, b.publicKey));
 });
 
+// Keystore.keepsKeys stores what throwawayKey makes and judges what came back with isThrowawayKey
+// (the IndexedDB round trip itself needs a browser: docs/development/testing-and-contributing.md)
+test('the throwaway key is a fresh non-extractable X25519 private key, and only that is recognised', async () => {
+    const one = await C.throwawayKey();
+    const two = await C.throwawayKey();
+    for (const key of [one, two]) {
+        assert.equal(key.type, 'private');
+        assert.equal(key.extractable, false);
+        assert.equal(key.algorithm.name, 'X25519');
+        assert.equal(C.isThrowawayKey(key), true);
+    }
+    assert.notEqual(one, two);
+    const extractable = (await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits'])).privateKey;
+    const publicOnly = (await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits'])).publicKey;
+    const aes = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    // What an engine that cannot keep the key gives back (WebKit: null), and anything else
+    for (const back of [null, undefined, {}, 'key', 0, extractable, publicOnly, aes, { type: 'private', extractable: false, algorithm: { name: 'X25519' } }]) {
+        assert.equal(C.isThrowawayKey(back), false);
+    }
+});
+
 test('each seal has its own device key and nonce', async () => {
     const one = (await C.deriveIdentity(ACCOUNT, true)).sealed;
     const two = (await C.deriveIdentity(ACCOUNT, true)).sealed;

@@ -185,7 +185,8 @@ const ElyrnCrypto = (() => {
     }
 
     // Returns a NON-extractable private key plus the public key (base64url); withSealed adds the
-    // sealed form (x25519FromSeed), which only a session kept on this device needs
+    // sealed form (x25519FromSeed), which only a session kept by an engine that cannot keep the
+    // key itself needs (Keystore.keepsKeys)
     async function deriveIdentity(accountNumber, withSealed) {
         const raw = accountBytes(accountNumber);
         let seed = null;
@@ -200,7 +201,8 @@ const ElyrnCrypto = (() => {
 
     // ---------- sealed identity ----------
     // Some engines (WebKit, Nov 2026) store an X25519 CryptoKey in IndexedDB without error and
-    // cannot read it back, while AES keys round-trip. For them the identity is kept sealed: its
+    // cannot read it back, while AES keys round-trip (Keystore.keepsKeys finds out by trying a
+    // throwawayKey). Only for them is the sealed form made at all, and the identity kept sealed: its
     // PKCS#8 wrapped under a non-extractable AES-256-GCM device key that may only wrap and unwrap,
     // opened at load straight into a non-extractable key. The honest path never shows the private
     // key to script, but script running in this origin could unwrap an extractable copy, which it
@@ -220,6 +222,18 @@ const ElyrnCrypto = (() => {
         const iv = globalThis.crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
         const wrapped = new Uint8Array(await subtle.wrapKey('pkcs8', temp, deviceKey, sealParams(iv, publicKey)));
         return Object.freeze({ deviceKey: deviceKey, iv: iv, wrapped: wrapped });
+    }
+
+    // A non-extractable X25519 private key that protects nothing: Keystore stores and reads one
+    // back to learn whether this engine keeps such keys, before any identity is derived
+    async function throwawayKey() {
+        return (await subtle.generateKey(X25519, false, ['deriveBits'])).privateKey;
+    }
+
+    // Whether key came back from storage as the kind throwawayKey makes (WebKit gives back null)
+    function isThrowawayKey(key) {
+        return typeof CryptoKey !== 'undefined' && key instanceof CryptoKey && key.type === 'private' &&
+            !key.extractable && key.algorithm.name === X25519.name;
     }
 
     function isDeviceKey(key) {
@@ -514,6 +528,8 @@ const ElyrnCrypto = (() => {
         deriveAuthKey,
         deriveIdentity,
         unsealIdentity,
+        throwawayKey,
+        isThrowawayKey,
         conversationKey,
         encryptMessage,
         decryptMessage,

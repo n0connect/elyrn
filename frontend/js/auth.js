@@ -137,10 +137,11 @@ function isPowCancelled(error) {
 
 // Verifies the server holds the same public key this device derived, then opens the app.
 // A mismatch means the server (or something in between) swapped the identity key.
-// Everything the browser keeps for a session, derived from the account number once; the sealed
-// form is what Keystore.save keeps where this browser cannot keep the key itself
+// Everything the browser keeps for a session, derived from the account number once. The sealed
+// form is made only where this engine proved it cannot keep the key itself (Keystore.keepsKeys)
 async function deriveSession(accountNumber) {
-    const identity = await ElyrnCrypto.deriveIdentity(accountNumber, true);
+    const sealed = !(await Keystore.keepsKeys());
+    const identity = await ElyrnCrypto.deriveIdentity(accountNumber, sealed);
     identity.roomsRoot = await ElyrnRoomCrypto.deriveRoomsRoot(accountNumber);
     return identity;
 }

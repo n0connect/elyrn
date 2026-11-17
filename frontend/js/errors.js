@@ -170,6 +170,9 @@ const Errors = (() => {
         // A stored identity record gave no identity at load (an engine that cannot read its key
         // back, a damaged record): the page opens logged out, and the next login replaces it
         W_IDENTITY_UNREADABLE: 'W_IDENTITY_UNREADABLE',
+        // Storing, reading back or deleting the throwaway key of Keystore.keepsKeys failed: the
+        // engine counts as one that cannot keep keys, and the sealed form is made
+        W_KEY_PROBE_FAILED: 'W_KEY_PROBE_FAILED',
         W_COUNTERS_UNAVAILABLE: 'W_COUNTERS_UNAVAILABLE',
         E_SYNC_FAILED: 'E_SYNC_FAILED',
         W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT',
