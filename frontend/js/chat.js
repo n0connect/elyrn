@@ -18,9 +18,9 @@ const Chat = (() => {
     // a (re)connected stream that has not shown it this long is not delivering (a proxy buffers
     // or holds it), and the page polls instead of waiting longer
     const STREAM_FIRST_PROOF_MS = 5 * SECOND_MS;
-    // ...and one every 25 s after (sseKeepAlive): a stream that proved itself and then went silent
+    // ...and one every 10 s after (sseKeepAlive): a stream that proved itself and then went silent
     // for two of them and some slack has stopped delivering
-    const STREAM_SILENCE_LIMIT_MS = 60 * SECOND_MS;
+    const STREAM_SILENCE_LIMIT_MS = 25 * SECOND_MS;
     // How often the watchdog looks, and so how often a silent stream's page fetches its updates:
     // at most 5 requests per poll per visible tab (1 when no conversation is open), so 4 visible
     // tabs stay at 4 r/s, inside nginx's 20 r/s with burst 40 per client
@@ -107,10 +107,15 @@ const Chat = (() => {
         return conv.key;
     }
 
+    function isPageVisible() {
+        return document.visibilityState === 'visible';
+    }
+
+    // The open conversation counts too while the page is hidden: what arrived then is not read
     function updateTitle() {
         let unread = 0;
         conversations.forEach(conv => {
-            if (conv.id !== activeId && conv.lastSeq > conv.readSeq) unread++;
+            if ((conv.id !== activeId || !isPageVisible()) && conv.lastSeq > conv.readSeq) unread++;
         });
         document.title = unread > 0 ? `(${unread}) ${APP_TITLE}` : APP_TITLE;
     }
@@ -760,8 +765,10 @@ const Chat = (() => {
         }
     }
 
+    // Nothing is read while nobody can see it: a hidden page shows what arrived and marks it read
+    // only once it is shown again (onVisible resyncs, and that sync lands here)
     async function markRead(conv) {
-        if (conv.maxSeq > conv.readSeq) {
+        if (isPageVisible() && conv.maxSeq > conv.readSeq) {
             conv.readSeq = conv.maxSeq;
             await api('POST', `/conversations/${conv.id}/read`, { seq: conv.maxSeq });
         }
@@ -1417,7 +1424,9 @@ const Chat = (() => {
             return;
         }
         bump(conv.id);
-        if (activeId === conv.id && document.visibilityState === 'visible') {
+        // The open conversation is fetched and shown even on a hidden page (a window behind
+        // another, a background tab): only marking it read waits for the page to be seen
+        if (activeId === conv.id) {
             sync(conv);
         } else {
             scheduleRefresh();
@@ -1471,8 +1480,7 @@ const Chat = (() => {
     // sliding), then looks again. It keeps fetching until a stream event arrives; a hidden page
     // fetches nothing (onVisible resyncs when it is shown).
     async function watchStream() {
-        const visible = document.visibilityState === 'visible';
-        if (streamNeedsPolling(performance.now(), lastStreamEventAt, streamLimitMs, visible, me !== null)) {
+        if (streamNeedsPolling(performance.now(), lastStreamEventAt, streamLimitMs, isPageVisible(), me !== null)) {
             if (!polling) Log.warn(Errors.INTERNAL.W_LIVE_STREAM_SILENT);
             polling = true;
             await resync(true);
@@ -1497,7 +1505,7 @@ const Chat = (() => {
     }
 
     function onVisible() {
-        if (!me || document.visibilityState !== 'visible') return;
+        if (!me || !isPageVisible()) return;
         if (!events) {
             reconnectAttempts = 0;
             connectEvents();

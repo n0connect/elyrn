@@ -254,7 +254,7 @@ data: {}
 - When a message arrives, the server emits a lightweight poke containing only the `conversation_id`.
 - The client receives the poke and refetches the message list via authorized `GET /api/v2/conversations/{id}/messages`.
 - **Advantage:** Exactly one authorized code path evaluates access control and message decryption.
-- `ping` is the heartbeat: once right after the `: ready` preamble, then every 25 seconds. It is a named event so the browser can observe it: a new stream that shows nothing within 5 seconds, or a proven one silent for 60 seconds (a proxy buffering or holding it), makes the visible tab poll the same refetch path about every 5 seconds until an event arrives again.
+- `ping` is the heartbeat: once right after the `: ready` preamble, then every 10 seconds. It is a named event so the browser can observe it: a new stream that shows nothing within 5 seconds, or a proven one silent for 25 seconds (a proxy buffering or holding it), makes the visible tab poll the same refetch path about every 5 seconds until an event arrives again.
 
 ---
 

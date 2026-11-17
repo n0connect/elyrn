@@ -123,7 +123,7 @@ server {
         proxy_set_header X-Forwarded-For $remote_addr;   # replace, never append
         proxy_set_header X-Forwarded-Proto https;
         proxy_buffering off;                      # the event stream (/api/v2/events) must not wait in a buffer
-        proxy_read_timeout 15m;                   # a stream lives up to 10 minutes, with a ping every 25 s
+        proxy_read_timeout 15m;                   # a stream lives up to 10 minutes, with a ping every 10 s
     }
 }
 ```
@@ -131,6 +131,14 @@ server {
 What the proxy must keep: one origin for the page and `/api/` (the backend refuses cross-origin
 writes), no buffering of `/api/v2/events`, and request bodies (the largest is under 8 KiB). Its
 own logs see every client address: switch them off or keep them as short as you can.
+
+**The event stream must pass unbuffered.** A proxy that buffers `/api/v2/events` holds every
+event until its buffer fills or the stream ends, so new messages wait. The stack's nginx answers
+the stream with `X-Accel-Buffering: no`, which an nginx in front honours by itself; any other
+proxy (a CDN, a cloud load balancer, a tunnel) must be told not to buffer that path in its own
+settings. When a proxy holds the stream anyway, the page notices within 25 seconds of silence
+(the server sends a `ping` every 10 s) and fetches its updates about every 5 seconds until the
+stream delivers again, so messages arrive late rather than never.
 
 **Client address and protocol.** nginx inside the stack takes the client address from
 `X-Forwarded-For` and the protocol (`http` or `https`) from `X-Forwarded-Proto` only for a

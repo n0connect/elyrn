@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../js/crypto.js', import.meta.url), 'utf8');
-const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa });
+const context = vm.createContext({ crypto: globalThis.crypto, CryptoKey: globalThis.CryptoKey, TextEncoder, TextDecoder, atob, btoa });
 const C = vm.runInContext(source + '\n;ElyrnCrypto', context);
 
 // Same vector as backend/tests/identity/identity_test.go
@@ -37,6 +37,75 @@ test('identity public key matches Go derivation; private key is not extractable'
 test('strict base64url rejects malformed account numbers', async () => {
     for (const bad of ['', ACCOUNT.slice(1), ACCOUNT + 'A', ACCOUNT.slice(0, -1) + '+', ACCOUNT.slice(0, -1) + '9']) {
         await assert.rejects(C.deriveAuthKey(bad));
+    }
+});
+
+// The shared secret privateKey makes with peerPublicKey, read out through the real WebCrypto
+async function sharedWith(privateKey, peerPublicKey) {
+    const peer = await crypto.subtle.importKey('raw', C.b64urlDecode(peerPublicKey, 32), { name: 'X25519' }, false, []);
+    return new Uint8Array(await crypto.subtle.deriveBits({ name: 'X25519', public: peer }, privateKey, 256));
+}
+
+test('only a kept session derives the sealed form; it opens to the same non-extractable key', async () => {
+    assert.equal((await C.deriveIdentity(ACCOUNT)).sealed, undefined);
+    const id = await C.deriveIdentity(ACCOUNT, true);
+    const b = await C.deriveIdentity(B_ACCOUNT);
+    assert.equal(id.publicKey, GO_PUBLIC_KEY);
+    assert.equal(id.sealed.deviceKey.extractable, false);
+    assert.deepEqual([...id.sealed.deviceKey.usages].sort(), ['unwrapKey', 'wrapKey']);
+    const opened = await C.unsealIdentity(id.sealed, id.publicKey);
+    assert.equal(opened.extractable, false);
+    assert.equal(opened.algorithm.name, 'X25519');
+    assert.deepEqual([...opened.usages], ['deriveBits']);
+    assert.deepEqual(await sharedWith(opened, b.publicKey), await sharedWith(id.privateKey, b.publicKey));
+});
+
+test('each seal has its own device key and nonce', async () => {
+    const one = (await C.deriveIdentity(ACCOUNT, true)).sealed;
+    const two = (await C.deriveIdentity(ACCOUNT, true)).sealed;
+    assert.notDeepEqual([...one.iv], [...two.iv]);
+    assert.notDeepEqual([...one.wrapped], [...two.wrapped]);
+    await assert.rejects(C.unsealIdentity({ deviceKey: two.deviceKey, iv: one.iv, wrapped: one.wrapped }, GO_PUBLIC_KEY));
+});
+
+test('a sealed identity opens for its own public key only, and never once altered', async () => {
+    const id = await C.deriveIdentity(ACCOUNT, true);
+    const other = (await C.deriveIdentity(B_ACCOUNT)).publicKey;
+    const { deviceKey, iv, wrapped } = id.sealed;
+    // The AAD binds the blob to one identity: moved under another public key it does not open
+    await assert.rejects(C.unsealIdentity(id.sealed, other));
+    for (let i = 0; i < wrapped.length; i += 7) {
+        const flipped = wrapped.slice();
+        flipped[i] ^= 1;
+        await assert.rejects(C.unsealIdentity({ deviceKey, iv, wrapped: flipped }, id.publicKey), `byte ${i}`);
+    }
+    const nonce = iv.slice();
+    nonce[0] ^= 1;
+    await assert.rejects(C.unsealIdentity({ deviceKey, iv: nonce, wrapped }, id.publicKey));
+});
+
+test('anything but the exact sealed shape is refused before any key is touched', async () => {
+    const id = await C.deriveIdentity(ACCOUNT, true);
+    const { deviceKey, iv, wrapped } = id.sealed;
+    const extractable = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['wrapKey', 'unwrapKey']);
+    const encryptOnly = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const hostile = [
+        null, undefined, 0, 'sealed', [], {},
+        { deviceKey: null, iv, wrapped },
+        { deviceKey: extractable, iv, wrapped },
+        { deviceKey: encryptOnly, iv, wrapped },
+        { deviceKey: id.privateKey, iv, wrapped },
+        { deviceKey, iv: iv.slice(1), wrapped },
+        { deviceKey, iv: [...iv], wrapped },
+        { deviceKey, iv, wrapped: wrapped.slice(1) },
+        { deviceKey, iv, wrapped: C.concat(wrapped, [0]) },
+        { deviceKey, iv, wrapped: C.b64urlEncode(wrapped) }
+    ];
+    for (const sealed of hostile) {
+        await assert.rejects(C.unsealIdentity(sealed, id.publicKey));
+    }
+    for (const publicKey of [undefined, '', 'x', id.publicKey + 'A', 42]) {
+        await assert.rejects(C.unsealIdentity(id.sealed, publicKey));
     }
 });
 

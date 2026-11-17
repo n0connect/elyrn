@@ -593,10 +593,11 @@ One stored part, to a member of the conversation. `part` is required.
 Opens an unbuffered, content-free SSE stream.
 
 - **Headers:** `Accept: text/event-stream`
+- **Response headers:** `Content-Type: text/event-stream` and `X-Accel-Buffering: no`, which the stack's nginx passes on so an nginx in front of it does not buffer the stream either ([Deployment](../operations/deployment.md)).
 - **Stream Events:**
   - `event: msg` with `data: {"c": "<conversation_id>"}` (signals a new message arrived).
   - `event: conv` with `data: {}` (signals the conversation list, a room's members, or the caller's notes changed).
-  - `event: ping` with `data: {}` (heartbeat: sent once right after the `retry: 3000` / `: ready` preamble, which always comes first, then every 25 seconds). It is a named event, not an SSE comment, so the browser can see that the stream is being delivered. The web client treats a stream as held by a proxy when a new connection shows no event within 5 seconds, or a stream that already delivered one then goes 60 seconds without any; it then fetches its updates about every 5 seconds while the tab is visible, until an event arrives again (`frontend/js/chat.js`: `STREAM_FIRST_PROOF_MS`, `STREAM_SILENCE_LIMIT_MS`, `POLL_INTERVAL_MS`). Clients must ignore event names they do not know.
+  - `event: ping` with `data: {}` (heartbeat: sent once right after the `retry: 3000` / `: ready` preamble, which always comes first, then every 10 seconds). It is a named event, not an SSE comment, so the browser can see that the stream is being delivered. The web client treats a stream as held by a proxy when a new connection shows no event within 5 seconds, or a stream that already delivered one then goes 25 seconds without any; it then fetches its updates about every 5 seconds while the tab is visible, until an event arrives again (`frontend/js/chat.js`: `STREAM_FIRST_PROOF_MS`, `STREAM_SILENCE_LIMIT_MS`, `POLL_INTERVAL_MS`). Clients must ignore event names they do not know.
 - **Authentication:** Validated via session cookie. If session is revoked, the stream closes with `401 Unauthorized`.
 - **Limits:** `429` when the account already holds 4 streams, the caller's network (IPv4 address, IPv6 /64 or Tor circuit) holds 16, or the server holds 4,096.
 

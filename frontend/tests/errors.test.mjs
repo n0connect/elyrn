@@ -121,6 +121,11 @@ test('wave 2 codes exist with the severity they are reported at', () => {
     for (const code of ['W_RESPONSE_TOO_LARGE', 'W_COUNTER_LOCK_UNAVAILABLE', 'W_COUNTER_RECORDS_EVICTED']) {
         assert.equal(Errors.INTERNAL[code], code);
     }
+    // The identity kept on this device (keystore.js): one told, one logged
+    assert.equal(C.W_IDENTITY_NOT_KEPT, 'W_IDENTITY_NOT_KEPT');
+    assert.equal(Errors.REGISTRY.W_IDENTITY_NOT_KEPT.severity, 'warning');
+    assert.match(Errors.REGISTRY.W_IDENTITY_NOT_KEPT.text, /account number/);
+    assert.equal(Errors.INTERNAL.W_IDENTITY_UNREADABLE, 'W_IDENTITY_UNREADABLE');
     // A room judged expired by this device's clock names the clock
     assert.match(Errors.REGISTRY.E_ROOM_CODE_EXPIRED.text, /device clock/);
     assert.match(Errors.REGISTRY.W_ROOM_EXPIRED.text, /device clock/);

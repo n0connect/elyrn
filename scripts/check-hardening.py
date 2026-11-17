@@ -136,6 +136,10 @@ NGINX_OWNED_HEADERS = {
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "same-origin",
 }
+# The event stream's location: unbuffered here, and an outer proxy is told so (the backend's
+# X-Accel-Buffering passed on); an add_header there would drop the server's security headers
+EVENTS_LOCATION = "location = /api/v2/events {"
+EVENTS_STREAM_LINES = ("proxy_buffering off;", "proxy_pass_header X-Accel-Buffering;")
 # Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
 NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
 # Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
@@ -320,6 +324,22 @@ def check_nginx():
         fail("nginx", "registered edge answers nginx never returns: " + ", ".join(sorted(missing)))
     check_error_page_statuses(site + "\n" + errors, answers)
     check_status_pages(site)
+    check_events_location(site)
+
+
+def check_events_location(site):
+    """The stream passes no proxy unbuffered: this nginx does not buffer it, and an outer one is
+    told not to by the X-Accel-Buffering field this nginx would otherwise swallow."""
+    blocks = [b for b in re.split(r"\n(?=location )", site) if b.startswith(EVENTS_LOCATION)]
+    if len(blocks) != 1:
+        fail("nginx", f"nginx-site.conf must have exactly one '{EVENTS_LOCATION}' location")
+        return
+    lines = {line.strip() for line in blocks[0].splitlines()}
+    for line in EVENTS_STREAM_LINES:
+        if line not in lines:
+            fail("nginx", f"the event stream location must keep '{line}'")
+    if any(line.startswith("add_header") for line in lines):
+        fail("nginx", "no add_header in the event stream location: it would drop the server's headers")
 
 
 def check_error_page_statuses(config, answers):

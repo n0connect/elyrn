@@ -95,6 +95,17 @@ const cryptoKey = await window.crypto.subtle.importKey(
 ```
 **Security Property:** `extractable: false` means that once imported, no script on the page can export the raw private key bytes. It can still *use* the key while it runs, and the account number itself passes through the page when it is typed: a page that runs hostile code (a modified client, a malicious extension) is not protected by this. See [Verifying the Client](verifying-the-client.md).
 
+### 3. The Identity Kept Across Reloads (IndexedDB)
+
+So that a reload does not ask for the account number again, the browser keeps the identity in IndexedDB (`frontend/js/keystore.js`), in one of two forms. Which one is decided at every save by what this browser proves it can read back, never by its name: `Keystore.save` stores the form, reads it back in a new transaction through the same code the next page load uses, and keeps the first form that gives the identity back.
+
+| Form | Kept | Engines (Nov 2026) | At rest |
+|---|---|---|---|
+| direct | the non-extractable X25519 `CryptoKey`, its public key, the rooms root | Chromium (checked Nov 2026), and any engine that reads an X25519 key back | No script, not even one running in this origin, can obtain the private key bytes from what is stored. |
+| sealed | a device key (AES-256-GCM, generated non-extractable, usages `wrapKey` and `unwrapKey` only), the identity's PKCS#8 wrapped under it (`wrapKey`, a random 12-byte IV, AAD = `"NAID"` ‖ version `0x01` ‖ the identity's 32-byte public key), its public key, the rooms root | WebKit (Safari): it stores an X25519 `CryptoKey` without error and cannot read it back, while AES keys round-trip | The honest page unwraps straight into a non-extractable X25519 key (`ElyrnCrypto.unsealIdentity`), so the private key bytes never reach its script. Script running in this origin could call `unwrapKey` itself with `extractable: true` and read the key. |
+
+The wrapped form is made at login, from the one moment the identity key is extractable (`crypto.js` `x25519FromSeed` reads the public key from it), and only for a session the browser keeps; no plaintext PKCS#8 or seed is ever stored or logged, and the buffers that held them are overwritten. The AAD binds a wrapped blob to one public key, so it cannot be opened as another identity. When neither form reads back, nothing is kept and the page says so once (`W_IDENTITY_NOT_KEPT`): the account number is needed after a reload. A record that is stored but gives no identity at load (an engine that cannot read it back, a damaged record) is logged (`W_IDENTITY_UNREADABLE`) and the page opens logged out; the next login replaces it.
+
 ---
 
 ## Pairwise Messaging Encryption
