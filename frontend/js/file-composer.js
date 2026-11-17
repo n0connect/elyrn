@@ -33,7 +33,8 @@ const FileComposer = (() => {
             if (activeConversation() && !busy()) el('fileInput').click();
         });
         el('fileInput').addEventListener('change', () => {
-            const files = el('fileInput').files;
+            // Copied first: emptying the input empties its file list too (WebKit)
+            const files = Array.from(el('fileInput').files || []);
             el('fileInput').value = '';
             choose(files);
         });
@@ -42,7 +43,7 @@ const FileComposer = (() => {
             const files = event.clipboardData && event.clipboardData.files;
             if (!files || files.length === 0) return;
             event.preventDefault();
-            choose(files);
+            choose(Array.from(files));
         });
         const target = el('chatView');
         target.addEventListener('dragover', event => {
@@ -51,7 +52,7 @@ const FileComposer = (() => {
         target.addEventListener('drop', event => {
             if (!event.dataTransfer || event.dataTransfer.files.length === 0) return;
             event.preventDefault();
-            choose(event.dataTransfer.files);
+            choose(Array.from(event.dataTransfer.files));
         });
     }
 
