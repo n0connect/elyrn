@@ -192,6 +192,26 @@ test('downloads: a missing part is gone; a malformed, misplaced or altered part,
     assert.equal((await download({ ...one.file, size: 2 * PART + 1 })).ok, false);
 });
 
+test('the server\'s request limit is waited out on later parts and on downloads, never on part 0', async () => {
+    let limited = 0;
+    behave((seen) => {
+        const later = seen.method === 'GET' || JSON.parse(seen.body).part > 0;
+        if (later && limited < 2) {
+            limited++;
+            return { status: 429, text: 'Too many requests\n', type: 'text/plain' };
+        }
+        return null;
+    });
+    const one = await newFile(2 * PART);
+    assert.equal((await upload(one)).ok, true);
+    assert.equal(limited, 2);
+    limited = 0;
+    const down = await download(one.file);
+    assert.equal(down.ok, true);
+    assert.equal(limited, 2);
+    assert.deepEqual(down.bytes, one.bytes);
+});
+
 test('downloads: answers of the wrong shape are unreadable; lost answers are tried again, then stop', async () => {
     const one = await newFile(10);
     for (const body of [{ data: 5 }, { data: 'x' }, { data: null }, [], { data: 'A'.repeat(F.SEALED_PART_CHARS), extra: 1 }, MARKUP[0]]) {

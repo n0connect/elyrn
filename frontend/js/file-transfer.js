@@ -22,6 +22,12 @@ const FileTransfer = (() => {
     // Tries per part before the transfer stops, and the first pause between them (doubled each time)
     const PART_ATTEMPTS = 3;
     const RETRY_BASE_MS = 1000;
+    // The server's request limit (429 without a file sentence) is a pace, not a failure: past
+    // part 0 of an upload and on every download the transfer waits this long and asks again (the
+    // server's default bucket gives back one request every 3 s, RATE_LIMIT_REFILL_INTERVAL_SEC),
+    // at most RATE_PAUSES times per transfer
+    const RATE_PAUSE_MS = 3000;
+    const RATE_PAUSES = 120;
     const CREATED = 201;
     const CONFLICT = 409;
     const NOT_FOUND = 404;
@@ -45,16 +51,28 @@ const FileTransfer = (() => {
         return result.status === 0 || result.status >= SERVER_ERROR;
     }
 
-    // One request with its retries: the last result, or null when cancelled meanwhile
-    async function withRetries(request, cancelled) {
+    // A request limit answer the transfer waits out: a 429 that is not the daily file budget
+    function paced(result) {
+        return result.status === TOO_MANY && Errors.fromResult(result) !== Errors.CODES.W_FILE_BUDGET_SPENT;
+    }
+
+    // One request with its retries: the last result, or null when cancelled meanwhile. pace:
+    // { left } when request limits are waited out (shared by the whole transfer), else null.
+    async function withRetries(request, cancelled, pace) {
         let result = null;
-        for (let attempt = 0; attempt < PART_ATTEMPTS; attempt++) {
-            if (attempt > 0) {
+        let attempt = 0;
+        while (attempt < PART_ATTEMPTS) {
+            if (result) {
                 Log.warn(Errors.INTERNAL.W_FILE_PART_RETRIED, result);
-                await pause(RETRY_BASE_MS * 2 ** (attempt - 1));
+                await pause(paced(result) ? RATE_PAUSE_MS : RETRY_BASE_MS * 2 ** (attempt - 1));
                 if (cancelled()) return null;
             }
             result = await request();
+            if (pace && paced(result) && pace.left > 0) {
+                pace.left--;
+                continue;
+            }
+            attempt++;
             if (!transient(result)) break;
         }
         return result;
@@ -89,10 +107,13 @@ const FileTransfer = (() => {
     // { ok: true } or { ok: false, code, next (the first part not stored), restart, quiet }.
     async function upload({ api, conversationId, file, bytes, from = 0, onProgress, cancelled }) {
         const parts = F.partCount(file.size);
+        const pace = { left: RATE_PAUSES };
         for (let index = from; index < parts; index++) {
             if (cancelled()) return { ...CANCELLED, next: index };
             const data = await F.sealPart({ conversationId, file, bytes, index });
-            const result = await withRetries(() => api('POST', filesPath(conversationId), { id: file.id, part: index, data }), cancelled);
+            // Part 0 takes a token of the "new files" bucket: its 429 is an answer, not a pace
+            const result = await withRetries(() => api('POST', filesPath(conversationId), { id: file.id, part: index, data }),
+                cancelled, index > 0 ? pace : null);
             if (!result) return { ...CANCELLED, next: index };
             if (result.status !== CREATED && !storedBefore(result)) {
                 return { ok: false, next: index, restart: false, quiet: false, ...refusal(result) };
@@ -117,13 +138,14 @@ const FileTransfer = (() => {
     async function download({ api, conversationId, file, onProgress, cancelled }) {
         const parts = F.partCount(file.size);
         const into = new Uint8Array(file.size);
+        const pace = { left: RATE_PAUSES };
         const fail = (code, quiet = false) => {
             into.fill(0);
             return { ok: false, code, quiet };
         };
         for (let index = 0; index < parts; index++) {
             if (cancelled()) return fail(CANCELLED.code, true);
-            const result = await withRetries(() => api('GET', `${filesPath(conversationId)}/${file.id}?part=${index}`), cancelled);
+            const result = await withRetries(() => api('GET', `${filesPath(conversationId)}/${file.id}?part=${index}`), cancelled, pace);
             if (!result) return fail(CANCELLED.code, true);
             if (result.status === UNAUTHORIZED) return fail(null, true);
             if (result.status === NOT_FOUND) return fail(Errors.CODES.W_FILE_GONE);
@@ -141,5 +163,5 @@ const FileTransfer = (() => {
         return { ok: true, bytes: into };
     }
 
-    return Object.freeze({ PART_ATTEMPTS, RETRY_BASE_MS, upload, download });
+    return Object.freeze({ PART_ATTEMPTS, RETRY_BASE_MS, RATE_PAUSE_MS, upload, download });
 })();
