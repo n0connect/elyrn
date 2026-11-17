@@ -109,10 +109,6 @@ func portNumber(raw string) int {
 // startupBounds is the range of every numeric setting. It holds data only, one row per
 // setting, so it is kept as one linear table (RULES.md 7.1 exception for data initialization).
 func startupBounds(minJWTLen int) []bounded[int] {
-	argon2Floor := config.MinArgon2MemoryKiB
-	if config.IsProductionMode() {
-		argon2Floor = config.ProductionMinArgon2MemoryKiB
-	}
 	return []bounded[int]{
 		{config.EnvJWTSecretMinLen, minJWTLen, config.MinJWTSecretMinLen, config.MaxJWTSecretMinLen},
 		{config.EnvJWTExpirationMinutes, int(config.GetJWTExpiration() / time.Minute), config.MinJWTExpirationMinutes, config.MaxJWTExpirationMinutes},
@@ -129,12 +125,6 @@ func startupBounds(minJWTLen int) []bounded[int] {
 		{config.EnvPoWChallengeTTLSeconds, seconds(config.GetPoWChallengeTTL()), minCount, config.MaxPoWChallengeTTLSeconds},
 		{config.EnvPoWDifficulty, config.GetPoWDifficulty(), config.MinPoWDifficulty(), config.MaxPoWDifficulty()},
 		{config.EnvInternalIDLength, config.GetInternalIDLength(), config.MinInternalIDLength, config.MaxInternalIDLength},
-		{config.EnvArgon2MemoryKiB, config.GetArgon2MemoryKiB(), argon2Floor, config.MaxArgon2MemoryKiB},
-		{config.EnvArgon2Time, config.GetArgon2Time(), config.MinArgon2Time, config.MaxArgon2Time},
-		{config.EnvArgon2Parallelism, config.GetArgon2Parallelism(), config.MinArgon2Parallelism, config.MaxArgon2Parallelism},
-		{config.EnvArgon2SaltLength, config.GetArgon2SaltLength(), config.MinArgon2SaltBytes, config.MaxArgon2SaltBytes},
-		{config.EnvArgon2HashLength, config.GetArgon2HashLength(), config.MinArgon2HashBytes, config.MaxArgon2HashBytes},
-		{config.EnvArgon2MaxConcurrent, config.GetArgon2MaxConcurrent(), minCount, config.MaxArgon2ConcurrentBound},
 		{config.EnvPendingTokenTTLSeconds, seconds(config.GetPendingTokenTTL()), config.MinPendingTokenTTLSeconds, config.MaxPendingTokenTTLSeconds},
 		{config.EnvPendingCleanupIntervalSeconds, seconds(config.GetPendingCleanupInterval()), minCount, config.MaxPendingCleanupSeconds},
 		{config.EnvPendingIDBytes, config.GetPendingIDBytes(), config.MinPendingIDBytes, config.MaxPendingIDBytes},

@@ -9,13 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"elyrn/internal/auth"
 	"elyrn/internal/chat"
 	"elyrn/internal/config"
 	"elyrn/internal/database"
 	"elyrn/internal/identity"
 	"elyrn/internal/models"
-	"elyrn/tests/testutil"
 )
 
 func TestRegisterAndLogin_UsesDerivedAuthKeyOnly(t *testing.T) {
@@ -535,19 +533,4 @@ func waitFor(t *testing.T, lines <-chan string, want string) {
 
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
-}
-
-// Login runs no Argon2id (S-02): with every Argon2id slot held, a registered account still
-// logs in and an unknown key still gets the ordinary 401, so a flood of Argon2id work
-// (registration phase 2) cannot lock anyone out of an existing account.
-func TestLogin_IgnoresArgon2Saturation(t *testing.T) {
-	mux := setup(t)
-	alice := register(t, mux)
-
-	release := auth.HoldArgon2SlotsForTesting()
-	defer release()
-	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: alice.authKey}),
-		http.StatusOK, "login while Argon2id is saturated: registered account")
-	expectStatus(t, newClient(t, mux).do("POST", "/api/v2/login", models.LoginRequest{AuthKey: testutil.NewAuthKey(t)}),
-		http.StatusUnauthorized, "login while Argon2id is saturated: unknown key")
 }

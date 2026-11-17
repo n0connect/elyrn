@@ -19,7 +19,6 @@ type engine interface {
 	SHA256(data []byte) ([]byte, error)
 	HMACSHA256(key, data []byte) ([]byte, error)
 	Equal(a, b []byte) bool
-	Argon2id(password, salt []byte, timeCost, memoryKiB, lanes, keyLen uint32) ([]byte, error)
 	HKDFSHA256(ikm, salt, info []byte, length int) ([]byte, error)
 	SealAES256GCM(key, nonce, plaintext, aad []byte) ([]byte, error)
 	OpenAES256GCM(key, nonce, sealed, aad []byte) ([]byte, error)
@@ -30,15 +29,6 @@ type engine interface {
 var (
 	errInvalidInput = errors.New("cryptoengine: invalid input")
 	errDecrypt      = errors.New("decryption failed")
-)
-
-// Argon2id limits (RFC 9106): at least 8 KiB of memory per lane, 1-255 lanes, 4+ byte tags.
-const (
-	minArgon2Lanes    = 1
-	maxArgon2Lanes    = 255
-	minArgon2KeyBytes = 4
-	// minArgon2MemoryKiBPerLane: memory is at least 8 KiB times the lanes
-	minArgon2MemoryKiBPerLane = 8
 )
 
 // EngineName reports the engine compiled into this binary ("openssl" or "native").
@@ -81,16 +71,6 @@ func ConstantTimeEqual(a, b []byte) bool {
 		return true
 	}
 	return active.Equal(a, b)
-}
-
-// Argon2idKey derives keyLen bytes with Argon2id v1.3 (RFC 9106). Out-of-range parameters
-// are refused rather than adjusted, so both engines always run the same computation.
-func Argon2idKey(password, salt []byte, iterations, memory, lanes, keyLen uint32) ([]byte, error) {
-	if len(password) == 0 || len(salt) == 0 || iterations == 0 || keyLen < minArgon2KeyBytes ||
-		lanes < minArgon2Lanes || lanes > maxArgon2Lanes || memory < minArgon2MemoryKiBPerLane*lanes {
-		return nil, errInvalidInput
-	}
-	return active.Argon2id(password, salt, iterations, memory, lanes, keyLen)
 }
 
 // HKDFSHA256 derives outLen bytes with HKDF-SHA256 (RFC 5869).

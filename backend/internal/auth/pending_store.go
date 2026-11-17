@@ -123,7 +123,7 @@ func StorePendingRegistration(pendingID string, pending PendingIdentity) error {
 
 // PendingRegistration returns the identity waiting under pendingID without using it up: the
 // user has already saved the account number, so a phase 2 that fails for a passing reason
-// (database outage, saturated Argon2id) can be retried until the entry expires.
+// (database outage) can be retried until the entry expires.
 // Write lock: an expired entry is removed on the spot.
 func PendingRegistration(pendingID string) (PendingIdentity, error) {
 	pendingStore.mu.Lock()

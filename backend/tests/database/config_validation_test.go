@@ -39,12 +39,6 @@ func TestValidateStartupConfig_RejectsOutOfRangeValues(t *testing.T) {
 	}
 
 	cases := map[string][2]string{
-		"argon2 lanes overflow uint8":   {"ARGON2_PARALLELISM", "256"},
-		"argon2 memory over 1 GiB":      {"ARGON2_MEMORY_KIB", "2097152"},
-		"argon2 memory below floor":     {"ARGON2_MEMORY_KIB", "64"},
-		"argon2 time over bound":        {"ARGON2_TIME", "1000"},
-		"argon2 salt too short":         {"ARGON2_SALT_LENGTH", "8"},
-		"argon2 hash too short":         {"ARGON2_HASH_LENGTH", "8"},
 		"jwt min length below 32":       {"JWT_SECRET_MIN_LEN", "8"},
 		"jwt secret below 32 bytes":     {"JWT_SECRET", testutil.NewAuthKey(t)[:16]},
 		"internal id beyond column":     {"INTERNAL_ID_LENGTH", "40"},
@@ -237,24 +231,21 @@ func describe(settings map[string]string) string {
 	return strings.Join(pairs, ",")
 }
 
-// Production mode raises the floors: verified TLS to the database and OWASP Argon2 memory.
+// Production mode raises the floors: verified TLS to the database and a strong database password.
 func TestValidateStartupConfig_ProductionFloors(t *testing.T) {
 	testutil.SetupTestEnv(t)
 	defer testutil.TeardownTestEnv(t)
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("DB_SSL_MODE", "verify-full")
-	t.Setenv("ARGON2_MEMORY_KIB", "65536")
-	t.Setenv("ARGON2_TIME", "3")
 	t.Setenv("DB_PASSWORD", testutil.NewAuthKey(t))
 	if err := validate(t); err != nil {
 		t.Fatalf("hardened production configuration rejected: %v", err)
 	}
 
 	for name, c := range map[string][2]string{
-		"plaintext database link":    {"DB_SSL_MODE", "disable"},
-		"unauthenticated tls":        {"DB_SSL_MODE", "require"},
-		"argon2 below owasp minimum": {"ARGON2_MEMORY_KIB", "16384"},
-		"default database password":  {"DB_PASSWORD", "postgres"},
+		"plaintext database link":   {"DB_SSL_MODE", "disable"},
+		"unauthenticated tls":       {"DB_SSL_MODE", "require"},
+		"default database password": {"DB_PASSWORD", "postgres"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(c[0], c[1])
@@ -345,12 +336,6 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 		{"POW_CHALLENGE_TTL_SEC", "leak-pow-ttl", false},
 		{"POW_DIFFICULTY", "leak-pow-difficulty", false},
 		{"INTERNAL_ID_LENGTH", "leak-id-length", false},
-		{"ARGON2_MEMORY_KIB", "leak-argon2-memory", false},
-		{"ARGON2_TIME", "leak-argon2-time", false},
-		{"ARGON2_PARALLELISM", "leak-argon2-lanes", false},
-		{"ARGON2_SALT_LENGTH", "leak-argon2-salt", false},
-		{"ARGON2_HASH_LENGTH", "leak-argon2-hash", false},
-		{"ARGON2_MAX_CONCURRENT", "leak-argon2-slots", false},
 		{"PENDING_TOKEN_TTL_SEC", "leak-pending-ttl", false},
 		{"PENDING_CLEANUP_INTERVAL_SEC", "leak-pending-cleanup", false},
 		{"PENDING_ID_BYTES", "leak-pending-id", false},
@@ -376,7 +361,6 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 			if c.production {
 				t.Setenv("APP_ENV", "production")
 				t.Setenv("DB_SSL_MODE", "verify-full")
-				t.Setenv("ARGON2_MEMORY_KIB", "65536")
 				t.Setenv("DB_PASSWORD", testutil.NewAuthKey(t))
 			}
 			t.Setenv(c.variable, c.value)

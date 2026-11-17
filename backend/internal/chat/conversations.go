@@ -190,7 +190,7 @@ func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]stri
 // conversation it is in (all ciphertext, for both sides; rooms it owns likewise, rooms it
 // joined it only leaves) and the account row. Returns the
 // peers' live-event addresses. The key is checked against the locked row that is deleted; the
-// lookup is HMAC(pepper, auth key), so a match proves the key without an Argon2 run.
+// lookup is HMAC(pepper, auth key), so a match proves the key without any slow hash.
 // Lock order is RedeemInvite's (invites, then users), so the invites go first; a wrong key
 // rolls the whole transaction back. Peers' rows are left unlocked: their encrypted indexes
 // drop the vanished conversations at their next listing (pruneIndex).

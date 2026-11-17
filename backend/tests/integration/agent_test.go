@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,6 @@ import (
 
 	"elyrn/internal/agent"
 	"elyrn/internal/apperr"
-	"elyrn/internal/auth"
 	"elyrn/internal/chat"
 	"elyrn/internal/e2e"
 	"elyrn/internal/identity"
@@ -418,15 +418,39 @@ func TestAgent_CountersSurviveARestartAfterTheirMessagesExpired(t *testing.T) {
 	}
 }
 
-// A-02: registration phase 2 fails (the server is saturated); the identity file keeps the
+// refusingConfirmations serves mux, but answers every registration phase 2 with 503
+// E_STORE_UNAVAILABLE while refusing is set: a server that cannot finish registrations.
+func refusingConfirmations(t *testing.T, mux http.Handler, refusing *atomic.Bool) *httptest.Server {
+	t.Helper()
+	return hostileServer(t, mux, func(w http.ResponseWriter, r *http.Request) bool {
+		if !refusing.Load() || r.Method != http.MethodPost || r.URL.Path != models.PathRegister {
+			return false
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read the registration: %v", err)
+			return false
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var req models.RegisterRequest
+		if json.Unmarshal(body, &req) != nil || !req.Confirm {
+			return false
+		}
+		apperr.Write(w, "refusingConfirmations", apperr.StoreUnavailable)
+		return true
+	})
+}
+
+// A-02: registration phase 2 fails (the server answers 503); the identity file keeps the
 // pending token, and the next run finishes the registration while the server still holds it.
 func TestAgent_AnUnconfirmedRegistrationIsFinishedByTheNextRun(t *testing.T) {
-	srv := clientServer(t, setup(t))
+	var refusing atomic.Bool
+	refusing.Store(true)
+	srv := refusingConfirmations(t, setup(t), &refusing)
 	path := newIdentityPath(t.TempDir(), "robot")
 	robot := newAgent(t, srv.URL, path)
-	release := auth.HoldArgon2SlotsForTesting()
 	_, err := robot.Identity(context.Background())
-	release()
+	refusing.Store(false)
 	if agent.CodeOf(err) != agent.CodeServerBusy {
 		t.Fatalf("Identity on a saturated server: %v, want %s", err, agent.CodeServerBusy)
 	}
@@ -448,14 +472,15 @@ func TestAgent_AnUnconfirmedRegistrationIsFinishedByTheNextRun(t *testing.T) {
 // A-02: when the server no longer holds the registration, the agent says the identity was never
 // confirmed (and can be replaced without loss), not that the server forgot an account.
 func TestAgent_AnExpiredRegistrationSaysItWasNeverConfirmed(t *testing.T) {
-	srv := clientServer(t, setup(t))
+	var refusing atomic.Bool
+	refusing.Store(true)
+	srv := refusingConfirmations(t, setup(t), &refusing)
 	t.Setenv("PENDING_TOKEN_TTL_SEC", "1")
 	path := newIdentityPath(t.TempDir(), "robot")
 	robot := newAgent(t, srv.URL, path)
-	release := auth.HoldArgon2SlotsForTesting()
 	_, err := robot.Identity(context.Background())
-	release()
-	// Saturated until the end, or the registration already expired between two retries
+	refusing.Store(false)
+	// Refused until the end, or the registration already expired between two retries
 	if code := agent.CodeOf(err); code != agent.CodeServerBusy && code != agent.CodeIdentityUnconfirmed {
 		t.Fatalf("Identity on a saturated server: %v", err)
 	}

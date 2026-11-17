@@ -46,7 +46,6 @@ const (
 	PoWCapacity
 	RateLimited
 	SubscriberLimit
-	Argon2Busy
 	PendingStoreFull
 	StoreUnavailable
 	ShuttingDown
@@ -163,12 +162,10 @@ var registry = map[Code]entry{
 	RateLimited:     {"E_RATE_LIMITED", http.StatusTooManyRequests, sayTooManyRequests, utils.LogLevelWARN, shapeText},
 	SubscriberLimit: {"E_SUBSCRIBER_LIMIT", http.StatusTooManyRequests, sayTooManyRequests, utils.LogLevelWARN, shapeText},
 	LimitReached:    {"E_LIMIT_REACHED", http.StatusTooManyRequests, sayTooManyRequests, utils.LogLevelWARN, shapeText},
-	// MERGE (all 503 "Service unavailable"): a full PoW issuer or spent-challenge set,
-	// saturated Argon2id slots (registration phase 2 only; login runs no Argon2id), a full
+	// MERGE (all 503 "Service unavailable"): a full PoW issuer or spent-challenge set, a full
 	// pending-registration store and a database that is unreachable, restarting, out of
 	// connections or too slow (store.ErrUnavailable, on every route; login included)
 	PoWCapacity:      {"E_POW_CAPACITY", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
-	Argon2Busy:       {"E_ARGON2_BUSY", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
 	PendingStoreFull: {"E_PENDING_STORE_FULL", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelWARN, shapeText},
 	StoreUnavailable: {"E_STORE_UNAVAILABLE", http.StatusServiceUnavailable, sayUnavailable, utils.LogLevelERROR, shapeText},
 	// MERGE: a request that reached the server while it closes its master keys (shutdown) is
