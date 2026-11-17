@@ -33,7 +33,8 @@ export function homoglyph(text) {
 }
 
 // A hostile server: every request is recorded ({ method, path, body }) and answered by the
-// current script, which returns { status, body } (JSON) or { status, text, type } (anything else)
+// current script, which returns { status, body } (JSON), { status, text, type } (anything else)
+// or { drop: true } (the connection is cut: the client gets no answer)
 export async function startHostileServer() {
     const requests = [];
     let script = () => ({ status: 404, body: { success: false, message: 'not found' } });
@@ -45,6 +46,10 @@ export async function startHostileServer() {
             const seen = { method: request.method, path: request.url, body: raw };
             requests.push(seen);
             const answer = script(seen);
+            if (answer.drop) {
+                request.socket.destroy();
+                return;
+            }
             const json = answer.text === undefined;
             response.writeHead(answer.status, { 'Content-Type': json ? 'application/json' : answer.type });
             response.end(json ? JSON.stringify(answer.body) : answer.text);
