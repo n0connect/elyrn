@@ -140,6 +140,14 @@ NGINX_OWNED_HEADERS = {
 # X-Accel-Buffering passed on); an add_header there would drop the server's security headers
 EVENTS_LOCATION = "location = /api/v2/events {"
 EVENTS_STREAM_LINES = ("proxy_buffering off;", "proxy_pass_header X-Accel-Buffering;")
+# The file parts location: at most as many requests at once as the backend admits (its contract
+# bound), in memory only; the zone is one key for all clients (nginx.conf)
+FILES_LOCATION = re.compile(r"^location [^\n]*/files\(/", re.MULTILINE)
+TABLE_GO = ROOT / "backend/internal/contract/table.go"
+FILES_BOUND = re.compile(r"^const maxConcurrentFileRequests = (\d+)$", re.MULTILINE)
+FILES_ZONE = "limit_conn_zone $file_requests_key zone=files:1m;"
+FILES_KEY_MAP = re.compile(r"^map \$request_method \$file_requests_key \{\n\s+default all;\n\}", re.MULTILINE)
+FILES_MEMORY_LINES = ("client_body_buffer_size 342k;", "proxy_max_temp_file_size 0;", "limit_conn_status 503;")
 # Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
 NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
 # Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
@@ -325,6 +333,7 @@ def check_nginx():
     check_error_page_statuses(site + "\n" + errors, answers)
     check_status_pages(site)
     check_events_location(site)
+    check_files_location(site, read(NGINX_CONF))
 
 
 def check_events_location(site):
@@ -340,6 +349,28 @@ def check_events_location(site):
             fail("nginx", f"the event stream location must keep '{line}'")
     if any(line.startswith("add_header") for line in lines):
         fail("nginx", "no add_header in the event stream location: it would drop the server's headers")
+
+
+def check_files_location(site, main):
+    """File requests hold about 0.7 MB each in nginx and 2 MB in the backend: the files location
+    admits at most the backend's own bound at once (one zone key for every client), refuses one
+    more with 503 (the registered edge body), and keeps bodies in memory, never in temp files."""
+    blocks = [b for b in re.split(r"\n(?=location )", site) if FILES_LOCATION.match(b)]
+    if len(blocks) != 1:
+        fail("nginx", "nginx-site.conf must have exactly one file parts location")
+        return
+    bound = FILES_BOUND.search(TABLE_GO.read_text(encoding="utf-8"))
+    if not bound:
+        fail("nginx", "backend/internal/contract/table.go no longer states maxConcurrentFileRequests")
+        return
+    lines = {line.strip() for line in blocks[0].splitlines()}
+    for line in (f"limit_conn files {bound.group(1)};",) + FILES_MEMORY_LINES:
+        if line not in lines:
+            fail("nginx", f"the file parts location must keep '{line}'")
+    if FILES_ZONE not in main.splitlines() or not FILES_KEY_MAP.search(main):
+        fail("nginx", f"nginx.conf must define '{FILES_ZONE}' keyed by one value for every request")
+    if any(line.startswith("add_header") for line in lines):
+        fail("nginx", "no add_header in the file parts location: it would drop the server's headers")
 
 
 def check_error_page_statuses(config, answers):

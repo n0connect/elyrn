@@ -15,6 +15,7 @@ import (
 
 	"elyrn/internal/apperr"
 	"elyrn/internal/models"
+	"elyrn/internal/utils"
 )
 
 // Kind is a JSON field's type.
@@ -97,7 +98,35 @@ type Op struct {
 	// MaxQuery is how many of Query one request may carry (the page cursors are exclusive)
 	MaxQuery int
 	Body     *Body // nil: the operation takes no body
+	// Bound caps how many requests of this operation (and of every operation sharing the bound)
+	// are handled at once; nil: no bound beyond the server's own
+	Bound *Bound
 }
+
+// Bound is an in-process limit on requests handled at once, for operations whose requests each
+// hold a lot of memory. A request over it is refused at once with Busy, never queued.
+type Bound struct {
+	Max   int
+	Busy  apperr.Code
+	slots *utils.Slots
+}
+
+func newBound(max int, busy apperr.Code) *Bound {
+	return &Bound{Max: max, Busy: busy, slots: utils.NewSlots(max)}
+}
+
+// maxConcurrentFileRequests bounds file part uploads and reads together. One such request holds
+// about 2 MB in the backend at its peak: the 342 KiB body the gate reads, the decoded string,
+// the 256 KiB raw part, the driver's copy of the bytea and, on a read, the base64 answer and its
+// JSON encoding (each about 342 KiB). The backend container keeps 128 MiB beside the Argon2id
+// slots (scripts/check-hardening.py BACKEND_HEADROOM_BYTES) for the runtime, 20 database
+// connections, event streams and the GC; 32 x 2 MB = 64 MB takes at most half of it. nginx
+// admits as many at once on the files location (limit_conn files), so a client sees this 503
+// only when the backend is reached without nginx.
+const maxConcurrentFileRequests = 32
+
+// fileRequests is the one bound the file operations share
+var fileRequests = newBound(maxConcurrentFileRequests, apperr.FileRequestsBusy)
 
 // Endpoint is one path template with its operations. Path parameters ("{id}", "{note}",
 // "{file}") are canonical UUIDv4s, handed to the handler parsed, each at its own position
@@ -236,9 +265,10 @@ func chatEndpoints() []Endpoint {
 		{Template: conversation + "/" + models.SubNotes + "/" + paramNote, Ops: []Op{{ID: OpNoteDelete, Method: http.MethodDelete}}},
 		{Template: conversation + "/" + models.SubFiles, Ops: []Op{{ID: OpFileUpload, Method: http.MethodPost, Body: jsonBody(idField,
 			Field{Name: "part", Kind: KindInt, Required: true, Int: rangeFilePart},
-			Field{Name: "data", Kind: KindString, Required: true, Str: patternFilePart})}}},
+			Field{Name: "data", Kind: KindString, Required: true, Str: patternFilePart}), Bound: fileRequests}}},
 		{Template: conversation + "/" + models.SubFiles + "/" + paramFile, Ops: []Op{{ID: OpFileRead, Method: http.MethodGet,
-			Query: []QueryParam{{Name: models.QueryPart, Text: patternPartQuery, Int: rangeFilePart, Required: true}}, MaxQuery: 1}}},
+			Query: []QueryParam{{Name: models.QueryPart, Text: patternPartQuery, Int: rangeFilePart, Required: true}}, MaxQuery: 1,
+			Bound: fileRequests}}},
 	}
 }
 

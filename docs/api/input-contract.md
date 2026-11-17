@@ -291,6 +291,7 @@ HEAD: bare 405 (`E_HEAD_NOT_ALLOWED`).
 ### POST
 
 - Query: none.
+- Concurrency: at most 32 requests at once, shared by every operation of this bound (checked before the body is read); one more: 503 `E_FILE_REQUESTS_BUSY`.
 - Body: required, at most 349695 bytes; shape refused with 400 `E_INVALID_REQUEST`.
 
 | Field | Type | Required | Whitelist | Missing | Invalid |
@@ -304,4 +305,5 @@ HEAD: bare 405 (`E_HEAD_NOT_ALLOWED`).
 ### GET
 
 - Query: at most 1 of `part` (part-query, file-part-number, required).
+- Concurrency: at most 32 requests at once, shared by every operation of this bound (checked before the body is read); one more: 503 `E_FILE_REQUESTS_BUSY`.
 - Body: none.

@@ -67,6 +67,10 @@ func renderEndpoint(b *strings.Builder, e *Endpoint) {
 		op := &e.Ops[i]
 		fmt.Fprintf(b, "\n### %s\n\n", op.Method)
 		renderQuery(b, op)
+		if op.Bound != nil {
+			fmt.Fprintf(b, "- Concurrency: at most %d requests at once, shared by every operation of this bound (checked before the body is read); one more: %s.\n",
+				op.Bound.Max, codeText(op.Bound.Busy))
+		}
 		renderBody(b, op.Body)
 	}
 }

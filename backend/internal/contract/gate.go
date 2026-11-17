@@ -146,49 +146,83 @@ func (e *Endpoint) opFor(method string) *Op {
 }
 
 // Gate is the one enforcement point: every route passes it before its handler. It checks, in
-// order, the path, the method, the query, the content type, the body's presence and size, the
-// JSON shape and every field, and answers the first failure through apperr.
+// order, the path, the method, the query, the content type, the operation's concurrency bound,
+// the body's presence and size, the JSON shape and every field, and answers the first failure
+// through apperr. A bound's slot is held until the handler returns.
 func Gate(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		in, code, ok := admit(r)
+		in, release, code, ok := admit(r)
 		if !ok {
 			apperr.Write(w, "contract.Gate", code)
 			return
 		}
+		defer release()
 		next(w, r.WithContext(context.WithValue(r.Context(), inputKey{}, in)))
 	}
 }
 
-// admit runs every check on r and returns what it admitted or the code that refuses it.
-func admit(r *http.Request) (*Input, apperr.Code, bool) {
+// noWait: a request over a bound is refused at once, never queued
+const noWait = 0
+
+func released() {}
+
+// acquire takes a slot of op's bound, if it has one, and returns how to give it back.
+func (op *Op) acquire() (func(), apperr.Code, bool) {
+	if op.Bound == nil {
+		return released, 0, true
+	}
+	if err := op.Bound.slots.Acquire(noWait); err != nil {
+		return nil, op.Bound.Busy, false
+	}
+	return op.Bound.slots.Release, 0, true
+}
+
+// admit runs every check on r and returns what it admitted (with the release of its bound's
+// slot) or the code that refuses it.
+func admit(r *http.Request) (*Input, func(), apperr.Code, bool) {
+	op, params, query, code, ok := admitHead(r)
+	if !ok {
+		return nil, nil, code, false
+	}
+	release, code, ok := op.acquire()
+	if !ok {
+		return nil, nil, code, false
+	}
+	body, code, ok := readBody(r, op)
+	if !ok {
+		release()
+		return nil, nil, code, false
+	}
+	return &Input{Op: op, params: params, query: query, body: body}, release, 0, true
+}
+
+// admitHead runs the checks that read no body: path, method, query and content type.
+func admitHead(r *http.Request) (*Op, [maxPathParams]uuid.UUID, map[string]int64, apperr.Code, bool) {
+	var none [maxPathParams]uuid.UUID
 	// A percent-encoded path is refused: a genuine client never escapes these paths, and the
 	// whitelist must see the bytes that were sent
 	if r.URL.EscapedPath() != r.URL.Path {
-		return nil, apperr.RouteNotFound, false
+		return nil, none, nil, apperr.RouteNotFound, false
 	}
 	endpoint, params, ok := match(r.URL.Path)
 	if !ok {
-		return nil, apperr.RouteNotFound, false
+		return nil, none, nil, apperr.RouteNotFound, false
 	}
 	op := endpoint.opFor(r.Method)
 	if op == nil {
 		if r.Method == http.MethodHead && endpoint.BareHead {
-			return nil, apperr.HeadNotAllowed, false
+			return nil, none, nil, apperr.HeadNotAllowed, false
 		}
-		return nil, apperr.MethodNotAllowed, false
+		return nil, none, nil, apperr.MethodNotAllowed, false
 	}
 	query, ok := parseQuery(r.URL.RawQuery, op)
 	if !ok {
-		return nil, apperr.InvalidRequest, false
+		return nil, none, nil, apperr.InvalidRequest, false
 	}
 	if code, ok := checkContentType(r, op); !ok {
-		return nil, code, false
+		return nil, none, nil, code, false
 	}
-	body, code, ok := readBody(r, op)
-	if !ok {
-		return nil, code, false
-	}
-	return &Input{Op: op, params: params, query: query, body: body}, 0, true
+	return op, params, query, 0, true
 }
 
 // parseQuery admits the raw query: pairs "name=value" separated by "&", each name declared,
