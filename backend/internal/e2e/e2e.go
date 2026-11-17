@@ -73,6 +73,9 @@ func decodeKey(encoded string) ([]byte, error) {
 }
 
 // ConversationKey derives the AES-256-GCM key both peers share for one conversation.
+// It is the Go reference of the one-to-one protocol, pinned against the browser by the
+// interop vectors; no production code calls it: the server only relays ciphertext and the
+// agent uses rooms only (decision D5, docs/architecture/agents.md).
 func ConversationKey(privateKey []byte, peerPublicKey string, conversationID uuid.UUID) ([]byte, error) {
 	peer, err := decodeKey(peerPublicKey)
 	if err != nil || conversationID == uuid.Nil {
@@ -143,6 +146,9 @@ func unframe(framed []byte) ([]byte, error) {
 }
 
 // Encrypt seals one message exactly as the browser client does.
+// It is the Go reference of the one-to-one protocol, pinned against the browser by the
+// interop vectors; no production code calls it: the server only relays ciphertext and the
+// agent uses rooms only (decision D5, docs/architecture/agents.md).
 func Encrypt(key []byte, conversationID, messageID uuid.UUID, senderPublicKey, text string, sentAt, counter int64) (string, error) {
 	if messageID.Version() != 4 {
 		return "", ErrInvalidInput
@@ -164,6 +170,9 @@ func Encrypt(key []byte, conversationID, messageID uuid.UUID, senderPublicKey, t
 
 // Decrypt opens one message; any tampering with the bytes, the conversation, the message
 // id or the claimed sender fails authentication.
+// It is the Go reference of the one-to-one protocol, pinned against the browser by the
+// interop vectors; no production code calls it: the server only relays ciphertext and the
+// agent uses rooms only (decision D5, docs/architecture/agents.md).
 func Decrypt(key []byte, conversationID, messageID uuid.UUID, senderPublicKey, ciphertext string) (*Message, error) {
 	if !utils.IsBase64URL(ciphertext) {
 		return nil, ErrBadMessage
