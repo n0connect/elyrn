@@ -97,14 +97,14 @@ const cryptoKey = await window.crypto.subtle.importKey(
 
 ### 3. The Identity Kept Across Reloads (IndexedDB)
 
-So that a reload does not ask for the account number again, the browser keeps the identity in IndexedDB (`frontend/js/keystore.js`), in one of two forms. Which one is decided at every save by what this browser proves it can read back, never by its name: `Keystore.save` stores the form, reads it back in a new transaction through the same code the next page load uses, and keeps the first form that gives the identity back.
+So that a reload does not ask for the account number again, the browser keeps the identity in IndexedDB (`frontend/js/keystore.js`), in one of two forms. Which one is decided by what this browser proves, never by its name. Before the identity is derived at login, `Keystore.keepsKeys` (once per page load) stores a throwaway non-extractable X25519 key, reads it back in a new transaction and deletes it; a storage failure counts as "cannot" (`W_KEY_PROBE_FAILED`, logged). Only where the throwaway key does not come back is the sealed form made at all: in an engine that keeps X25519 keys the wrapped form never exists, not even in memory. `Keystore.save` then still stores the form, reads it back through the same code the next page load uses, and keeps the first form that gives the identity back.
 
 | Form | Kept | Engines (Nov 2026) | At rest |
 |---|---|---|---|
 | direct | the non-extractable X25519 `CryptoKey`, its public key, the rooms root | Chromium (checked Nov 2026), and any engine that reads an X25519 key back | No script, not even one running in this origin, can obtain the private key bytes from what is stored. |
 | sealed | a device key (AES-256-GCM, generated non-extractable, usages `wrapKey` and `unwrapKey` only), the identity's PKCS#8 wrapped under it (`wrapKey`, a random 12-byte IV, AAD = `"NAID"` ‖ version `0x01` ‖ the identity's 32-byte public key), its public key, the rooms root | WebKit (Safari): it stores an X25519 `CryptoKey` without error and cannot read it back, while AES keys round-trip | The honest page unwraps straight into a non-extractable X25519 key (`ElyrnCrypto.unsealIdentity`), so the private key bytes never reach its script. Script running in this origin could call `unwrapKey` itself with `extractable: true` and read the key. |
 
-The wrapped form is made at login, from the one moment the identity key is extractable (`crypto.js` `x25519FromSeed` reads the public key from it), and only for a session the browser keeps; no plaintext PKCS#8 or seed is ever stored or logged, and the buffers that held them are overwritten. The AAD binds a wrapped blob to one public key, so it cannot be opened as another identity. When neither form reads back, nothing is kept and the page says so once (`W_IDENTITY_NOT_KEPT`): the account number is needed after a reload. A record that is stored but gives no identity at load (an engine that cannot read it back, a damaged record) is logged (`W_IDENTITY_UNREADABLE`) and the page opens logged out; the next login replaces it.
+The wrapped form is made at login, from the one moment the identity key is extractable (`crypto.js` `x25519FromSeed` reads the public key from it), and only for a session the browser keeps in an engine that failed the throwaway-key test; no plaintext PKCS#8 or seed is ever stored or logged, and the buffers that held them are overwritten. The AAD binds a wrapped blob to one public key, so it cannot be opened as another identity. When neither form reads back, nothing is kept and the page says so once (`W_IDENTITY_NOT_KEPT`): the account number is needed after a reload. A record that is stored but gives no identity at load (an engine that cannot read it back, a damaged record) is logged (`W_IDENTITY_UNREADABLE`) and the page opens logged out; the next login replaces it.
 
 ---
 
@@ -174,6 +174,7 @@ code = "elyrn#" || base64url( S (32 random bytes) || max_members (1) || expires_
 room id  = UUIDv4 bits over HKDF(S, salt "noaddx.v1", info "noaddx/room/id",     16)
 lookup   =                  HKDF(S, salt "noaddx.v1", info "noaddx/room/lookup", 32)   → server stores HMAC(pepper subkey "noaddx/room-lookup", lookup)
 card key =                  HKDF(S, salt "noaddx.v1", info "noaddx/room/card",   32)   → never leaves members' devices
+role key =                  HKDF(S, salt "noaddx.v1", info "noaddx/room/role",   32)   → never leaves members' devices
 ```
 
 ### 2. From the account
@@ -212,6 +213,23 @@ roster digest = SHA-256("noaddx/room/roster/v1" || cards as served, sorted by by
 - The server checks only the structure (magic, version, 1 to 32 wraps, one of the five frame sizes) and the roster digest; it opens nothing.
 
 Both implementations (`frontend/js/room-crypto.js`, `backend/internal/e2e/room.go`) open each other's vectors in their test suites.
+
+### 4. Member role (`NADL` v1)
+
+```text
+plain = len (1 byte, 0..64) || utf8(role, NFC) || zero padding          (65 bytes)
+role  = nonce (12, random) || AES-256-GCM(role key, nonce, plain,
+                                          AAD = "NADL" || 0x01 || room id (16) || target card (60))   (93 bytes)
+```
+
+- The role key derives from the room secret: every code holder can open and seal roles, the server
+  can do neither. Who may store one for whom is the server's rule (owner: anyone; member: itself).
+- The target card in the AAD binds a role to one member: moved to another member's card it does
+  not open. A cleared role is the sealed empty text, the same size as any other.
+- Opening refuses a length over 64, a non-zero padding byte, bytes that are not UTF-8, and text
+  outside the role rule ([rooms](../architecture/rooms.md#member-roles)); such a role is shown as
+  none. Each role is sealed under a fresh random nonce; the browser and Go reproduce each other's
+  vectors byte for byte from a fixed nonce.
 
 ---
 

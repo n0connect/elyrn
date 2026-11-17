@@ -85,9 +85,12 @@ make test-all
 
 **Requirements:** Node.js 20+ (utilizes native `node:crypto` and built-in test runner, zero npm dependencies).
 
-`frontend/tests/` holds 19 test files with 162 tests: nine unit files (`crypto`, `room-crypto`,
-`rooms`, `counters`, `errors`, `utils`, `validation`, `pow-worker`, `robot-door`) and the three
-negative-use files (Option E), plus seven seeded fuzz files (`*.fuzz.test.mjs`, Option D).
+`frontend/tests/` holds 22 test files with 199 tests: twelve unit files (`crypto`, `room-crypto`,
+`rooms`, `counters`, `errors`, `utils`, `validation`, `pow-worker`, `robot-door`, `start-view`,
+`alerts`, `role-control`) and the three negative-use files (Option E), plus seven seeded fuzz
+files (`*.fuzz.test.mjs`, Option D). What only a real browser shows is driven by hand, never
+faked: the IndexedDB round trip of `Keystore.keepsKeys` (which form an engine keeps), the
+permission prompt and the notification of `alerts.js`, and typing in the role control.
 `crypto.test.mjs` alone checks, among others:
 - `auth key matches Go derivation`
 - `identity public key matches Go derivation; private key is not extractable`
@@ -106,7 +109,7 @@ negative-use files (Option E), plus seven seeded fuzz files (`*.fuzz.test.mjs`, 
 |---|---|---|
 | Go test functions | 330 (114 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
 | Go fuzz targets | 76 | `python3 -I scripts/check-fuzz-targets.py --list \| wc -l` |
-| Frontend tests | 162 in 19 files | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
+| Frontend tests | 199 in 22 files (17 Nov 2026) | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
 
 ---
 
@@ -175,11 +178,11 @@ Each browser module that judges untrusted input has a seeded fuzz file under `fr
 
 | File | Module and invariant |
 |---|---|
-| `validation.fuzz.test.mjs` | `validation.js`: accepted message text is clean, bounded, trimmed of exactly `MESSAGE_TRIM_CHARS` (equal to the agent's `messageTrimChars`, read from the Go source) and re-validates to itself; codes and ids are never laxer than the server's patterns |
-| `room-crypto.fuzz.test.mjs` | `crypto.js`, `room-crypto.js`: codes round-trip; tampered cards, vaults, messages and notes never open to anything but their genuine plaintext |
+| `validation.fuzz.test.mjs` | `validation.js`: accepted message text is clean, bounded, trimmed of exactly `MESSAGE_TRIM_CHARS` (equal to the agent's `messageTrimChars`, read from the Go source) and re-validates to itself; codes and ids are never laxer than the server's patterns; the role rule agrees with an independent model |
+| `room-crypto.fuzz.test.mjs` | `crypto.js`, `room-crypto.js`: codes round-trip; tampered cards, vaults, messages, notes and roles never open to anything but their genuine plaintext; a role moved to another card or room never opens |
 | `counters.fuzz.test.mjs` | `counters.js`: the replay judgement agrees with an independent model (the invariants `FuzzRoomPages` asserts for the agent) |
 | `errors.fuzz.test.mjs` | `errors.js`: arbitrary answers always yield a registered code and a registry sentence, never the server's text |
-| `utils.fuzz.test.mjs` | `utils.js`: `apiCall` reads answers of random status, type, size and chunking from a real local server; `once` and `singleFlight` hold under random interleavings |
+| `utils.fuzz.test.mjs` | `utils.js`: `apiCall` reads answers of random status, type, size and chunking from a real local server; `once` and `singleFlight` hold under random interleavings; `streamNeedsPolling` (visible and hidden pages) agrees with an independent model |
 | `pow-worker.fuzz.test.mjs` | `pow-worker.js`: task shapes judged against the server's hex patterns, SHA-256 against Node's, low-difficulty answers verified |
 | `robot-door.fuzz.test.mjs` | `robot-door.js`: total, deterministic and finite |
 
@@ -197,7 +200,7 @@ Beyond edge cases and disasters, the browser client is checked by what a user do
 | File | Scenarios |
 |---|---|
 | `negative-input.test.mjs` | login field (`validation.js parseAccountNumber`, also read by the delete field): blank, non-string, over-length, wrong alphabet, padding, multi-line, zero-width, homoglyph, markup → `E_LOGIN_EMPTY` / `E_LOGIN_FORMAT`; fullwidth and padded numbers read as the same number; an invite or room code under every prefix → `E_LOGIN_INVITE_PASTED`. Join field: blank → `E_JOIN_CODE_EMPTY` / `E_INVITE_EMPTY`; an account number (padded, fullwidth) → `E_INVITE_IS_ACCOUNT_NUMBER`; a room code where only an invite is read → `E_INVITE_INVALID`; broken invites → `E_INVITE_INVALID`, broken room codes → `E_ROOM_CODE_INVALID`; own invite recognised by fingerprint; an expired room code parses (its expiry is judged by `chat.js`). Composer: blank → `E_MESSAGE_EMPTY`, over-length → `E_MESSAGE_TOO_MANY_CHARS` (with its limit) or `E_MESSAGE_TOO_LONG`, controls and bidi → `E_MESSAGE_CONTROL_CHARS`, an account number anywhere (fullwidth too) → `E_MESSAGE_IS_ACCOUNT_NUMBER`, and every row of the agent's `accountNumberSamples` (read from `backend/internal/agent/fuzz_test.go`) refused or sent exactly as the agent's `ValidateMessageText` does; invites, room codes, near-misses and markup are sent as text. Door answer: blank, junk, look-alike, account number never pass |
-| `negative-server.test.mjs` | markup, header text and odd types in error bodies map to registered codes; an HTML body is no data; a success body on an error status is a failure; no file in `frontend/js` writes HTML into the DOM, and nginx's CSP requires Trusted Types. Listed rooms with wrong types (`malformed room`), limits other than the code's or another account's vault are refused; limits that change between two listings are refused (`E_ROOM_DATA_CHANGED` in `chat.js`). Member lists of the wrong shape (`malformed roster`), an error status (by `Errors.fromResult`), `mine` flags that lie, cards that are invites / room codes / account numbers / markup / duplicates (skipped and counted), more cards than seats, members dropped and added between reads. Notes: wrong shapes dropped, a note listed twice shown once, a note holding a room code / account number / markup refused when accepted. Join and create: a 2xx naming another room, a 2xx error body, a success body on an error status take no seat; a join request carries no code and no account number. Messages: a flipped `mine` does not open a pair message; a room message names its real sender; a friend request answered `409` "Id taken" is sealed and sent again once under a fresh id, a plain `409` is returned as it came |
+| `negative-server.test.mjs` | markup, header text and odd types in error bodies map to registered codes; an HTML body is no data; a success body on an error status is a failure; no file in `frontend/js` writes HTML into the DOM, and nginx's CSP requires Trusted Types. Listed rooms with wrong types (`malformed room`), limits other than the code's or another account's vault are refused; limits that change between two listings are refused (`E_ROOM_DATA_CHANGED` in `chat.js`). Member lists of the wrong shape (`malformed roster`, a missing or mistyped `role` included), roles that do not open, are moved to another card or room, or break the role rule (shown as no role), a role posted sealed for the target card and a `403 Role not allowed` mapped to `E_ROLE_NOT_ALLOWED`, an error status (by `Errors.fromResult`), `mine` flags that lie, cards that are invites / room codes / account numbers / markup / duplicates (skipped and counted), more cards than seats, members dropped and added between reads. Notes: wrong shapes dropped, a note listed twice shown once, a note holding a room code / account number / markup refused when accepted. Join and create: a 2xx naming another room, a 2xx error body, a success body on an error status take no seat; a join request carries no code and no account number. Messages: a flipped `mine` does not open a pair message; a room message names its real sender; a friend request answered `409` "Id taken" is sealed and sent again once under a fresh id, a plain `409` is returned as it came |
 | `negative-auth.test.mjs` | proof-of-work challenge that is not an object, on a 2xx error body or an error status → no challenge, by code; a difficulty over the cap → `E_POW_TOO_HARD` before any worker. `/me` (`auth.js judgeMe`): any other or missing key → `E_IDENTITY_MISMATCH`; settings of the wrong type or out of range → `E_SERVER_LIMITS_INVALID`; extra fields ignored. Registration left mid-way: number, token and flags dropped, proofs of work ended, the clipboard cleared only if it still holds the number, a left run never holds the next registration's lock; where the account may exist the way back asks once (`W_REGISTRATION_LEAVE_CONFIRM`). Every guarded action pressed twice runs once |
 
 #### Negative-use tour (manual, real browser)

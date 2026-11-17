@@ -245,6 +245,12 @@ Someone joined or left between fetching the member list and sending (`412`). The
 ### After an upgrade the page asks for the account number again
 Sessions saved before rooms existed do not hold the rooms key; logging in once more derives and keeps it.
 
+### Member roles
+- *"only the room's owner can set another member's role"*: the server refused (`403 Role not allowed`). The page offers the control only where it can be used, so this means the page's view of who owns the room is stale; reload.
+- *"that member is no longer in this room"*: they left (or the room changed) before the role was stored (`404`).
+- *"too many role changes — wait a moment"*: the role rate bucket is spent (`429`).
+- A role that was set shows as nothing: it did not open for this room and member, or its text breaks the role rule (logged as `W_ROLE_UNREADABLE`, never its text). Only the members of the room can set roles; a server can at most show an older role of the same member.
+
 ---
 
 ## 11. Sign-in, Sending and Outages
@@ -264,6 +270,12 @@ own text is never shown.
 | *"the server does not accept this request — reload the page and try again"* | nginx refused the request itself (`E_EDGE_NOT_FOUND`, `E_EDGE_METHOD_NOT_ALLOWED`): usually a page older than the server. | Reload the page. |
 | *"service unavailable — try again in a moment"* | nginx could not reach the backend (`503 E_BACKEND_UNAVAILABLE`). | Wait; the operator checks `docker compose ps` and the backend log. |
 | *"your account may already exist and this number is the only way into it — save it now …"* | **← back to main menu** (or Escape) was pressed after the account was requested. | Save the number, then press back again to leave. |
+| *"sent by a newer elyrn; reload this page to read it"* (in place of a message) | The message is authentic, but its sender's elyrn. writes a field this page does not know yet (the page is older than the server's). Nothing was tampered with. | Reload the page to get the current client; the message then opens. |
+| no **alerts** control in the header | This browser has no Notification API (some embedded browsers, older mobile browsers): content-free alerts cannot exist here. | Use a browser that has it. |
+| *"this browser blocks notifications for this site — allow them in its site settings, then turn alerts on"* | Notifications for this site were denied in the browser. | Allow them in the browser's site settings, then press **alerts off** again. |
+| *"notifications were not allowed — alerts stay off"* | The browser's question was closed without an answer. | Press **alerts off** again and allow. |
+| *"notifications are no longer allowed for this site — alerts turned off"* | Permission was withdrawn after alerts were turned on. | Allow them again in the site settings, then turn alerts on. |
+| alerts are on and nothing shows | An alert shows only while elyrn. is open in some tab and that tab is hidden, once until the tab is seen again; the operating system's do-not-disturb or the browser's own notification settings can still hold it back, and some browsers refuse page notifications altogether (logged as `W_ALERT_NOT_SHOWN`). | Keep a tab open; check the system's notification settings for the browser. |
 
 Every screen before login (login, new identity, the robot side) has a way back: its
 **← back to main menu** button (**← back to the human door** on the robot entrance), the brand

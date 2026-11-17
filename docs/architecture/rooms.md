@@ -157,7 +157,7 @@ A client accepts a message only if every check passes, in this order: the size i
 | Table | Columns | A database thief learns |
 |---|---|---|
 | `rooms` | `id`, `lookup` (HMAC), `max_members`, `expires_at` (hour), `owner_tag` | That a room exists, its limit and its deletion hour. Not the code, not who is in it. |
-| `conversation_members` | as today, plus `card`, `vault`, `joined_seq` | Per-room pseudonyms, client-sealed cards and vaults, and from which message each member can read. |
+| `conversation_members` | as today, plus `card`, `vault`, `joined_seq`, `role` | Per-room pseudonyms, client-sealed cards, vaults and roles (a role's text is not readable, and a set role looks like a cleared one), and from which message each member can read. |
 | `messages` | as today | Ciphertext; `n` reveals how many members a message was sent to. |
 | `room_notes` | `id`, `conversation_id`, `recipient_tag`, `sender_tag`, `blob`, `expires_at` | That one member sent another a sealed note in that room. |
 
@@ -188,6 +188,65 @@ A member can ask another member of the same room to become friends without revea
 3. The addressee sees *"silent-ember wants to be friends"*. Accepting redeems the invite and checks the fingerprint; ignoring deletes the note.
 
 Because the invite code arrives authenticated by the requester's room key, the server cannot substitute the requester's account key in the new one-to-one conversation. Accounts are revealed to each other only when the addressee accepts.
+
+---
+
+## Member Roles
+
+A role is a short label shown beside a member of a room, `#komutan` or `#lider`, so members can
+say who is who in this room. It grants nothing: moderation stays a non-goal, and a role proves
+nothing about anyone.
+
+**Who may set it.** The room's owner sets or clears any member's role; every other member sets or
+clears its own only. The server enforces this (`403 Role not allowed` otherwise); the browser
+shows the control only where it can be used: the owner sees it on every member, any other member
+on its own row only.
+
+**The text rule** (one home per program: `frontend/validation.js` `validateRoleText`, and the Go
+side's own): after the `#`, 1 to 16 Unicode code points, each a letter (`\p{L}`), a digit
+(`\p{N}`), `-` or `_`; stored NFC-normalised; at most 64 bytes of UTF-8; case kept as typed. The
+words `owner` and `you` are reserved: a role is refused when its NFKC form, case-folded, equals
+one of them (the browser lowercases the NFKC form; the Go side uses full Unicode case folding; for
+these two words they agree), so `OwNeR`, fullwidth `ｏｗｎｅｒ` and `ＹＯＵ` are refused. The rule is
+applied to what is typed (the reason is shown as it is typed) and again to every role that is
+opened; one that breaks it is shown as no role.
+
+**Sealed form.**
+
+```text
+K_role = HKDF(S, salt "noaddx.v1", info "noaddx/room/role", 32)        (S = the room secret)
+plain  = len (1 byte, 0..64) || utf8(role) || zero padding             (exactly 65 bytes)
+role   = nonce (12, random) || AES-256-GCM(K_role, nonce, plain,
+                                           AAD = "NADL" || 0x01 || room id (16) || target card (60))
+         93 bytes; base64url without padding: 124 characters
+```
+
+The target card is the member's stored card as the member list serves it, so a role cannot be
+moved to another member. A cleared role is the sealed empty role, never an empty string, so the
+server cannot tell a set role from a cleared one; a member that never had a role has `""`. On
+opening, the tag must verify, the length must be at most 64, every padding byte must be zero, the
+bytes must be UTF-8 and the text must pass the rule; anything else is shown as no role and logged
+under a code only (`W_ROLE_UNREADABLE`), never its text.
+
+**Display.** The role is shown as `#text` beside the member in the members panel and beside the
+sender's name on room message bubbles (a member who left has none), always inserted as text. It
+is drawn as plain italic text, while the built-in `you` and `owner` badges are framed tags: a
+role never looks like a badge, and only the badge marks the owner.
+
+**Server behaviour.** `POST /api/v2/conversations/{id}/members` with `{"card", "role"}` stores the
+blob for the current member whose stored card is `card`, under the conversation row lock and its
+own rate bucket (`role`), and publishes `conv` to every member (the caller's other devices
+included), so every open members panel and every bubble updates without a reload. The server
+checks only the blob's alphabet and exact length; it never opens it. The member list serves
+`{"card", "mine", "owner", "role"}`. The role is a column of the membership: it goes when the
+membership goes (leave, burn, expiry, account deletion).
+
+**Known limits.** A lying server can serve an older role blob of the same member: it cannot forge
+one or move one to another member, but it can show a role that was since changed or cleared. Any
+holder of the code can seal a role (the key derives from the room secret); it is the server that
+stops a member who does not own the room from storing one for someone else. A role is free text:
+a lookalike from another script (a Cyrillic `о` in `оwner`) passes the reserved-word check and
+proves nothing; only the built-in badge marks the owner.
 
 ---
 
