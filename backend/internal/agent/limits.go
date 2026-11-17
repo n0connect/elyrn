@@ -95,6 +95,12 @@ const (
 	MemberCodeChars = e2e.AuraCodeChars
 )
 
+// The bounds /me's file_max_bytes must lie in: one stored part up to the server's own upper bound.
+const (
+	minFileMaxBytes = utils.FilePartBytes
+	maxFileMaxBytes = config.MaxFileBytesBound
+)
+
 // Room limits the tools accept before asking the server (the server's own limits apply after).
 const (
 	MinRoomMembers  = config.MinRoomMembers

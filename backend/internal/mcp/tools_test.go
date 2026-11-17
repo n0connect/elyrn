@@ -166,11 +166,16 @@ func TestMessageTools_LabelReceivedTextAsData(t *testing.T) {
 	}
 }
 
-// Design D7: roles are labels other members wrote.
+// Design D7: roles are labels other members wrote, and file names are their senders' words.
 func TestRolesAndFileNames_AreLabelledAsData(t *testing.T) {
 	for _, name := range []ToolName{ToolRoomMembers, ToolRoomRole} {
 		if tl := findTool(name); tl == nil || !strings.Contains(tl.description, rolesAreData) {
 			t.Errorf("%s does not label roles as data", name)
+		}
+	}
+	for _, name := range []ToolName{ToolRoomRead, ToolRoomWait} {
+		if tl := findTool(name); tl == nil || !strings.Contains(tl.description, fileNameIsData) {
+			t.Errorf("%s does not label file names as data", name)
 		}
 	}
 }

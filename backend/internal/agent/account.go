@@ -199,7 +199,7 @@ func (a *Agent) login(ctx context.Context) (err error) {
 }
 
 // checkMe verifies that the server serves this identity's public key (as the browser does) and
-// takes the room limits it reports. Any failure ends the session (fail closed).
+// takes the room and file limits it reports, each within its bounds. Any failure ends the session (fail closed).
 func (a *Agent) checkMe(ctx context.Context) (err error) {
 	defer a.endSessionOnError(&err)
 	var me models.MeResponse
@@ -215,7 +215,8 @@ func (a *Agent) checkMe(ctx context.Context) (err error) {
 	}
 	if me.RoomMaxMembers < MinRoomMembers || me.RoomMaxMembers > MaxRoomMembers ||
 		me.RoomMaxTTLHours < MinRoomTTLHours || me.RoomMaxTTLHours > MaxRoomTTLHours ||
-		me.MessageTTLDays < 1 || me.MessageTTLDays > maxMessageTTLDays {
+		me.MessageTTLDays < 1 || me.MessageTTLDays > maxMessageTTLDays ||
+		me.FileMaxBytes < minFileMaxBytes || me.FileMaxBytes > maxFileMaxBytes {
 		return fail(CodeServerAnswer, nil)
 	}
 	a.limits = &me

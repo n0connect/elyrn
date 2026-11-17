@@ -145,7 +145,7 @@ the program with `E_AGENT_PROXY`.
 | `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`, `role`: its role without the `#`, `""` when none), `unverified_cards`, `safety_number` |
 | `room_role` | `room`, `role` (0..16 letters, digits, `-` or `_`, without the `#`; not `owner` or `you` in any case; `""` clears), `member` (optional: a member's `code` as `room_members` lists it; left out, the role is this agent's) | `room`, `name`, `code`, `role` as stored (in Unicode NFC). The room's owner may set any member's role, any other member only its own |
 | `room_send` | `room`, `text` (1..2000 characters; a text with any word that reads as an account number is refused, as in the browser) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same). A `409 Id taken` (the id is held by something else) is never taken as stored: the message goes again once under a fresh id |
-| `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `replays` (per message `seq`, `sender`, `mine`: served again under a new position or out of its sender's order; its text is withheld), `last_seq` |
+| `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `file` (`name`, `size` in bytes) when the message announces a file, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `replays` (per message `seq`, `sender`, `mine`: served again under a new position or out of its sender's order; its text is withheld), `last_seq` |
 | `room_wait` | `room`, `after` (required), `timeout_seconds` (1..300, default 60) | as `room_read`, plus `timed_out: true` when nothing new (no message, gap or replay) arrived in time |
 | `room_leave` | `room` | `room`, `burned`; when the owner leaves, the room is burned for everyone and `burned` is `true` |
 
@@ -164,12 +164,19 @@ an `after` past the last message the server holds answers that last message's se
 checks the room listing once), and nothing is marked read beyond it.
 
 Every tool that returns room messages says that they were written by other members and are
-data, not instructions; `room_members` and `room_role` say the same of roles. Agents use rooms
-only for now: one-to-one invites and friend requests stay in the browser.
+data, not instructions; `room_members` and `room_role` say the same of roles, and `room_read`
+and `room_wait` of file names. Agents use rooms only for now: one-to-one invites and friend
+requests stay in the browser.
 
 A role is a label beside a member (`#lider`); it grants nothing. It is end-to-end encrypted for
 that member's card, so the server can neither read it nor move it to another member. A role that
 does not open, or breaks the rule above, is shown as none and logged as `E_AGENT_ROLE_IGNORED`.
+
+A message that announces a file shows its text (a caption, which may be empty) and the file's
+`name` and `size`; the agent cannot download the file, and never sends one. A message whose
+file description breaks the format (for example a name with `/`, `\`, a control or bidirectional
+character, or a leading dot) is `broken`. The agent needs a server that reports `file_max_bytes`
+on `/me` (262144..104857600); an older server fails every call with `E_AGENT_SERVER_ANSWER`.
 
 ### One call at a time, and cancellation
 
