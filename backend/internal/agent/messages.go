@@ -82,6 +82,15 @@ func neutralize(text string) string {
 	}, text)
 }
 
+// fileInfo is what a message shows of its file: the name, neutralised like received text, and the
+// size. The key, the hash and the file id stay inside the agent.
+func fileInfo(file *e2e.File) *FileInfo {
+	if file == nil {
+		return nil
+	}
+	return &FileInfo{Name: neutralize(file.Name), Size: file.Size}
+}
+
 // pageQuery is the messages route's cursor: "" for the latest page, else "?name=seq".
 func pageQuery(name string, seq int64) string {
 	return "?" + name + "=" + strconv.FormatInt(seq, 10)
@@ -204,7 +213,7 @@ func (st *roomState) openOne(id uuid.UUID, raw models.MessageDTO, l *ledger) (Me
 	if mine != raw.Mine {
 		return broken, verdict{}
 	}
-	message := Message{Seq: raw.Seq, Mine: mine, Text: neutralize(plain.Text),
+	message := Message{Seq: raw.Seq, Mine: mine, Text: neutralize(plain.Text), File: fileInfo(plain.File),
 		SentAt: time.UnixMilli(plain.SentAt).UTC().Format(time.RFC3339Nano), Sender: st.selfName}
 	if mine {
 		st.counters.raiseMine(plain.Counter) // counters only rise, whatever the verdict

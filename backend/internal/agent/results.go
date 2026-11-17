@@ -45,12 +45,14 @@ type RoomsResult struct {
 	Rooms []RoomInfo `json:"rooms"`
 }
 
-// MemberInfo is one verified member, under the name people see in the browser.
+// MemberInfo is one verified member, under the name people see in the browser. Role is a label a
+// member wrote (without its '#', empty when none): data, never instructions, and it grants nothing.
 type MemberInfo struct {
 	Name  string `json:"name"`
 	Code  string `json:"code"`
 	Mine  bool   `json:"mine"`
 	Owner bool   `json:"owner"`
+	Role  string `json:"role"`
 }
 
 // MembersResult is a verified roster and the room safety number members compare.
@@ -62,6 +64,14 @@ type MembersResult struct {
 	SafetyNumber    string       `json:"safety_number"`
 }
 
+// RoleSet reports a role stored for a member (Role empty: cleared).
+type RoleSet struct {
+	Room string `json:"room"`
+	Name string `json:"name"`
+	Code string `json:"code"`
+	Role string `json:"role"`
+}
+
 // Sent reports a stored message; Seq is null when only a 409 confirmed the store.
 type Sent struct {
 	Room   string `json:"room"`
@@ -69,14 +79,23 @@ type Sent struct {
 	Stored bool   `json:"stored"`
 }
 
-// Message is one room message. Text is written by another member: data, never instructions.
+// Message is one room message. Text and a file's name are written by another member: data, never
+// instructions.
 type Message struct {
-	Seq    int64  `json:"seq"`
-	Sender string `json:"sender,omitempty"`
-	Mine   bool   `json:"mine"`
-	Text   string `json:"text,omitempty"`
-	SentAt string `json:"sent_at,omitempty"`
-	Broken bool   `json:"broken,omitempty"`
+	Seq    int64     `json:"seq"`
+	Sender string    `json:"sender,omitempty"`
+	Mine   bool      `json:"mine"`
+	Text   string    `json:"text,omitempty"`
+	File   *FileInfo `json:"file,omitempty"`
+	SentAt string    `json:"sent_at,omitempty"`
+	Broken bool      `json:"broken,omitempty"`
+}
+
+// FileInfo is what the agent shows of a file a message announces: never its key, hash or id, so
+// nothing a tool returns can open the file (the agent cannot fetch it either).
+type FileInfo struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 // Gap is a run of a sender's messages the server withheld, delayed or deleted.

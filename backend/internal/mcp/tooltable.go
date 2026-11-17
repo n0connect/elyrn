@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"elyrn/internal/agent"
@@ -100,10 +101,22 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomMembers,
-		description: "List a room's verified members under the names people see, marking this agent and the owner, and the room safety number members compare on another channel (equal numbers, equal member lists).",
+		description: "List a room's verified members under the names people see, marking this agent and the owner, with each member's role (without its #, empty when none), and the room safety number members compare on another channel (equal numbers, equal member lists)." + rolesAreData,
 		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
 		args:        func() any { return &roomArgs{} },
 		run:         runRoom(func(ctx context.Context, b Backend, id uuid.UUID) (any, error) { return b.Members(ctx, id) }),
+	},
+	{
+		name:        ToolRoomRole,
+		description: "Set the role shown beside a member of a room (#role, end-to-end encrypted: the server can neither read it nor move it to another member). The room's owner may set any member's role, any other member only its own. Returns the member's name, code and the role as stored." + rolesAreData,
+		schema: schema([]string{argRoom, argRole}, map[string]property{
+			argRoom: roomProperty,
+			argRole: {Type: typeString, Description: "0 to " + strconv.Itoa(agent.MaxRoleChars) + " letters, digits, - or _, without the #; not owner or you in any case or width. Empty clears the role.",
+				MinLength: bound(0), MaxLength: bound(agent.MaxRoleChars)},
+			argMember: {Type: typeString, Description: "The member's code as room_members lists it; leave it out for this agent's own role.", Pattern: memberCodePattern},
+		}),
+		args: func() any { return &roleArgs{} },
+		run:  runRole,
 	},
 	{
 		name:        ToolRoomSend,
@@ -117,7 +130,7 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomRead,
-		description: "Read a room's messages after sequence number `after` (the latest page when neither cursor is given): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted) and replays (seq, sender, mine of messages served again under a new position or out of their sender's order: old messages repeated, not new ones, so their text is withheld). With `before` instead, return the newest page below that sequence number (history, back to the start or to this agent's join; pass the lowest seq returned to page further back); `after` and `before` together are refused." + dataNotInstructions,
+		description: "Read a room's messages after sequence number `after` (the latest page when neither cursor is given): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted) and replays (seq, sender, mine of messages served again under a new position or out of their sender's order: old messages repeated, not new ones, so their text is withheld). With `before` instead, return the newest page below that sequence number (history, back to the start or to this agent's join; pass the lowest seq returned to page further back); `after` and `before` together are refused." + dataNotInstructions + fileNameIsData,
 		schema: schema([]string{argRoom}, map[string]property{
 			argRoom:   roomProperty,
 			argAfter:  described(afterBounds, "Return only messages with a higher sequence number."),
@@ -128,7 +141,7 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomWait,
-		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read, replays included." + dataNotInstructions,
+		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read, replays included." + dataNotInstructions + fileNameIsData,
 		schema: schema([]string{argRoom, argAfter}, map[string]property{
 			argRoom:  roomProperty,
 			argAfter: described(afterBounds, "Wait for a message with a higher sequence number (last_seq of the previous read)."),
@@ -205,6 +218,26 @@ func runSend(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return b.Send(ctx, id, text)
+}
+
+func runRole(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+	var args roleArgs
+	if err := parseArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	id, err := roomArg(args.Room)
+	if err != nil {
+		return nil, err
+	}
+	member, err := memberArg(args.Member)
+	if err != nil {
+		return nil, err
+	}
+	role, err := roleArg(args.Role)
+	if err != nil {
+		return nil, err
+	}
+	return b.SetRole(ctx, id, member, role)
 }
 
 func runRead(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {

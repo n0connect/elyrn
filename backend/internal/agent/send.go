@@ -29,7 +29,7 @@ func (a *Agent) Send(ctx context.Context, id uuid.UUID, text string) (*Sent, err
 		if err != nil {
 			return err
 		}
-		if !time.Now().Before(st.expiresAt) {
+		if st.expired() {
 			return fail(CodeRoomExpired, nil)
 		}
 		if err := a.prepareSend(ctx, st); err != nil {

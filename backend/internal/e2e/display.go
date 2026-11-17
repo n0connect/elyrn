@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 
 	"elyrn/internal/cryptoengine"
 
@@ -24,9 +25,12 @@ const (
 	infoRoomAura     = "noaddx/room-aura"
 	roomSafetyPrefix = "noaddx/room/safety/v1"
 
-	auraWords        = 64
-	auraCodeStart    = 2
-	auraCodeEnd      = 4
+	auraWords     = 64
+	auraCodeStart = 2
+	auraCodeEnd   = 4
+	hexPerByte    = 2
+	// AuraCodeChars is the length of an aura code: its digest bytes in lowercase hex
+	AuraCodeChars    = hexPerByte * (auraCodeEnd - auraCodeStart)
 	safetyGroups     = 6
 	safetyGroupBytes = 5
 	safetyGroupMod   = 100000
@@ -74,6 +78,15 @@ func AuraOf(publicKey []byte) (Aura, error) {
 		Name: auraAdjectives[int(digest[0])%auraWords] + "-" + auraNouns[int(digest[1])%auraWords],
 		Code: hex.EncodeToString(digest[auraCodeStart:auraCodeEnd]),
 	}, nil
+}
+
+// IsAuraCode reports whether code has the shape AuraOf gives a code: AuraCodeChars lowercase hex.
+func IsAuraCode(code string) bool {
+	if len(code) != AuraCodeChars {
+		return false
+	}
+	_, err := hex.DecodeString(code)
+	return err == nil && strings.ToLower(code) == code
 }
 
 // RoomAura is the name a room is shown under; every member derives the same one.

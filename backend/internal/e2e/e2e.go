@@ -5,6 +5,7 @@
 //
 //	conversation key = HKDF-SHA256(X25519(priv, peerPub), salt = conversation id, info "noaddx/conv/v1")
 //	plaintext        = len(2) || {"t":text,"ts":sentAt,"n":counter} || zero padding to 256..4096 (a power of two)
+//	                   (a file message adds "f", file.go: read here, never written)
 //	AAD              = "NADM" || 0x01 || conversation id(16) || message id(16) || SHA-256(sender public key)(32)
 //	wire             = base64url(nonce(12) || AES-256-GCM ciphertext || tag(16))
 package e2e
@@ -30,6 +31,9 @@ const (
 	// "noaddx" in these labels is the protocol namespace, not the product name: it never changes.
 	infoConversation = "noaddx/conv/v1"
 	aadVersion       = 0x01
+	// payloadFields and filePayloadFields are the key counts of a payload without and with "f"
+	payloadFields     = 3
+	filePayloadFields = payloadFields + 1
 )
 
 var (
@@ -40,15 +44,19 @@ var (
 
 // Message is a decrypted payload.
 type Message struct {
-	Text    string
-	SentAt  int64 // sender's clock, milliseconds since epoch
-	Counter int64 // sender's per-conversation counter (gaps reveal withheld messages)
+	Text    string // with a file, the caption: may be empty
+	SentAt  int64  // sender's clock, milliseconds since epoch
+	Counter int64  // sender's per-conversation counter (gaps reveal withheld messages)
+	File    *File  // nil unless the message announces a file
 }
 
+// payload is the wire form; F is never set by encodePayload, so its bytes are those of
+// {"t","ts","n"} exactly.
 type payload struct {
-	T  string `json:"t"`
-	TS int64  `json:"ts"`
-	N  int64  `json:"n"`
+	T  string       `json:"t"`
+	TS int64        `json:"ts"`
+	N  int64        `json:"n"`
+	F  *filePayload `json:"f,omitempty"`
 }
 
 // decodeKey mirrors crypto.js b64urlDecode: alphabet whitelist, exact length, canonical bits.
@@ -177,26 +185,40 @@ func Decrypt(key []byte, conversationID, messageID uuid.UUID, senderPublicKey, c
 
 // encodePayload frames {"t","ts","n"} with the exact bytes JSON.stringify produces.
 func encodePayload(text string, sentAt, counter int64) ([]byte, error) {
-	if sentAt <= 0 || counter < 1 {
+	return framePayload(payload{T: text, TS: sentAt, N: counter})
+}
+
+// framePayload frames p with the exact bytes JSON.stringify produces.
+func framePayload(p payload) ([]byte, error) {
+	if p.TS <= 0 || p.N < 1 {
 		return nil, ErrInvalidInput
 	}
 	var body bytes.Buffer
 	encoder := json.NewEncoder(&body)
 	encoder.SetEscapeHTML(false) // same bytes as JSON.stringify
-	if err := encoder.Encode(payload{T: text, TS: sentAt, N: counter}); err != nil {
+	if err := encoder.Encode(p); err != nil {
 		return nil, fmt.Errorf("e2e: encode payload: %w", err)
 	}
 	return frame(bytes.TrimSuffix(body.Bytes(), []byte("\n")))
 }
 
-// decodePayload accepts exactly the three payload fields, nothing more.
+// decodePayload accepts exactly {"t","ts","n"}, or exactly {"t","ts","n","f"} with a valid "f"
+// (decodeFile), nothing more.
 func decodePayload(framed []byte) (*Message, error) {
 	body, err := unframe(framed)
 	if err != nil {
 		return nil, err
 	}
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil || len(fields) != 3 {
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, ErrBadMessage
+	}
+	fileRaw, withFile := fields["f"]
+	want := payloadFields
+	if withFile {
+		want = filePayloadFields
+	}
+	if len(fields) != want {
 		return nil, ErrBadMessage
 	}
 	var p payload
@@ -205,5 +227,11 @@ func decodePayload(framed []byte) (*Message, error) {
 	if err := decoder.Decode(&p); err != nil || p.TS <= 0 || p.N < 1 {
 		return nil, ErrBadMessage
 	}
-	return &Message{Text: p.T, SentAt: p.TS, Counter: p.N}, nil
+	msg := &Message{Text: p.T, SentAt: p.TS, Counter: p.N}
+	if withFile {
+		if msg.File, err = decodeFile(fileRaw, p.F); err != nil {
+			return nil, err
+		}
+	}
+	return msg, nil
 }
