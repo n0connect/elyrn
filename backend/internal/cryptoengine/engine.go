@@ -37,6 +37,8 @@ const (
 	minArgon2Lanes    = 1
 	maxArgon2Lanes    = 255
 	minArgon2KeyBytes = 4
+	// minArgon2MemoryKiBPerLane: memory is at least 8 KiB times the lanes
+	minArgon2MemoryKiBPerLane = 8
 )
 
 // EngineName reports the engine compiled into this binary ("openssl" or "native").
@@ -85,7 +87,7 @@ func ConstantTimeEqual(a, b []byte) bool {
 // are refused rather than adjusted, so both engines always run the same computation.
 func Argon2idKey(password, salt []byte, iterations, memory, lanes, keyLen uint32) ([]byte, error) {
 	if len(password) == 0 || len(salt) == 0 || iterations == 0 || keyLen < minArgon2KeyBytes ||
-		lanes < minArgon2Lanes || lanes > maxArgon2Lanes || memory < 8*lanes {
+		lanes < minArgon2Lanes || lanes > maxArgon2Lanes || memory < minArgon2MemoryKiBPerLane*lanes {
 		return nil, errInvalidInput
 	}
 	return active.Argon2id(password, salt, iterations, memory, lanes, keyLen)
