@@ -120,6 +120,7 @@ being killed. Raising the Argon2id settings needs `BACKEND_MEM_LIMIT` raised too
 | Onion listener open to the tor container only, PROXY header required | `nginx.conf` `allow ${TOR_IP}; deny all;` |
 | Forwarding headers set by nginx alone | [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
 | CSP, Trusted Types, isolation headers | `nginx-site.conf` `add_header` (unchanged) |
+| HSTS: one source, every answer of the clearnet listener in production when a listed edge proxy vouched for HTTPS (one year unless `HSTS_MAX_AGE` says otherwise; `0` off); never on the onion listener; the backend sends none | `nginx-site.conf` `add_header Strict-Transport-Security $hsts always;` (server level), `nginx.conf` map `$hsts`, rendered and validated by `nginx-hsts.sh`; `make check-hardening` pins the one directive, the map and the rendering |
 
 **API whitelist.** `/api/` mirrors the [input contract](../api/input-contract.md): one location
 per route group, exact anchored paths (`{id}`, `{note}`, `{file}` as canonical UUIDv4), the contract's

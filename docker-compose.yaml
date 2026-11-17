@@ -190,12 +190,6 @@ services:
       SERVER_WRITE_TIMEOUT_SEC: ${SERVER_WRITE_TIMEOUT_SEC}
       SERVER_IDLE_TIMEOUT_SEC: ${SERVER_IDLE_TIMEOUT_SEC}
       SERVER_MAX_HEADER_BYTES: ${SERVER_MAX_HEADER_BYTES}
-      # HSTS, sent by the backend on API answers in production when the request came over HTTPS
-      # (nginx never sends it; behind your own TLS proxy, EDGE_TRUSTED_PROXIES tells nginx so).
-      # Off (0) by default.
-      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-0}
-      HSTS_INCLUDE_SUBDOMAINS: ${HSTS_INCLUDE_SUBDOMAINS:-false}
-      HSTS_PRELOAD: ${HSTS_PRELOAD:-false}
       # development (default, plain http://localhost) or production (required by make onion)
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL}
@@ -274,6 +268,13 @@ services:
       # empty: none): only a request from one of these may name the client (X-Forwarded-For)
       # and the protocol (X-Forwarded-Proto). nginx.conf, nginx-edge-proxies.sh
       EDGE_TRUSTED_PROXIES: ${EDGE_TRUSTED_PROXIES:-}
+      # HSTS (nginx-hsts.sh): sent on every answer of the clearnet listener in production, when a
+      # listed edge proxy said the request came over HTTPS. Empty max-age: one year; 0: off. A
+      # malformed value stops nginx at start.
+      APP_ENV: ${APP_ENV:-development}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-}
+      HSTS_INCLUDE_SUBDOMAINS: ${HSTS_INCLUDE_SUBDOMAINS:-false}
+      HSTS_PRELOAD: ${HSTS_PRELOAD:-false}
     # Loopback only, like the other services: WebCrypto needs a secure context, so plain HTTP
     # is only ever usable as http://localhost; expose it to a network through TLS instead.
     # The only published port of the stack.

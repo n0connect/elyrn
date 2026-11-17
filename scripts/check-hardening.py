@@ -152,6 +152,39 @@ FILES_PER_CLIENT = re.compile(r"^limit_conn files_per_client (\d+);$")
 FILES_KEY_MAP = re.compile(r"^map \$request_method \$file_requests_key \{\n\s+default all;\n\}", re.MULTILINE)
 FILES_MEMORY_LINES = ("client_body_buffer_size 342k;", "proxy_max_temp_file_size 0;", "limit_conn_status 503;",
                       "client_body_timeout 5s;")
+# HSTS: one source, nginx's server-level header from $hsts, which nginx-hsts.sh renders at start
+HSTS_RENDERER = ROOT / "nginx-hsts.sh"
+HSTS_OUT_DIR = "HSTS_OUT_DIR"
+HSTS_MAP_FILE = "hsts.map"
+HSTS_HEADER = "Strict-Transport-Security"
+HSTS_ADD_HEADER = "add_header " + HSTS_HEADER + " $hsts always;"
+HSTS_SETTINGS = ("APP_ENV", "HSTS_MAX_AGE", "HSTS_INCLUDE_SUBDOMAINS", "HSTS_PRELOAD")
+HSTS_MAP = re.compile(r'^map "\$proxy_protocol_addr\|\$forwarded_proto" \$hsts \{\n\s+default "";\n\s+'
+                      r'include /etc/nginx/conf\.d/' + re.escape(HSTS_MAP_FILE) + r';\n\}', re.MULTILINE)
+# (settings, the one entry the map must hold, or None for none); the key "|https" is the clearnet
+# listener (no PROXY address) with HTTPS vouched for by a listed edge proxy
+HSTS_CASES = (
+    ({"APP_ENV": "production"}, '"|https" "max-age=31536000";'),
+    ({"APP_ENV": "production", "HSTS_MAX_AGE": ""}, '"|https" "max-age=31536000";'),
+    ({"APP_ENV": "Production", "HSTS_MAX_AGE": "600", "HSTS_INCLUDE_SUBDOMAINS": "true", "HSTS_PRELOAD": "YES"},
+     '"|https" "max-age=600; includeSubDomains; preload";'),
+    ({"APP_ENV": "prod", "HSTS_MAX_AGE": "63072000", "HSTS_PRELOAD": "1"}, '"|https" "max-age=63072000; preload";'),
+    ({"APP_ENV": "production", "HSTS_MAX_AGE": "0"}, None),
+    ({"APP_ENV": "development"}, None),
+    ({"APP_ENV": "development", "HSTS_MAX_AGE": "31536000"}, None),
+    ({"APP_ENV": "test", "HSTS_INCLUDE_SUBDOMAINS": "true"}, None),
+    ({}, None),
+)
+HSTS_MALFORMED = (
+    {"APP_ENV": "production", "HSTS_MAX_AGE": "-1"}, {"APP_ENV": "production", "HSTS_MAX_AGE": "1e3"},
+    {"APP_ENV": "production", "HSTS_MAX_AGE": "63072001"}, {"APP_ENV": "production", "HSTS_MAX_AGE": "01"},
+    {"APP_ENV": "production", "HSTS_MAX_AGE": "one year"}, {"APP_ENV": "production", "HSTS_MAX_AGE": "99999999999"},
+    {"APP_ENV": "development", "HSTS_MAX_AGE": "abc"}, {"APP_ENV": "production", "HSTS_INCLUDE_SUBDOMAINS": "on"},
+    {"APP_ENV": "production", "HSTS_PRELOAD": "maybe"}, {"APP_ENV": "staging"},
+    {"APP_ENV": "production", "HSTS_MAX_AGE": '1"; add_header X 1'},
+)
+# Go sources that answer requests; a second HSTS source there would disagree with nginx's
+BACKEND_SOURCES = ROOT / "backend/internal"
 # Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
 NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
 # Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
@@ -491,6 +524,63 @@ def check_edge_proxies(services):
             fail("nginx", f"{EDGE_RENDERER.name} accepts a malformed {EDGE_SETTING}")
 
 
+def rendered_hsts(settings):
+    """(exit code, rendered map or None) for one set of HSTS settings, as the entrypoint runs it."""
+    with tempfile.TemporaryDirectory() as out_dir:
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), HSTS_OUT_DIR: out_dir}
+        env.update(settings)
+        try:
+            code = subprocess.run(["sh", str(HSTS_RENDERER)], env=env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=EDGE_RENDER_TIMEOUT_SEC, check=False).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            return None, None
+        try:
+            return code, Path(out_dir, HSTS_MAP_FILE).read_text(encoding="utf-8")
+        except OSError:
+            return code, None
+
+
+def check_hsts(services):
+    """HSTS has one source: nginx's server-level header from $hsts, on every answer of the
+    clearnet listener in production when a listed edge proxy vouched for HTTPS, never on the
+    onion listener, in development or with a max-age of 0; a malformed setting stops nginx."""
+    conf, site = read(NGINX_CONF), read(NGINX_SITE)
+    server_level = site.split("\nlocation ", 1)[0].splitlines()
+    if site.splitlines().count(HSTS_ADD_HEADER) != 1 or HSTS_ADD_HEADER not in server_level:
+        fail("nginx", f"nginx-site.conf must send '{HSTS_ADD_HEADER}' once, at server level")
+    others = [text for text in (conf, read(NGINX_API_PROXY), read(NGINX_API_ERRORS))
+              if HSTS_HEADER in "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))]
+    directives = [line for line in site.splitlines() if HSTS_HEADER in line and not line.lstrip().startswith("#")]
+    if others or directives != [HSTS_ADD_HEADER]:
+        fail("nginx", f"{HSTS_HEADER} must have no source in nginx but '{HSTS_ADD_HEADER}'")
+    for path in BACKEND_SOURCES.rglob("*.go"):
+        if not path.name.endswith("_test.go") and HSTS_HEADER in path.read_text(encoding="utf-8"):
+            fail("backend", f"{path.relative_to(ROOT)} names {HSTS_HEADER}: nginx is its one source")
+    if not HSTS_MAP.search(conf):
+        fail("nginx", "nginx.conf must decide $hsts by map on the PROXY address and $forwarded_proto, default empty, from hsts.map")
+    env = services.get("frontend", {}).get("environment") or {}
+    for setting in HSTS_SETTINGS:
+        if setting not in env:
+            fail("frontend", f"{setting} must be passed to nginx (nginx-hsts.sh)")
+    backend = services.get("backend", {}).get("environment") or {}
+    for setting in HSTS_SETTINGS[1:]:
+        if setting in backend:
+            fail("backend", f"{setting} belongs to nginx now: the backend sends no HSTS")
+    code, _ = rendered_hsts({k: str(env.get(k) or "") for k in HSTS_SETTINGS})
+    if code is None:
+        fail("nginx", f"{HSTS_RENDERER.name} cannot be run")
+        return
+    if code != 0:
+        fail("frontend", "an HSTS setting is malformed: nginx would refuse to start")
+    for settings, want in HSTS_CASES:
+        code, text = rendered_hsts(settings)
+        if code != 0 or text is None or entries(text) != ([want] if want else []):
+            fail("nginx", f"{HSTS_RENDERER.name} with {settings} must render {want or 'no entry'}")
+    for settings in HSTS_MALFORMED:
+        if rendered_hsts(settings)[0] in (0, None):
+            fail("nginx", f"{HSTS_RENDERER.name} accepts the malformed {settings}")
+
+
 def check_backend_memory(svc):
     env = svc.get("environment") or {}
     kib = as_int(env.get("ARGON2_MEMORY_KIB"), DEFAULT_ARGON2_MEMORY_KIB)
@@ -573,6 +663,7 @@ def main():
     check_trust(services)
     check_nginx()
     check_edge_proxies(services)
+    check_hsts(services)
     if failures:
         for line in failures:
             print(f"[FAIL] {layout}: {line}")

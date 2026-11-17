@@ -317,9 +317,6 @@ func TestStartupRefusal_CodedNamedAndValueFree(t *testing.T) {
 		{"SERVER_WRITE_TIMEOUT_SEC", "leak-write", false},
 		{"SERVER_IDLE_TIMEOUT_SEC", "leak-idle", false},
 		{"SERVER_MAX_HEADER_BYTES", "leak-header-bytes", false},
-		{"HSTS_MAX_AGE", "leak-hsts-age", false},
-		{"HSTS_INCLUDE_SUBDOMAINS", "leak-hsts-sub", false},
-		{"HSTS_PRELOAD", "leak-hsts-preload", false},
 		{"DB_PASSWORD", "leak-pw", true},
 	}
 	for _, c := range cases {

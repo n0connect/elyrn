@@ -53,16 +53,12 @@ var (
 	allowedSSLModes  = map[string]struct{}{"disable": {}, "allow": {}, "prefer": {}, "require": {}, "verify-ca": {}, "verify-full": {}}
 	// Production must authenticate the database server, not just encrypt to whoever answers
 	productionSSLModes = map[string]struct{}{"verify-ca": {}, "verify-full": {}}
-	// Booleans as config.getEnvBool reads them: anything else would silently read as false
-	allowedBooleans = map[string]struct{}{"true": {}, "false": {}, "1": {}, "0": {}, "yes": {}, "no": {}}
 )
 
 const (
 	// minProductionDBPasswordLen rejects well-known defaults such as "postgres" in production
 	minProductionDBPasswordLen = 16
-	// maxHSTSMaxAge: two years, the longest max-age the preload list asks for
-	maxHSTSMaxAge = 2 * 365 * 24 * 3600
-	maxPort       = 65535
+	maxPort                    = 65535
 	// envSSLRootCert is libpq's (and pgx's) variable for the CA that verifies the database server
 	envSSLRootCert = "PGSSLROOTCERT"
 )
@@ -84,7 +80,6 @@ func ValidateStartupConfig() error {
 		func() error { return checkSecrets(minJWTLen) },
 		checkSizesFit,
 		checkConnections,
-		checkHeaders,
 	} {
 		if err := check(); err != nil {
 			return err
@@ -250,25 +245,6 @@ func checkRootCert() error {
 	}
 	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
 		return invalid(envSSLRootCert, "must hold a PEM certificate")
-	}
-	return nil
-}
-
-// checkHeaders: the HSTS settings are whitelisted, so a typo never reads as "off" (a malformed
-// HSTS_MAX_AGE used to read as 0, i.e. no HSTS at all). The cross-origin headers are fixed
-// (middleware/security.go), not settings.
-func checkHeaders() error {
-	if raw := strings.TrimSpace(os.Getenv("HSTS_MAX_AGE")); raw != "" {
-		if age, err := strconv.Atoi(raw); err != nil || age < 0 || age > maxHSTSMaxAge {
-			return invalid("HSTS_MAX_AGE", fmt.Sprintf("must be an integer between 0 and %d seconds", maxHSTSMaxAge))
-		}
-	}
-	for _, key := range []string{"HSTS_INCLUDE_SUBDOMAINS", "HSTS_PRELOAD"} {
-		if raw := strings.ToLower(strings.TrimSpace(os.Getenv(key))); raw != "" {
-			if _, ok := allowedBooleans[raw]; !ok {
-				return invalid(key, "must be true or false")
-			}
-		}
 	}
 	return nil
 }

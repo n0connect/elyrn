@@ -148,18 +148,27 @@ edge network's gateway, the first address of `EDGE_SUBNET` (`172.29.72.1` by def
 exactly that address, never the whole subnet. From any other peer both headers are ignored and
 nginx passes on the peer's address and its own `$scheme`. The list is rendered by
 `nginx-edge-proxies.sh` at every nginx start; a malformed entry stops the nginx container with a
-message naming the setting. Left empty behind a proxy, every client shares your proxy's address
-in nginx's and the backend's rate limits (a busy instance then answers `429` to everyone), and
-the backend never sees a request as HTTPS, so it sends no HSTS header. The example replaces
-`X-Forwarded-For` with the address it sees instead of appending to it.
+message naming the setting. The example replaces `X-Forwarded-For` with the address it sees
+instead of appending to it.
 
-**HSTS.** nginx never sends `Strict-Transport-Security`; the backend sends it on API answers
-when `APP_ENV=production`, `HSTS_MAX_AGE` is above 0 (it is 0, off, by default; at most
-63072000) and the request came over HTTPS, which behind your proxy it learns only through
-`EDGE_TRUSTED_PROXIES` above. `docker-compose.yaml` passes `HSTS_MAX_AGE`,
-`HSTS_INCLUDE_SUBDOMAINS` and `HSTS_PRELOAD` from `.env` to the backend
-([Configuration](configuration-and-tuning.md#5-network-proxy--headers)). Your proxy can send the
-header itself instead, with `HSTS_MAX_AGE=0` left at its default.
+> **Behind your own proxy, `EDGE_TRUSTED_PROXIES` is not optional.** Left empty, nginx cannot
+> tell who the client is or that the request came over HTTPS. Then:
+> - **every user shares one address**: one rate-limit bucket in nginx and in the backend (a busy
+>   instance answers `429` to everyone), one per-network event-stream allowance (16 streams for
+>   the whole instance, after which nobody gets live updates), and one per-address file request
+>   allowance;
+> - **no HSTS is sent**, because nginx never learns that the request was HTTPS.
+
+**HSTS.** nginx is the one source of `Strict-Transport-Security`: it sends it on every answer of
+the clearnet listener (the page, static files, API answers, its own error answers) when
+`APP_ENV=production` and a proxy listed in `EDGE_TRUSTED_PROXIES` said the request came over
+HTTPS, with `max-age` from `HSTS_MAX_AGE` (empty: one year, 31536000; `0`: off; at most
+63072000) and `includeSubDomains` / `preload` from `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD`.
+It is never sent on the onion listener, in development, or for a request whose protocol no
+listed proxy vouched for. The backend sends none. `nginx-hsts.sh` checks the four settings at
+every nginx start; a malformed value stops nginx with a message naming it
+([Configuration](configuration-and-tuning.md#5-network-proxy--headers)). If your proxy sends the
+header itself, set `HSTS_MAX_AGE=0` so the browser gets one copy.
 
 ## 5. Upgrades
 

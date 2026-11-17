@@ -2,10 +2,7 @@ package middleware
 
 import (
 	"net/http"
-	"strconv"
-	"strings"
 
-	"elyrn/internal/config"
 	"elyrn/internal/utils"
 )
 
@@ -36,22 +33,8 @@ func SecurityHeadersMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", permissionsPolicy)
 
-		// HSTS: nginx never sends it, so this is its only source (on API answers, which a browser
-		// applies to the whole host). HTTPS is known from nginx's X-Forwarded-Proto, which carries
-		// the outer proxy's word only from EDGE_TRUSTED_PROXIES (nginx.conf).
-		if config.IsProductionMode() && IsRequestHTTPS(r) {
-			maxAge := config.GetHSTSMaxAge()
-			if maxAge > 0 {
-				hsts := []string{"max-age=" + strconv.Itoa(maxAge)}
-				if config.GetHSTSIncludeSubDomains() {
-					hsts = append(hsts, "includeSubDomains")
-				}
-				if config.GetHSTSPreload() {
-					hsts = append(hsts, "preload")
-				}
-				w.Header().Set("Strict-Transport-Security", strings.Join(hsts, "; "))
-			}
-		}
+		// No HSTS here: nginx is its one source, on every HTTPS answer of the clearnet listener,
+		// the page included (nginx-hsts.sh, nginx-site.conf)
 
 		w.Header().Set("Cross-Origin-Opener-Policy", crossOriginOpenerPolicy)
 		w.Header().Set("Cross-Origin-Resource-Policy", crossOriginResourcePolicy)

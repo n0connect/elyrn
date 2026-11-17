@@ -90,8 +90,8 @@ At startup the backend checks these keys against the database before it serves a
 | `BACKEND_MEM_LIMIT` | size | `512m` | The backend container's memory (no swap). Keep it at least `ARGON2_MAX_CONCURRENT × ARGON2_MEMORY_KIB` + 128 MiB; `make check-hardening` checks it. |
 | `BACKEND_GOMEMLIMIT` | size | `448MiB` | Go runtime soft limit; keep it about 64 MiB under `BACKEND_MEM_LIMIT`. |
 | `EDGE_TRUSTED_PROXIES` | list | *empty* | Read by nginx, not the backend: your own TLS reverse proxies in front of nginx (comma-separated IPs/CIDRs, prefix 1 or more). Only a request whose TCP peer is listed may name the client (`X-Forwarded-For`) and the protocol (`X-Forwarded-Proto`, `http` or `https`). A proxy on the same host is seen from the gateway of `EDGE_SUBNET` (`172.29.72.1` by default): list exactly that address. A malformed list stops nginx at start. See [Deployment](deployment.md#4-tls-in-front-of-the-stack). |
-| `HSTS_MAX_AGE` | int | `0` (off) | HSTS `max-age` in seconds on HTTPS API answers in production (0-63072000; a malformed value is refused, it no longer reads as 0). |
-| `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD` | bool | `false` | `true`/`false` (`1`/`0`, `yes`/`no`); anything else is refused. `docker-compose.yaml` passes all three `HSTS_*` variables from `.env` to the backend. The cross-origin headers of API answers are fixed (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`, as nginx sends them), not settings; the `SEC_HEADER_*` variables of earlier releases are ignored. |
+| `HSTS_MAX_AGE` | int | *empty* (one year in production) | Read by nginx, not the backend (`nginx-hsts.sh`, at every nginx start): the `max-age` of the `Strict-Transport-Security` header nginx sends on every answer of the clearnet listener (page, static files, API answers, its own error answers) when `APP_ENV=production` and a proxy listed in `EDGE_TRUSTED_PROXIES` said the request came over HTTPS. Empty or unset: 31536000 (one year); `0`: off; at most 63072000 (two years). Never on the onion listener, never in development. A malformed value stops nginx at start. |
+| `HSTS_INCLUDE_SUBDOMAINS` / `HSTS_PRELOAD` | bool | `false` | Read by nginx with `HSTS_MAX_AGE`: add `includeSubDomains` / `preload`. `true`/`false` (`1`/`0`, `yes`/`no`, any case); anything else stops nginx at start. `docker-compose.yaml` passes `APP_ENV` and the three `HSTS_*` variables to nginx; the backend no longer reads them. The cross-origin headers of API answers are fixed (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`, as nginx sends them), not settings; the `SEC_HEADER_*` variables of earlier releases are ignored. |
 
 ### 6. Server, Registration & Rate Limits
 
@@ -154,7 +154,7 @@ before it touches the database. A refusal is one log line with the code `E_CONFI
 variable's **name** and its rule, never its value, and the process exits with status 78:
 
 ```text
-[STARTUP] E_CONFIG_INVALID: an environment variable is missing, malformed or outside its rule; ... [variable HSTS_MAX_AGE] [must be an integer between 0 and 63072000 seconds]
+[STARTUP] E_CONFIG_INVALID: an environment variable is missing, malformed or outside its rule; ... [variable MESSAGE_TTL_DAYS] [must be an integer between 1 and 365]
 ```
 
 | Variable | Rule |
@@ -209,8 +209,21 @@ variable's **name** and its rule, never its value, and the process exits with st
 | `PGSSLROOTCERT` | when set: a readable file holding a PEM certificate |
 | `ALLOWED_ORIGINS` | comma-separated exact origins `scheme://host[:port]` (http or https), no wildcard, path, query or credentials; at least one. A bad entry is reported by its position |
 | `TRUSTED_PROXIES` | comma-separated IP addresses or CIDR ranges (may be empty); a bad entry is reported by its position |
-| `HSTS_MAX_AGE` | when set: 0-63072000 |
-| `HSTS_INCLUDE_SUBDOMAINS`, `HSTS_PRELOAD` | when set: `true`, `false`, `1`, `0`, `yes`, `no` |
+
+nginx checks its own settings at every start, before it reads its configuration; a malformed
+value stops the nginx container with one line naming the setting and its rule (for
+`EDGE_TRUSTED_PROXIES`, also the entry it could not read):
+
+| Variable | Rule (nginx) |
+|---|---|
+| `EDGE_TRUSTED_PROXIES` | comma-separated IPv4/IPv6 addresses or CIDRs, prefix from 1 to the family's width; may be empty (`nginx-edge-proxies.sh`) |
+| `APP_ENV` | `development`, `test`, `production` (`prod`), any case (`nginx-hsts.sh`) |
+| `HSTS_MAX_AGE` | empty (one year in production) or an integer 0-63072000 without sign or leading zero (`nginx-hsts.sh`) |
+| `HSTS_INCLUDE_SUBDOMAINS`, `HSTS_PRELOAD` | empty, `true`, `false`, `1`, `0`, `yes`, `no`, any case (`nginx-hsts.sh`) |
+
+```text
+[ERROR] HSTS_MAX_AGE: must be an integer between 0 and 63072000 seconds (0 turns HSTS off; empty means 31536000)
+```
 
 `GOMEMLIMIT` is read by the Go runtime itself, which refuses a malformed value before the
 backend's code runs. Every other startup failure has its own code too (`E_SELFTEST`,
@@ -248,7 +261,7 @@ Each Argon2id computation allocates `ARGON2_MEMORY_KIB`; `ARGON2_MAX_CONCURRENT`
 | Session cookie | `noaddx_session`, no `Secure` | `__Host-Session`, `Secure`, `HttpOnly`, `SameSite=Strict` |
 | Startup checks | ranges and whitelists | the same, plus `DB_SSL_MODE` `verify-ca`/`verify-full`, `DB_PASSWORD` >= 16 characters, `LOG_LEVEL` not `debug`, `ARGON2_MEMORY_KIB` >= 19456 |
 | Published ports | nginx, backend (8080) and PostgreSQL (`DB_HOST_PORT`) on loopback | nginx only ([Hardening](hardening.md#layouts)) |
-| HSTS | never | on API responses that arrived over HTTPS (`X-Forwarded-Proto: https` from nginx, which takes `https` from your own proxy only when it is listed in `EDGE_TRUSTED_PROXIES`), when `HSTS_MAX_AGE` is above 0 |
+| HSTS (sent by nginx) | never | on every answer of the clearnet listener whose request a proxy listed in `EDGE_TRUSTED_PROXIES` said came over HTTPS, unless `HSTS_MAX_AGE=0` (one year by default); never on the onion listener |
 | Startup log | `Starting elyrn. backend (development)` | `Starting elyrn. backend (production)` and `Production mode validation passed` |
 
 The Compose stack satisfies every production check as generated by `make setup` (the backend
@@ -382,6 +395,12 @@ window.trustedTypes.createPolicy('noaddx-worker', {
 });
 ```
 This whitelist permits only the background Web Worker script (`js/pow-worker.js`) to be instantiated. Any other DOM sink manipulation throws a browser security exception. Styles follow the same rule: there is no `'unsafe-inline'`, and initially hidden elements are hidden by the stylesheet (`[data-hidden]`), not by inline `style` attributes.
+
+### Who sends what
+
+| Header | Page, static files, nginx's own answers | API answers (from the backend, through nginx) |
+|---|---|---|
+| `Strict-Transport-Security` | nginx, in production over HTTPS vouched for by a listed edge proxy, clearnet listener only (`nginx-hsts.sh`, `$hsts`) | the same nginx header; the backend sends none |
 
 API responses from the backend additionally carry `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `Cache-Control: no-store`: they are data, never documents.
 

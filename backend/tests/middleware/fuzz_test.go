@@ -105,7 +105,7 @@ func FuzzClientKey(f *testing.F) {
 		client := middleware.ClientIP(forwarded)
 		if !trustedPeer(remote) {
 			bareKey, _ := middleware.ClientKey(bare)
-			if client != middleware.ClientIP(bare) || key != bareKey || middleware.IsRequestHTTPS(forwarded) {
+			if client != middleware.ClientIP(bare) || key != bareKey {
 				t.Fatalf("untrusted peer %q chose client %q via headers", remote, client)
 			}
 			return

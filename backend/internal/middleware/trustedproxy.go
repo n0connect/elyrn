@@ -158,22 +158,6 @@ func clientNetwork(raw string) string {
 	return ip.Mask(net.CIDRMask(ipv6SubscriberBits, ipv6AddressBits)).String() + ipv6SubscriberSuffix
 }
 
-// IsRequestHTTPS returns true if the request is HTTPS, considering trusted proxy headers.
-func IsRequestHTTPS(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	if r.TLS != nil {
-		return true
-	}
-	remoteIP := parseRemoteIP(r.RemoteAddr)
-	if !isTrustedProxy(remoteIP) {
-		return false
-	}
-	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
-	return strings.EqualFold(proto, "https")
-}
-
 // clientKeySecret is generated per process and never persisted, so rate-limit buckets
 // hold HMAC(ip) values that cannot be reversed even from a memory dump.
 var (
