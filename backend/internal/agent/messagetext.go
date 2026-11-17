@@ -52,7 +52,7 @@ func ValidateMessageText(text string) (string, error) {
 // ECMAScript white space (the /\s+/u the browser splits on, which is exactly messageTrimChars),
 // and any word of the account number's exact shape (utils.ValidateAccountNumber: 43 base64url
 // characters, the browser's ACCOUNT_NUMBER_REGEX). An invite or a room code carries its prefix,
-// so sharing one is not refused. accountNumberSamples (messages_test.go) pins both sides.
+// so sharing one is not refused. accountNumberSamples (fuzz_test.go) pins both sides.
 func containsAccountNumber(text string) bool {
 	words := strings.FieldsFunc(norm.NFKC.String(text), func(r rune) bool {
 		return strings.ContainsRune(messageTrimChars, r)
