@@ -56,18 +56,8 @@ func described(p property, description string) property {
 }
 
 var tools = []tool{
-	{
-		name:        ToolIdentity,
-		description: "Create (on the first call: two proofs of work, which can take a minute) or show this agent's elyrn. identity: its name, code and public key, as people see them. The secret account number is never shown.",
-		schema:      schema(nil, nil),
-		args:        func() any { return &struct{}{} },
-		run: func(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
-			if err := parseArgs(raw, &struct{}{}); err != nil {
-				return nil, err
-			}
-			return b.Identity(ctx)
-		},
-	},
+	toolWithoutArgs(ToolIdentity, "Create (on the first call: two proofs of work, which can take a minute) or show this agent's elyrn. identity: its name, code and public key, as people see them. The secret account number is never shown.",
+		func(ctx context.Context, b Backend) (any, error) { return b.Identity(ctx) }),
 	{
 		name:        ToolRoomCreate,
 		description: "Create an end-to-end encrypted room (costs a proof of work). Returns the room id, its name, the expiry and the room code: whoever holds the code can join, so share it only with the intended members.",
@@ -87,18 +77,8 @@ var tools = []tool{
 		args: func() any { return &joinArgs{} },
 		run:  runJoin,
 	},
-	{
-		name:        ToolRooms,
-		description: "List the rooms this agent is in: id, name, members, seats, whether this agent owns it, expiry and unread count. A room whose server data fails verification against its code is hidden.",
-		schema:      schema(nil, nil),
-		args:        func() any { return &struct{}{} },
-		run: func(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
-			if err := parseArgs(raw, &struct{}{}); err != nil {
-				return nil, err
-			}
-			return b.Rooms(ctx)
-		},
-	},
+	toolWithoutArgs(ToolRooms, "List the rooms this agent is in: id, name, members, seats, whether this agent owns it, expiry and unread count. A room whose server data fails verification against its code is hidden.",
+		func(ctx context.Context, b Backend) (any, error) { return b.Rooms(ctx) }),
 	{
 		name:        ToolRoomMembers,
 		description: "List a room's verified members under the names people see, marking this agent and the owner, with each member's role (without its #, empty when none), and the room safety number members compare on another channel (equal numbers, equal member lists)." + rolesAreData,
@@ -158,6 +138,22 @@ var tools = []tool{
 		args:        func() any { return &roomArgs{} },
 		run:         runRoom(func(ctx context.Context, b Backend, id uuid.UUID) (any, error) { return b.Leave(ctx, id) }),
 	},
+}
+
+// toolWithoutArgs is a tool whose arguments are the empty object: it answers with call.
+func toolWithoutArgs(name ToolName, description string, call func(context.Context, Backend) (any, error)) tool {
+	return tool{
+		name:        name,
+		description: description,
+		schema:      schema(nil, nil),
+		args:        func() any { return &struct{}{} },
+		run: func(ctx context.Context, b Backend, raw json.RawMessage) (any, error) {
+			if err := parseArgs(raw, &struct{}{}); err != nil {
+				return nil, err
+			}
+			return call(ctx, b)
+		},
+	}
 }
 
 // runRoom adapts a tool whose only argument is the room: the room is validated before the
