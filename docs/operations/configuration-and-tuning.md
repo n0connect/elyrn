@@ -401,6 +401,10 @@ This whitelist permits only the background Web Worker script (`js/pow-worker.js`
 | Header | Page, static files, nginx's own answers | API answers (from the backend, through nginx) |
 |---|---|---|
 | `Strict-Transport-Security` | nginx, in production over HTTPS vouched for by a listed edge proxy, clearnet listener only (`nginx-hsts.sh`, `$hsts`) | the same nginx header; the backend sends none |
+| `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Embedder-Policy`, `Cross-Origin-Resource-Policy` | nginx (`nginx-site.conf`, server level) | nginx's copy only: the backend sets the same values (for a backend reached without nginx) and `nginx-api-proxy.conf` hides them, so each arrives exactly once; `make check-hardening` pins it |
+| `Content-Security-Policy` | nginx: the site policy above | two policies, on purpose: the backend's and nginx's site policy. A browser enforces every policy it receives, so the effective one is their intersection: an API answer can load and run nothing |
+| `Cache-Control` | nginx: `no-cache` on the page and static files (`expires epoch`) | the backend: `no-store` |
+| `Clear-Site-Data` | never | the backend, on a successful logout and account deletion only |
 
 API responses from the backend additionally carry `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `Cache-Control: no-store`: they are data, never documents.
 

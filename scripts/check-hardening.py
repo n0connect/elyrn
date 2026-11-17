@@ -130,12 +130,23 @@ NOT_FOUND_PAGE = re.compile(r"NOT_FOUND: '(/[\w-]+\.html)'")
 API_PROXY_INCLUDE = "include /etc/nginx/elyrn/api-proxy.conf;"
 API_ERRORS_INCLUDE = "include /etc/nginx/elyrn/api-errors.conf;"
 API_DEFAULT_DENY = "location /api/ { " + API_ERRORS_INCLUDE + " return 404; }"
-# nginx is the one source of these on every response; the backend's copies are hidden on /api/
+# nginx is the one source of these on every response; the backend's copies are hidden on /api/,
+# so an API answer carries exactly one of each (the two CSPs both stay: they differ on purpose)
 NGINX_OWNED_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "same-origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
 }
+# nginx-owned too, with a value too long to repeat here: nginx's one line is found by name
+NGINX_OWNED_BY_NAME = ("Permissions-Policy",)
+# Every header the backend's security middleware sets must be nginx-owned (hidden on /api/) or
+# one that stays on purpose
+SECURITY_GO = ROOT / "backend/internal/middleware/security.go"
+BACKEND_HEADER_SET = re.compile(r'w\.Header\(\)\.Set\(("[A-Za-z-]+"|utils\.\w+)')
+BACKEND_HEADERS_KEPT = {'"Content-Security-Policy"', "utils.HeaderCacheControl"}
 # The event stream's location: unbuffered here, and an outer proxy is told so (the backend's
 # X-Accel-Buffering passed on); an add_header there would drop the server's security headers
 EVENTS_LOCATION = "location = /api/v2/events {"
@@ -351,6 +362,15 @@ def check_nginx():
             fail("nginx", f"nginx-site.conf must send {header}: {value} on every response")
         if f"proxy_hide_header {header};" not in proxy.splitlines():
             fail("nginx", f"nginx-api-proxy.conf must hide the backend's {header} (one header, never two)")
+    for header in NGINX_OWNED_BY_NAME:
+        if len([line for line in site.splitlines() if line.startswith(f"add_header {header} ")]) != 1:
+            fail("nginx", f"nginx-site.conf must send {header} once, at server level")
+        if f"proxy_hide_header {header};" not in proxy.splitlines():
+            fail("nginx", f"nginx-api-proxy.conf must hide the backend's {header} (one header, never two)")
+    hidden = {f'"{h}"' for h in list(NGINX_OWNED_HEADERS) + list(NGINX_OWNED_BY_NAME)}
+    for header in BACKEND_HEADER_SET.findall(read(SECURITY_GO)):
+        if header not in hidden and header not in BACKEND_HEADERS_KEPT:
+            fail("backend", f"security.go sets {header}, which nginx does not hide: an API answer would carry two")
     if "proxy_intercept_errors off;" not in errors or re.search(r"proxy_intercept_errors\s+on", site + errors):
         fail("nginx", "proxy_intercept_errors must be off: the backend's coded answers pass through")
     # Every location that proxies to the backend answers nginx's own failures in JSON
