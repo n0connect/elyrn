@@ -25,6 +25,9 @@ const Chat = (() => {
     // at most 5 requests per poll per visible tab (1 when no conversation is open), so 4 visible
     // tabs stay at 4 r/s, inside nginx's 20 r/s with burst 40 per client
     const POLL_INTERVAL_MS = 5 * SECOND_MS;
+    // A hidden page behind a silent stream polls too, this much less often: it is not being read
+    // (nothing is marked read while hidden), it only has to learn that something arrived
+    const HIDDEN_POLL_INTERVAL_MS = 30 * SECOND_MS;
     // Every named event the stream sends; any one of them proves it is delivering
     const STREAM_EVENTS = Object.freeze(['ping', 'msg', 'conv']);
     const MAX_CIPHERTEXT_CHARS = 11000;
@@ -50,6 +53,7 @@ const Chat = (() => {
     let lastStreamEventAt = 0;        // performance.now() of the last stream event, or of the last (re)connect
     let streamLimitMs = STREAM_FIRST_PROOF_MS;  // the silence allowed since then: first proof, or the heartbeat limit
     let polling = false;              // the watchdog is fetching for a silent stream (logged once per silence)
+    let lastPollAt = -Infinity;       // performance.now() of the watchdog's last poll (none yet: due)
     let outageShown = false;          // a fetch failed while polling and was shown: polls stay quiet until one succeeds
     let refreshTimer = null;
     let listLoaded = false;           // distinguishes the first load from live additions
@@ -171,6 +175,7 @@ const Chat = (() => {
         closeEvents();
         clearTimeout(pollTimer);
         polling = false;
+        lastPollAt = -Infinity;
         outageShown = false;
         clearTimeout(refreshTimer);
         conversations.clear();
@@ -1389,8 +1394,8 @@ const Chat = (() => {
         if (!me) return;
         const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            // Nothing to show: the watchdog keeps fetching while the tab is visible (no stream
-            // event can arrive now), and showing the tab again retries the stream (onVisible)
+            // Nothing to show: the watchdog keeps fetching (no stream event can arrive now; less
+            // often while the tab is hidden), and showing the tab again retries the stream (onVisible)
             Log.warn(Errors.INTERNAL.W_LIVE_STREAM_GAVE_UP);
             return;
         }
@@ -1475,14 +1480,19 @@ const Chat = (() => {
         pollTimer = setTimeout(watchStream, POLL_INTERVAL_MS);
     }
 
-    // One look: a visible page whose stream proved nothing within its limit fetches what the
-    // stream would have poked (resync, an authenticated request, which also keeps the session
-    // sliding), then looks again. It keeps fetching until a stream event arrives; a hidden page
-    // fetches nothing (onVisible resyncs when it is shown).
+    // One look: a page whose stream proved nothing within its limit fetches what the stream would
+    // have poked (resync, an authenticated request, which also keeps the session sliding), then
+    // looks again. It keeps fetching until a stream event arrives: at every look while visible,
+    // every HIDDEN_POLL_INTERVAL_MS while hidden (streamNeedsPolling).
     async function watchStream() {
-        if (streamNeedsPolling(performance.now(), lastStreamEventAt, streamLimitMs, isPageVisible(), me !== null)) {
+        const now = performance.now();
+        if (streamNeedsPolling({
+            now: now, lastEventAt: lastStreamEventAt, silenceLimitMs: streamLimitMs, visible: isPageVisible(),
+            loggedIn: me !== null, lastPollAt: lastPollAt, hiddenIntervalMs: HIDDEN_POLL_INTERVAL_MS
+        })) {
             if (!polling) Log.warn(Errors.INTERNAL.W_LIVE_STREAM_SILENT);
             polling = true;
+            lastPollAt = now;
             await resync(true);
         }
         armWatchdog();

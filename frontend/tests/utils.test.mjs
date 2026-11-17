@@ -192,37 +192,69 @@ test('singleFlight: calls during a run share it and add exactly one run after it
     assert.equal(runs, 3);
 });
 
+// The watchdog's look as chat.js asks it: named fields, defaults a visible logged-in page with no
+// poll yet; `over` replaces any of them
+const HIDDEN_INTERVAL = 30000;
+function look(over) {
+    return fn('streamNeedsPolling')(Object.assign({
+        now: 0, lastEventAt: 0, silenceLimitMs: 60000, visible: true, loggedIn: true,
+        lastPollAt: -Infinity, hiddenIntervalMs: HIDDEN_INTERVAL
+    }, over));
+}
+
 test('streamNeedsPolling: a logged-in visible page polls only once its stream was silent for the whole limit', () => {
-    const needs = fn('streamNeedsPolling');
     const limit = 60000;
-    // An event inside the limit: the stream is delivering, nothing is fetched
-    assert.equal(needs(1000, 1000, limit, true, true), false);
-    assert.equal(needs(1000 + limit - 1, 1000, limit, true, true), false);
-    // Silent for the whole limit, or longer: fetch
-    assert.equal(needs(1000 + limit, 1000, limit, true, true), true);
-    assert.equal(needs(1000 + 10 * limit, 1000, limit, true, true), true);
-    // Hidden or logged out: never, however long the silence (onVisible resyncs on return)
-    assert.equal(needs(10 * limit, 0, limit, false, true), false);
-    assert.equal(needs(10 * limit, 0, limit, true, false), false);
-    assert.equal(needs(10 * limit, 0, limit, false, false), false);
-    // Only true itself counts as visible or logged in
-    assert.equal(needs(10 * limit, 0, limit, 'visible', true), false);
-    assert.equal(needs(10 * limit, 0, limit, true, 1), false);
+    const at = (now, extra) => look(Object.assign({ now, lastEventAt: 1000, silenceLimitMs: limit }, extra));
+    // An event inside the limit: the stream is delivering, nothing is fetched, visible or not
+    assert.equal(at(1000), false);
+    assert.equal(at(1000 + limit - 1), false);
+    assert.equal(at(1000 + limit - 1, { visible: false }), false);
+    // Silent for the whole limit, or longer: a visible page fetches at every look
+    assert.equal(at(1000 + limit), true);
+    assert.equal(at(1000 + 10 * limit), true);
+    assert.equal(at(1000 + limit, { lastPollAt: 1000 + limit - 1 }), true);
+    // Logged out: never, however long the silence
+    assert.equal(at(10 * limit, { loggedIn: false }), false);
+    assert.equal(at(10 * limit, { loggedIn: false, visible: false }), false);
+    // Only true itself counts as logged in
+    assert.equal(at(10 * limit, { loggedIn: 1 }), false);
 });
 
-test('streamNeedsPolling: anything that is no proof of a recent event counts as silence', () => {
-    const needs = fn('streamNeedsPolling');
+test('streamNeedsPolling: a hidden page behind a silent stream polls once per hidden interval', () => {
+    const limit = 60000;
+    const now = 10 * limit;
+    const hidden = (extra) => look(Object.assign({ now, lastEventAt: 0, silenceLimitMs: limit, visible: false }, extra));
+    // No poll yet: due at once
+    assert.equal(hidden({}), true);
+    // A poll inside the interval: wait; at the interval or past it: due again
+    assert.equal(hidden({ lastPollAt: now - 1 }), false);
+    assert.equal(hidden({ lastPollAt: now - HIDDEN_INTERVAL + 1 }), false);
+    assert.equal(hidden({ lastPollAt: now - HIDDEN_INTERVAL }), true);
+    assert.equal(hidden({ lastPollAt: now - 10 * HIDDEN_INTERVAL }), true);
+    // Only true itself counts as visible: anything else is held to the hidden interval
+    assert.equal(hidden({ visible: 'visible', lastPollAt: now - 1 }), false);
+    assert.equal(hidden({ visible: 1, lastPollAt: now - 1 }), false);
+    // A stream that proves itself stops a hidden page's polls too
+    assert.equal(hidden({ lastEventAt: now - 1 }), false);
+});
+
+test('streamNeedsPolling: anything that is no proof of a recent event or poll counts as none', () => {
     const limit = 60000;
     // An event later than now (a clock that went back) proves nothing
-    assert.equal(needs(1000, 2000, limit, true, true), true);
+    assert.equal(look({ now: 1000, lastEventAt: 2000 }), true);
     for (const bad of [NaN, Infinity, -Infinity, undefined, null, '1000']) {
-        assert.equal(needs(bad, 1000, limit, true, true), true, `now ${String(bad)}`);
-        assert.equal(needs(1000, bad, limit, true, true), true, `last event ${String(bad)}`);
-        assert.equal(needs(1000, 1000, bad, true, true), true, `limit ${String(bad)}`);
+        assert.equal(look({ now: bad, lastEventAt: 1000 }), true, `now ${String(bad)}`);
+        assert.equal(look({ now: 1000, lastEventAt: bad }), true, `last event ${String(bad)}`);
+        assert.equal(look({ now: 1000, lastEventAt: 1000, silenceLimitMs: bad }), true, `limit ${String(bad)}`);
+        // ...and a hidden page's last poll or interval that proves nothing makes the poll due
+        assert.equal(look({ now: limit, visible: false, lastPollAt: bad }), true, `last poll ${String(bad)}`);
+        assert.equal(look({ now: limit, visible: false, lastPollAt: limit - 1, hiddenIntervalMs: bad }), true, `interval ${String(bad)}`);
     }
     // A limit that is no positive number never lets the stream count as delivering
-    assert.equal(needs(1000, 1000, 0, true, true), true);
-    assert.equal(needs(1000, 1000, -1, true, true), true);
+    assert.equal(look({ now: 1000, lastEventAt: 1000, silenceLimitMs: 0 }), true);
+    assert.equal(look({ now: 1000, lastEventAt: 1000, silenceLimitMs: -1 }), true);
+    // A poll later than now proves nothing either
+    assert.equal(look({ now: limit, visible: false, lastPollAt: limit + 1 }), true);
 });
 
 // The watchdog's limits in chat.js against the heartbeat the server really sends, read from both
@@ -239,12 +271,15 @@ test('the stream limits match the server\'s named heartbeats', () => {
     const firstProof = seconds(chat, /const STREAM_FIRST_PROOF_MS = (\d+) \* SECOND_MS;/);
     const limit = seconds(chat, /const STREAM_SILENCE_LIMIT_MS = (\d+) \* SECOND_MS;/);
     const poll = seconds(chat, /const POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
+    const hiddenPoll = seconds(chat, /const HIDDEN_POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
     const keepAlive = seconds(events, /sseKeepAlive = (\d+) \* time\.Second/);
     assert.ok(limit >= 2 * keepAlive, 'silence limit shorter than two heartbeats');
     // ...and shorter than three: a held stream is noticed as soon as two heartbeats are missing
     assert.ok(limit < 3 * keepAlive, 'silence limit waits past a third heartbeat before polling');
     assert.ok(firstProof > 0 && firstProof < keepAlive, 'the first proof must not wait for a periodic heartbeat');
     assert.ok(poll > 0 && poll <= firstProof, 'the watchdog looks less often than the first-proof limit');
+    // A hidden page polls less often than a visible one, at a whole number of looks
+    assert.ok(hiddenPoll > poll && hiddenPoll % poll === 0, 'the hidden interval is not a multiple of the look');
     // The heartbeat is a named event the page listens to, never a comment it cannot see, and the
     // first one follows the preamble at once (the preamble stays first: the agent waits for it)
     assert.match(events, /ssePing = "event: ping\\ndata: \{\}\\n\\n"/);
