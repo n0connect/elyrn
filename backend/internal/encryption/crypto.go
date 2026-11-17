@@ -3,7 +3,7 @@ package encryption
 import (
 	"encoding/base64"
 	"encoding/hex"
-	"fmt"
+	"errors"
 
 	"elyrn/internal/cryptoengine"
 	"elyrn/internal/utils"
@@ -11,13 +11,31 @@ import (
 
 var cryptoLogger = utils.NewLogger("CRYPTO")
 
+// The failures of this file, each one class: a handler that meets one answers 500 E_INTERNAL
+// (apperr.WriteError) and logs the class, never a value. ErrClosing (masterkey.go) is the one
+// failure with its own answer.
+var (
+	// ErrKeyLength: a key is not AES-256 sized (a programming error, never client input)
+	ErrKeyLength = errors.New("encryption: key is not 32 bytes")
+	// ErrAADLength: the AAD is not the length its record format fixes
+	ErrAADLength = errors.New("encryption: AAD has the wrong length")
+	// ErrUnknownKeyID: a record names a master key id that is not configured
+	ErrUnknownKeyID = errors.New("encryption: no master key has this id")
+	// ErrUserKey: a stored per-user key is empty, does not open, or does not hold 32 bytes
+	ErrUserKey = errors.New("encryption: the stored user key is unusable")
+	// ErrOpen: a record does not open under this key and AAD (tampered, moved or corrupt)
+	ErrOpen = errors.New("encryption: the record does not open")
+	// ErrKeyGeneration: the CSPRNG could not produce a new user key
+	ErrKeyGeneration = errors.New("encryption: no new user key")
+)
+
 // EncryptWithKey encrypts data with AES-256-GCM
 // Flow: raw data -> AES encrypt -> base64 encode (for storage)
 func EncryptWithKey(text string, key []byte) (string, error) {
 	cryptoLogger.Debug("EncryptWithKey: starting encryption, input length: %d", len(text))
 
 	if len(key) != cryptoengine.AES256KeySize {
-		return "", fmt.Errorf("invalid key length")
+		return "", ErrKeyLength
 	}
 
 	// AES encrypt the raw text
@@ -40,7 +58,7 @@ func DecryptWithKey(encryptedText string, key []byte) (string, error) {
 	cryptoLogger.Debug("DecryptWithKey: starting decryption, input length: %d", len(encryptedText))
 
 	if len(key) != cryptoengine.AES256KeySize {
-		return "", fmt.Errorf("invalid key length")
+		return "", ErrKeyLength
 	}
 
 	// Base64 decode the stored encrypted data
@@ -88,7 +106,7 @@ func DecryptWithMasterKey(encryptedText string, keyID string) (string, error) {
 		return err
 	})
 	if err == nil && !ok {
-		return "", fmt.Errorf("unknown master key id")
+		return "", ErrUnknownKeyID
 	}
 	if err != nil {
 		cryptoLogger.LogError("DecryptWithMasterKey", err)
@@ -102,7 +120,7 @@ func GenerateUserAESKey() ([]byte, error) {
 	key, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
 	if err != nil {
 		cryptoLogger.LogError("GenerateUserAESKey", err)
-		return nil, fmt.Errorf("failed to generate user AES key: %w", err)
+		return nil, ErrKeyGeneration
 	}
 	cryptoLogger.Debug("GenerateUserAESKey: successfully generated 32-byte AES key")
 	return key, nil
@@ -115,26 +133,27 @@ func DecryptUserKey(encryptedKey string, keyID string) ([]byte, error) {
 
 	if encryptedKey == "" {
 		cryptoLogger.Error("DecryptUserKey: encrypted key is empty")
-		return nil, fmt.Errorf("encrypted key is empty")
+		return nil, ErrUserKey
 	}
 
 	cryptoLogger.Debug("DecryptUserKey: decrypting user key with master key")
 	decryptedKeyHex, err := DecryptWithMasterKey(encryptedKey, keyID)
 	if err != nil {
 		cryptoLogger.LogError("DecryptUserKey", err)
-		return nil, fmt.Errorf("failed to decrypt user key: %w", err)
+		return nil, errors.Join(ErrUserKey, err)
 	}
 	cryptoLogger.Debug("DecryptUserKey: successfully decrypted user key, hex length: %d", len(decryptedKeyHex))
 
 	userKey, err := hex.DecodeString(decryptedKeyHex)
 	if err != nil {
-		cryptoLogger.LogError("DecryptUserKey (hex decode)", err)
-		return nil, fmt.Errorf("failed to decode user key: %w", err)
+		// The decoder's error quotes the offending byte of the key: only the class is kept
+		cryptoLogger.LogError("DecryptUserKey (hex decode)", ErrUserKey)
+		return nil, ErrUserKey
 	}
 
 	if len(userKey) != cryptoengine.AES256KeySize {
 		cryptoLogger.Error("DecryptUserKey: invalid user key length: %d (expected %d)", len(userKey), cryptoengine.AES256KeySize)
-		return nil, fmt.Errorf("invalid user key length")
+		return nil, ErrUserKey
 	}
 	cryptoLogger.Debug("DecryptUserKey: successfully decoded user key, length: %d", len(userKey))
 
@@ -178,7 +197,7 @@ func DecryptWithAAD(encryptedText string, key []byte, aad []byte) (string, error
 	plaintext, err := cryptoengine.DecryptAES256GCM(key, data, aad)
 	if err != nil {
 		cryptoLogger.LogError("DecryptAES256GCM", err)
-		return "", fmt.Errorf("decryption failed: AAD mismatch or invalid ciphertext")
+		return "", ErrOpen
 	}
 
 	cryptoLogger.Debug("DecryptWithAAD: decryption completed, plaintext length: %d", len(plaintext))
@@ -188,11 +207,11 @@ func DecryptWithAAD(encryptedText string, key []byte, aad []byte) (string, error
 func validateKeyAndAAD(key []byte, aad []byte, expectedAADLen int) error {
 	if len(key) != cryptoengine.AES256KeySize {
 		cryptoLogger.Error("Invalid key length: %d", len(key))
-		return fmt.Errorf("invalid key length")
+		return ErrKeyLength
 	}
 	if len(aad) != expectedAADLen {
 		cryptoLogger.Error("Invalid AAD length: %d (expected %d)", len(aad), expectedAADLen)
-		return fmt.Errorf("invalid AAD length")
+		return ErrAADLength
 	}
 	return nil
 }

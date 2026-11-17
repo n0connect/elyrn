@@ -2,11 +2,11 @@ package auth
 
 import (
 	"encoding/hex"
-	"errors"
 	"strings"
 
 	"elyrn/internal/config"
 	"elyrn/internal/cryptoengine"
+	"elyrn/internal/identity"
 	"elyrn/internal/utils"
 )
 
@@ -35,11 +35,9 @@ func AccountLookupMatches(computed, stored string) bool {
 // Returns hex-encoded string
 func ComputeAccountLookup(accountNumber string) (string, error) {
 	pepper := config.GetAccountLookupPepper()
-	if len(pepper) == 0 {
-		return "", errors.New("ACCOUNT_LOOKUP_PEPPER not configured")
-	}
+	// GetAccountLookupPepper answers nil for a short pepper too: either way it is not configured
 	if len(pepper) < config.MinPepperBytes() {
-		return "", errors.New("ACCOUNT_LOOKUP_PEPPER too short")
+		return "", identity.ErrPepperNotConfigured
 	}
 	mac, err := cryptoengine.HMACSHA256(pepper, []byte(accountNumber))
 	if err != nil {
