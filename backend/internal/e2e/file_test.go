@@ -187,6 +187,38 @@ func TestFileMessageInterop_GoVectors(t *testing.T) {
 	}
 }
 
+// Browser → Go file message (vectors-js.json): sealed by frontend/js as A for the roster (A's Go
+// card, browserCardB) with random keys; the blob is randomised, so it is opened, never compared.
+const (
+	browserFileMessage = "d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f60"
+	browserFileText    = "browser caption"
+	browserFileCounter = int64(9)
+	browserFileID      = "2c4d72b4-0d2f-43f4-8008-90502d312df8"
+	browserFileKey     = "qAsaIe15QTyfc9ES1GXuNXCPShQOX78Wtmx324ocJUU"
+	browserFileSize    = int64(31)
+	browserFileHash    = "pthK7fLenrIIL83EwvEtz5MsXnJijZvO8EIkQsSAbqI"
+	browserFileName    = "\u00f6dev raporu (son).txt"
+	browserFileBlob    = "TkFEUgFquyEiXuBSLXphcUiSIPe49fWzOCk8ZJ9RxrvMz2msPv2O3ssysYu0kWsIKymKuOzbMzeRdMirMZMCvvmju3-bDRGZRIACn4y2XnoChaZMHsKeGsGWfLjgfU9YaAhfgiOIPwrRIrg2OExTVGA8LKsXDpFPe3F3IGJaR5jkrY2XhiNT1PYrt4apDcIl8OomFadeymkaebE4Hsvi2vQCo18xzd6jPZV-vdbU5EF0Pvo39qZ67nu4BZnKRx_8OrIkjO7sWzR4-uQV59Ny8FbuFzQBtxKN4-y_-zJ9oGdOBKHg8syV_Gsi1KXe_w_cFNg2qWsrGJkvydBzEgboBjSWjAXA-wlLklhHEhCXI7pmKcFmk8thuMAmdGmz6zTqvVmYNF2CWV-3pv3f2OkVfnj22UMd_Dqo_tF5_lOBoCcsFdZ46106B-auHbLiOlDPAKQhBGK1LODLlGTTdiYhhSTId4ebkHe2vd1L-WJaRql3TgX_qDp4zSHznPh0a_FvoF_MaX_VpwrnQU39m-FKctalgcl8Ef-NT9aq0Or3gGxRHLNHbTP-ieVS3BDXo0P4gXvOTPZeEU7FNZej-o7CPotCPjENgdnjZYSZYS9xQEuTWvWvYrm_b4-q-adQbHOulhGJqh1Pu3jIfBj01hkNut58kOooNbO2QQAt71RNBLE5-hWzQVzJb7-2u1hK4HQbal8"
+)
+
+func TestFileMessageInterop_OpensWhatTheBrowserSealed(t *testing.T) {
+	v := loadVectorRoom(t)
+	for name, reader := range map[string]roomParty{"a": v.a, "b": v.b} {
+		msg, err := v.room.OpenMessage(reader.member, uuid.MustParse(browserFileMessage), browserFileBlob)
+		if err != nil {
+			t.Fatalf("%s: OpenMessage(browser file vector): %v", name, err)
+		}
+		f := msg.File
+		if f == nil || msg.Text != browserFileText || msg.SentAt != vectorSentAt || msg.Counter != browserFileCounter || !bytes.Equal(msg.Sender, v.a.member.Public) ||
+			f.ID != uuid.MustParse(browserFileID) || encode(f.Key) != browserFileKey || f.Size != browserFileSize || encode(f.Hash) != browserFileHash || f.Name != browserFileName {
+			t.Fatalf("%s opened %+v %+v", name, msg, f)
+		}
+	}
+	if _, err := v.room.OpenMessage(v.c.member, uuid.MustParse(browserFileMessage), browserFileBlob); err == nil {
+		t.Fatal("a member outside the roster opened the browser file vector")
+	}
+}
+
 // The test-only sealer writes exactly the vector's payload bytes for the vector's file.
 func TestFilePayload_TestSealerWritesTheVectorBytes(t *testing.T) {
 	file := File{ID: uuid.MustParse(goFileID), Key: mustDecode(t, goFileKey), Size: goFileSize, Hash: mustDecode(t, goFileHash), Name: goFileName}
