@@ -13,6 +13,8 @@ const VIEW_IDS = [START_VIEW_ID, 'mainMenu', 'loginContainer', 'registerContaine
 // The robot side of the other door: these views turn the page black (one class on <body>)
 const ROBOT_SIDE_VIEWS = new Set(['doorVerdictContainer', 'doorChallengeContainer', 'robotContainer']);
 const ROBOT_SIDE_CLASS = 'robot-side';
+// While a conversation is shown the page fits the window and only the message list scrolls
+const CONVERSATION_CLASS = 'in-conversation';
 
 // Time units: an hour is the room code's own unit (room-crypto.js)
 const SECOND_MS = 1000;
@@ -52,8 +54,8 @@ const UI_TEXT = Object.freeze({
     // the app header's alerts bell (alerts.js): its name, and a title that also says what it does
     ALERTS_ON: 'alerts on',
     ALERTS_OFF: 'alerts off',
-    // icon controls: each one's accessible name and title (and, beside its tile at desktop
-    // widths, its visible word); burnBtn's are the burn and leave texts below
+    // icon controls: each one's accessible name and the caption its tile shows on hover and focus;
+    // burnBtn's are the burn and leave texts below
     LOGOUT: 'logout',
     BACK: 'back',
     MEMBERS: 'members',
@@ -65,7 +67,6 @@ const UI_TEXT = Object.freeze({
     COPY: 'copy',
     ATTACH: 'attach a file',
     SEND: 'send',
-    ALERTS_TITLE: (name) => `${name} · a notification without any content when a message arrives while this tab is hidden — nothing leaves this device`,
     ROOM_META: (members, maxMembers, left) => `${members}/${maxMembers} · ${left}`,
     // the open conversation
     VERIFIED_ON: '✓ verified — unmark',
@@ -111,6 +112,7 @@ const UI_TEXT = Object.freeze({
     FILE_PREPARING: 'preparing',
     FILE_UPLOADING: 'uploading',
     FILE_PROGRESS: (word, done, total) => `${word} ${done}/${total}`,
+    FILE_REMOVE: 'remove',
     FILE_REMOVE_TITLE: 'remove the file',
     // sizes and times
     BYTES: (bytes) => `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`,
@@ -125,35 +127,41 @@ const UI_TEXT = Object.freeze({
 document.querySelectorAll('[data-hidden]').forEach(element => {
     element.style.display = 'none';
 });
-// Icon controls (index.html data-icon, drawn by pixels.js): [id, accessible name, title, visible
-// word or null]. A word sits beside its tile at desktop widths and hides on a phone (styles.css).
+// Icon controls (index.html data-icon, drawn by pixels.js): [id, accessible name, caption or null].
+// A tile carries no visible word: it shows its caption under itself on hover and keyboard focus
+// (styles.css, the one CAPTION_ATTRIBUTE rule) and has no title, so two tooltips never show
+// together. A control without a caption (the composer's attach and send) keeps its title.
+const CAPTION_ATTRIBUTE = 'data-caption';
 const ICON_BUTTONS = Object.freeze([
-    ['logoutBtn', UI_TEXT.LOGOUT, UI_TEXT.LOGOUT, UI_TEXT.LOGOUT],
-    ['backToListBtn', UI_TEXT.BACK, UI_TEXT.BACK, null],
-    ['membersBtn', UI_TEXT.MEMBERS, UI_TEXT.MEMBERS_TITLE, UI_TEXT.MEMBERS],
-    ['roomCodeBtn', UI_TEXT.ROOM_CODE, UI_TEXT.ROOM_CODE_TITLE, UI_TEXT.ROOM_CODE],
-    ['verifyBtn', UI_TEXT.VERIFY, UI_TEXT.VERIFY_TITLE, UI_TEXT.VERIFY],
-    ['burnBtn', UI_TEXT.BURN, UI_TEXT.BURN_PAIR_TITLE, UI_TEXT.BURN],
-    ['copyBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
-    ['copyRobotBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
-    ['copyInviteBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
-    ['copyRoomBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
-    ['copyRoomCodeBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
-    ['fileRemoveBtn', UI_TEXT.FILE_REMOVE_TITLE, UI_TEXT.FILE_REMOVE_TITLE, null],
-    ['attachBtn', UI_TEXT.ATTACH, UI_TEXT.ATTACH, null],
-    ['sendBtn', UI_TEXT.SEND, UI_TEXT.SEND, null]
+    ['logoutBtn', UI_TEXT.LOGOUT, UI_TEXT.LOGOUT],
+    ['backToListBtn', UI_TEXT.BACK, UI_TEXT.BACK],
+    ['membersBtn', UI_TEXT.MEMBERS_TITLE, UI_TEXT.MEMBERS],
+    ['roomCodeBtn', UI_TEXT.ROOM_CODE_TITLE, UI_TEXT.ROOM_CODE],
+    ['verifyBtn', UI_TEXT.VERIFY_TITLE, UI_TEXT.VERIFY],
+    ['burnBtn', UI_TEXT.BURN_PAIR_TITLE, UI_TEXT.BURN],
+    ['copyBtn', UI_TEXT.COPY, UI_TEXT.COPY],
+    ['copyRobotBtn', UI_TEXT.COPY, UI_TEXT.COPY],
+    ['copyInviteBtn', UI_TEXT.COPY, UI_TEXT.COPY],
+    ['copyRoomBtn', UI_TEXT.COPY, UI_TEXT.COPY],
+    ['copyRoomCodeBtn', UI_TEXT.COPY, UI_TEXT.COPY],
+    ['fileRemoveBtn', UI_TEXT.FILE_REMOVE_TITLE, UI_TEXT.FILE_REMOVE],
+    ['attachBtn', UI_TEXT.ATTACH, null],
+    ['sendBtn', UI_TEXT.SEND, null]
 ]);
 
-// Names an icon control: accessible name, title, and its word where it shows one
-function nameIconButton(button, name, title, word) {
+// Names an icon control: its accessible name, and its caption, or else its title
+function nameIconButton(button, name, caption) {
     button.setAttribute('aria-label', name);
-    button.title = title;
-    const wordElement = button.querySelector('.icon-word');
-    if (wordElement) wordElement.textContent = word || '';
+    if (caption) {
+        button.setAttribute(CAPTION_ATTRIBUTE, caption);
+        button.removeAttribute('title');
+    } else {
+        button.title = name;
+    }
 }
 
 Pixels.install(document);
-ICON_BUTTONS.forEach(([id, name, title, word]) => nameIconButton(document.getElementById(id), name, title, word));
+ICON_BUTTONS.forEach(([id, name, caption]) => nameIconButton(document.getElementById(id), name, caption));
 
 // The start view is the one view shown from the start (isShown reads this)
 document.getElementById(START_VIEW_ID).style.display = 'block';
@@ -165,6 +173,7 @@ function setView(activeId) {
         document.getElementById(id).style.display = id === activeId ? 'block' : 'none';
     });
     document.body.classList.toggle(ROBOT_SIDE_CLASS, ROBOT_SIDE_VIEWS.has(activeId));
+    setConversationShown(activeId === 'appContainer' && isShown('chatView'));
     watchDoorTrail(activeId === 'mainMenu');
     if (activeId !== 'doorVerdictContainer') clearDoorVerdict();
 }
@@ -386,6 +395,11 @@ function renderMe(aura) {
 function showHome() {
     document.getElementById('chatView').style.display = 'none';
     document.getElementById('homeView').style.display = 'block';
+    setConversationShown(false);
+}
+
+function setConversationShown(shown) {
+    document.body.classList.toggle(CONVERSATION_CLASS, shown);
 }
 
 // What a conversation row ends with when nothing is new: the list chevron
@@ -575,6 +589,7 @@ function showChatView(aura, room) {
     setEarlierControl(false, false);
     document.getElementById('homeView').style.display = 'none';
     document.getElementById('chatView').style.display = 'block';
+    setConversationShown(true);
 }
 
 function setVerifiedState(verified) {
@@ -853,7 +868,7 @@ function renderBurnButton(room) {
     const button = document.getElementById('burnBtn');
     const leaving = Boolean(room && !room.owner);
     Pixels.setIcons(button.querySelector('.icon-tile'), leaving ? LEAVE_ICON : BURN_ICON);
-    nameIconButton(button, burnLabel(room), leaving ? UI_TEXT.LEAVE_ROOM_TITLE : (room ? UI_TEXT.BURN_ROOM_TITLE : UI_TEXT.BURN_PAIR_TITLE), burnLabel(room));
+    nameIconButton(button, leaving ? UI_TEXT.LEAVE_ROOM_TITLE : (room ? UI_TEXT.BURN_ROOM_TITLE : UI_TEXT.BURN_PAIR_TITLE), burnLabel(room));
 }
 
 // What burning asks, and its button: a pair (room null) and a room's owner burn, others leave

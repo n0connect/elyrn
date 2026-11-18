@@ -65,7 +65,7 @@ test('one renderer: svg rects in currentColor, no markup string, the aura drawn 
 
 test('every icon button has an accessible name and a title from UI_TEXT', () => {
     const table = ui.match(/const ICON_BUTTONS = Object\.freeze\(\[([\s\S]*?)\]\);/)[1];
-    const named = new Map([...table.matchAll(/\['(\w+)', UI_TEXT\.(\w+), UI_TEXT\.(\w+), (?:UI_TEXT\.(\w+)|null)\]/g)]
+    const named = new Map([...table.matchAll(/\['(\w+)', UI_TEXT\.(\w+), (?:UI_TEXT\.(\w+)|null)\]/g)]
         .map((m) => [m[1], m.slice(2)]));
     // every button in the page that holds an icon is named there (the bell is alerts.js's)
     const buttons = [...html.matchAll(/<button\b[^>]*\bid="(\w+)"[^>]*>(?:(?!<\/button>)[\s\S])*?data-icon="[^"]+"/g)].map((m) => m[1]);
@@ -75,28 +75,51 @@ test('every icon button has an accessible name and a title from UI_TEXT', () => 
         assert.ok(named.has(id), `${id} is named in ICON_BUTTONS`);
         for (const key of named.get(id).filter(Boolean)) assert.equal(typeof UI_TEXT[key], 'string', `${id} ${key}`);
     }
-    assert.match(ui, /button\.setAttribute\('aria-label', name\);\n\s*button\.title = title;/);
-    assert.match(ui, /ICON_BUTTONS\.forEach\(\(\[id, name, title, word\]\) => nameIconButton\(document\.getElementById\(id\), name, title, word\)\);/);
+    assert.match(ui, /button\.setAttribute\('aria-label', name\);/);
+    assert.match(ui, /ICON_BUTTONS\.forEach\(\(\[id, name, caption\]\) => nameIconButton\(document\.getElementById\(id\), name, caption\)\);/);
     // the bell's name and title come from alerts.js render (alerts.test.mjs); the toast's close
     // control is named where it is made
     assert.match(read('../js/notifications.js'), /closeBtn\.setAttribute\('aria-label', NOTIFICATION_CLOSE_ARIA_LABEL\);\n\s*closeBtn\.title = NOTIFICATION_CLOSE_ARIA_LABEL;/);
     // the bell, back, send, attach, copy and close never carry a visible word
     for (const id of ['alertsBtn', 'backToListBtn', 'sendBtn', 'attachBtn', 'fileRemoveBtn', 'copyBtn', 'copyInviteBtn', 'copyRoomBtn', 'copyRoomCodeBtn', 'copyRobotBtn']) {
         const button = html.match(new RegExp(`<button\\b[^>]*\\bid="${id}"[^>]*>([\\s\\S]*?)</button>`))[1];
-        assert.doesNotMatch(button, /icon-word/, id);
         assert.equal(button.replace(/<[^>]*>/g, '').trim(), '', id);
     }
 });
 
-test('the word hides on a phone, the motion goes with reduced motion, and the tile is the aura box', () => {
-    const phone = [...css.matchAll(/@media \(max-width: 480px\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join('\n');
-    assert.match(phone, /\.icon-word \{\n\s*display: none;\n\s*\}/);
+test('a tile shows its caption by one rule from one attribute, and never has a title too', () => {
+    // no tile carries a visible word, at any width
+    assert.doesNotMatch(html, /icon-word/);
+    assert.doesNotMatch(css, /icon-word/);
+    // one rule writes every caption, from data-caption; it shows on hover (never on touch) and focus
+    assert.match(ui, /const CAPTION_ATTRIBUTE = 'data-caption';/);
+    assert.equal((css.match(/content: attr\(data-caption\);/g) || []).length, 1);
+    assert.match(css, /@media \(hover: hover\) \{\n\s*\.icon-btn\[data-caption\]:hover::after \{\n\s*visibility: visible;/);
+    assert.match(css, /\.icon-btn\[data-caption\]:focus-visible::after \{\n\s*visibility: visible;/);
+    assert.match(css, /\.icon-btn\[data-caption\]:last-child::after \{\n\s*left: auto;\n\s*right: 0;/);
+    assert.match(css, /animation: caption-in var\(--caption-steps-ms\) steps\(3, end\) both;/);
+    // a caption replaces the title: nameIconButton removes it, and markup never has both
+    const fn = ui.slice(ui.indexOf('function nameIconButton'), ui.indexOf('\n}\n', ui.indexOf('function nameIconButton')));
+    assert.match(fn, /if \(caption\) \{\n\s*button\.setAttribute\(CAPTION_ATTRIBUTE, caption\);\n\s*button\.removeAttribute\('title'\);\n\s*\} else \{\n\s*button\.title = name;/);
+    for (const tag of html.match(/<button\b[^>]*>/g)) {
+        assert.ok(!(/data-caption=/.test(tag) && /\stitle=/.test(tag)), tag);
+    }
+    // the motion goes with reduced motion; the tile is the aura's box
     const reduced = [...css.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join('\n');
-    assert.match(reduced, /\.pixel-frame \{\n\s*animation: none !important;/);
+    assert.match(reduced, /\.pixel-frame,\n\s*\.icon-btn\[data-caption\]::after \{\n\s*animation: none !important;/);
     assert.match(css, /\.icon-tile,\n\.aura-glyph \{[^}]*width: var\(--glyph-size\);[^}]*height: var\(--glyph-size\);[^}]*padding: var\(--tile-pad\);[^}]*border: 1px solid var\(--border\);/);
-    // the frames are stepped, never eased
     assert.match(css, /animation-timing-function: step-end;/);
-    assert.match(css, /--icon-steps-ms: \d+ms;/);
+});
+
+test('a conversation fits the window: dvh with its vh fallback, the list takes the rest', () => {
+    const block = css.slice(css.indexOf('body.in-conversation {'));
+    assert.match(block, /^body\.in-conversation \{\n\s*height: 100vh;\n\s*height: 100dvh;\n\s*min-height: var\(--conversation-min-height\);/);
+    assert.match(block, /body\.in-conversation #chatView > \.message-list \{\n\s*flex: 1 1 0;\n\s*height: auto;\n\s*min-height: 0;/);
+    assert.match(css, /--conversation-min-height: \d+px;/);
+    assert.match(ui, /const CONVERSATION_CLASS = 'in-conversation';/);
+    assert.match(ui, /setConversationShown\(activeId === 'appContainer' && isShown\('chatView'\)\);/);
+    // no height guessed from the window any more
+    assert.doesNotMatch(css, /calc\(100vh - \d+px\)/);
 });
 
 test('no control uses a shadow, and none lifts or moves on hover', () => {

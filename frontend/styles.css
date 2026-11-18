@@ -53,8 +53,17 @@
     --tile-pad: 2px;
     /* An icon pixel: an icon's 10 pixels fill --glyph-size */
     --icon-px: 2px;
-    /* An icon's three frames on hover, played once */
+    /* An icon's three frames on hover, played once; a caption types itself in three steps */
     --icon-steps-ms: 360ms;
+    --caption-steps-ms: 180ms;
+    /* A tile's outer box (glyph, padding, 1 px border), and the gap between sibling tiles: their
+       40 px hit areas then meet without overlapping */
+    --tile-box: calc(var(--glyph-size) + 2 * var(--tile-pad) + 2px);
+    --tile-gap: calc(var(--touch-min) - var(--tile-box));
+    /* The app header and the room header: one row height, the same space above and below a rule */
+    --row-gap: 16px;
+    /* Below this window height the conversation stops fitting and the page scrolls */
+    --conversation-min-height: 420px;
     /* The focus ring every control of the app shares */
     --focus-ring: 2px solid var(--fg);
     --focus-offset: 2px;
@@ -488,9 +497,10 @@ header {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
-    margin-bottom: 48px;
-    padding-bottom: 24px;
+    gap: var(--tile-gap);
+    min-height: calc(var(--touch-min) + var(--row-gap));
+    margin-bottom: var(--row-gap);
+    padding-bottom: var(--row-gap);
     border-bottom: 1px solid var(--border);
 }
 
@@ -504,13 +514,13 @@ header {
 /* The identity badge: glyph tile and name, the height of every icon control; hovered, focused
    or open, its glyph tile inverts as an icon tile does */
 .header-btn {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
-    min-height: var(--touch-min);
     margin: 0;
-    padding: 0 12px;
+    padding: 0;
     font-size: 16px;
     color: var(--muted);
     background: transparent;
@@ -532,18 +542,75 @@ header {
    ======================================== */
 
 .icon-btn {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    min-width: var(--touch-min);
-    min-height: var(--touch-min);
+    flex-shrink: 0;
     margin: 0;
-    padding: 0 6px;
+    padding: 0;
     font-size: 16px;
     color: var(--muted);
     background: transparent;
-    border: 1px solid transparent;
+    border: none;
+}
+
+/* The tile is the control's box, so tiles line up with the rules' edges; the finger-sized hit
+   area reaches round it */
+.icon-btn::before,
+.me-badge::before {
+    content: '';
+    position: absolute;
+    inset: calc((var(--tile-box) - var(--touch-min)) / 2);
+}
+
+/* A tile says what it is under itself on hover and keyboard focus: one rule, fed by the
+   data-caption attribute (ui.js and alerts.js, from UI_TEXT); never on touch, never the name */
+.icon-btn[data-caption]::after {
+    content: attr(data-caption);
+    position: absolute;
+    top: calc(100% + var(--tile-pad) * 2);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 3;
+    padding: 0 4px;
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 14px;
+    letter-spacing: 1px;
+    line-height: 1.4;
+    white-space: nowrap;
+    text-transform: lowercase;
+    pointer-events: none;
+    visibility: hidden;
+}
+
+/* The last tile of a row anchors its caption to its right edge */
+.icon-btn[data-caption]:last-child::after {
+    left: auto;
+    right: 0;
+    transform: none;
+}
+
+.burn-btn[data-caption]::after {
+    color: var(--danger);
+}
+
+@media (hover: hover) {
+    .icon-btn[data-caption]:hover::after {
+        visibility: visible;
+        animation: caption-in var(--caption-steps-ms) steps(3, end) both;
+    }
+}
+
+.icon-btn[data-caption]:focus-visible::after {
+    visibility: visible;
+    animation: caption-in var(--caption-steps-ms) steps(3, end) both;
+}
+
+@keyframes caption-in {
+    from { clip-path: inset(0 100% 0 0); }
+    to { clip-path: inset(0 0 0 0); }
 }
 
 .icon-btn:hover,
@@ -611,7 +678,7 @@ header {
 
 /* Burning keeps its red: the tile turns red, the word too */
 .burn-btn {
-    margin-left: 12px;
+    margin-left: var(--tile-gap);
 }
 
 .icon-btn.burn-btn:hover,
@@ -693,9 +760,10 @@ header {
     100% { visibility: visible; }
 }
 
-/* Reduced motion: the inversion stays, the frames do not play */
+/* Reduced motion: the inversion stays, the frames and the caption's steps do not play */
 @media (prefers-reduced-motion: reduce) {
-    .pixel-frame {
+    .pixel-frame,
+    .icon-btn[data-caption]::after {
         animation: none !important;
     }
 
@@ -714,11 +782,6 @@ header {
 .unread-marker .icon {
     width: var(--glyph-size);
     height: var(--glyph-size);
-}
-
-/* A word beside its tile (members, code, verify, burn, logout); a phone shows the tile alone */
-.icon-word {
-    white-space: nowrap;
 }
 
 /* ========================================
@@ -928,26 +991,9 @@ header {
         min-height: var(--touch-min);
     }
 
-    /* The tile stands alone; its name and title still say what it does */
-    .icon-word {
-        display: none;
-    }
-
-    .icon-btn {
-        padding: 0;
-    }
-
-    .burn-btn {
-        margin-left: 0;
-    }
-
     /* The glyph alone identifies you on small screens; the name lives in its tooltip */
     .me-badge .aura-name {
         display: none;
-    }
-
-    .message-list {
-        height: clamp(200px, calc(100vh - 360px), 560px);
     }
 
     .msg {
@@ -1129,7 +1175,6 @@ header {
 /* The identity badge: glyph and name, pushed to the right with the bell and logout after it */
 .me-badge {
     margin-left: auto;
-    padding: 0 8px;
     text-transform: none;
 }
 
@@ -1223,7 +1268,7 @@ header {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 14px 4px;
+    padding: 14px 0;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
     transition: background 0.2s ease, padding-left 0.2s ease;
@@ -1282,9 +1327,10 @@ header {
 .chat-header {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding-bottom: 12px;
-    margin-bottom: 12px;
+    gap: var(--tile-gap);
+    min-height: calc(var(--touch-min) + var(--row-gap));
+    padding-bottom: var(--row-gap);
+    margin-bottom: var(--row-gap);
     border-bottom: 1px solid var(--border);
 }
 
@@ -1292,41 +1338,39 @@ header {
 .chat-actions {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--tile-gap);
     margin-left: auto;
 }
 
-/* With their words the actions take their own line, right-aligned, whatever the name's length */
-@media (min-width: 481px) {
-    .chat-actions {
-        flex-basis: 100%;
-        justify-content: flex-end;
-    }
+/* The conversation's name, code, mark and the room's size and time: one line; on a phone the
+   size and time go under the name, both cut short rather than pushing the tiles to a new line */
+.chat-title {
+    display: flex;
+    align-items: baseline;
+    gap: 4px 10px;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
-/* On a phone the tiles stand alone and fit beside the name; the room's size and time go below,
-   and a long name is cut short rather than pushing the actions to a second line */
-@media (max-width: 480px) {
-    .chat-header {
-        flex-wrap: wrap;
-        column-gap: 4px;
-    }
+.chat-title > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
-    .chat-actions {
+@media (max-width: 480px) {
+    .chat-title {
+        flex-direction: column;
+        align-items: flex-start;
         gap: 0;
     }
 
-    .chat-header .aura-name {
-        min-width: 0;
-        flex: 1 1 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        font-size: 16px;
+    .chat-title > * {
+        max-width: 100%;
     }
 
-    .room-meta {
-        order: 1;
-        flex-basis: 100%;
+    .chat-header .aura-name {
+        font-size: 16px;
     }
 }
 
@@ -1377,13 +1421,13 @@ header {
 
 .message-list {
     list-style: none;
-    /* Header + chat header + composer stay on screen at any viewport height */
-    height: clamp(200px, calc(100vh - 330px), 560px);
+    /* Its height is what the conversation leaves it (body.in-conversation below) */
+    height: clamp(200px, 50vh, 560px);
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 8px 2px;
+    padding: 8px 0;
     scrollbar-width: thin;
 }
 
@@ -1526,16 +1570,6 @@ header {
     margin-left: auto;
 }
 
-/* On narrow screens the actions move to their own line instead of squeezing the room's name */
-.chat-header {
-    flex-wrap: wrap;
-    row-gap: 4px;
-}
-
-.chat-header .aura-name,
-.room-meta {
-    white-space: nowrap;
-}
 
 .member-list {
     list-style: none;
@@ -1816,3 +1850,58 @@ body.robot-side {
     border-color: #ffd34d;
 }
 
+
+/* ========================================
+   A CONVERSATION FITS THE WINDOW
+   While a conversation is shown (ui.js CONVERSATION_CLASS) the page is exactly the window's
+   height: the headers at the top, the composer and its line at the bottom, and the message list
+   takes the rest and scrolls inside itself. dvh follows Safari's toolbars; engines without it
+   keep the vh line before it. Below --conversation-min-height the page scrolls instead.
+   The views' display is written inline by ui.js, so the column layout has to win over it.
+   ======================================== */
+
+body.in-conversation {
+    height: 100vh;
+    height: 100dvh;
+    min-height: var(--conversation-min-height);
+    padding-top: var(--row-gap);
+    padding-bottom: var(--row-gap);
+    align-items: stretch;
+}
+
+body.in-conversation .container {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+body.in-conversation #appContainer {
+    display: flex !important;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+body.in-conversation #chatView {
+    display: flex !important;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+body.in-conversation #chatView > * {
+    flex: 0 0 auto;
+}
+
+/* Open panels give way before the composer does */
+body.in-conversation #chatView > .pair-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+body.in-conversation #chatView > .message-list {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+}

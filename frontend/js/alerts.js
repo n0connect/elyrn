@@ -26,6 +26,8 @@ const Alerts = (() => {
     // The control is a pixel bell (index.html): its two shapes follow aria-pressed in styles.css,
     // its words (name and title) are UI_TEXT's
     const CONTROL_DISPLAY = 'inline-flex';
+    // The tile's caption on hover and focus (styles.css), as on every icon control (ui.js)
+    const CAPTION_ATTRIBUTE = 'data-caption';
     // Notification.permission's answers
     const GRANTED = 'granted';
     const DENIED = 'denied';
@@ -45,15 +47,14 @@ const Alerts = (() => {
     }
 
     // What the control shows for a state (the pure part of render, tested on its own): hidden
-    // outside a session or without the API; pressed, named and titled by whether alerts are on
+    // outside a session or without the API; pressed, named and captioned by whether alerts are on
     function controlState({ session, supported, on }) {
         const pressed = on === true;
         const name = pressed ? UI_TEXT.ALERTS_ON : UI_TEXT.ALERTS_OFF;
         return Object.freeze({
             shown: session === true && supported === true,
             pressed: pressed ? 'true' : 'false',
-            name,
-            title: UI_TEXT.ALERTS_TITLE(name)
+            name
         });
     }
 
@@ -63,7 +64,7 @@ const Alerts = (() => {
         button.style.display = state.shown ? CONTROL_DISPLAY : 'none';
         button.setAttribute('aria-pressed', state.pressed);
         button.setAttribute('aria-label', state.name);
-        button.title = state.title;
+        button.setAttribute(CAPTION_ATTRIBUTE, state.name);
     }
 
     // Whether a raise now shows a notification (the pure part of raise, tested on its own)

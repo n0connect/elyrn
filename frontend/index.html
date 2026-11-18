@@ -209,10 +209,10 @@
                 </button>
                 <!-- alerts: a pixel bell in a tile, solid when on, hollow and struck through when off
                      (styles.css reads aria-pressed); alerts.js writes its name and title -->
-                <button type="button" id="alertsBtn" class="icon-btn bell-btn" aria-pressed="false" aria-label="alerts off" title="alerts off" data-hidden>
+                <button type="button" id="alertsBtn" class="icon-btn bell-btn" aria-pressed="false" aria-label="alerts off" data-caption="alerts off" data-hidden>
                     <span class="icon-tile" data-icon="bell-on bell-off"></span>
                 </button>
-                <button type="button" id="logoutBtn" class="icon-btn"><span class="icon-tile" data-icon="logout"></span><span class="icon-word"></span></button>
+                <button type="button" id="logoutBtn" class="icon-btn"><span class="icon-tile" data-icon="logout"></span></button>
             </header>
 
             <!-- HOME: conversations -->
@@ -286,15 +286,17 @@
                 <div class="chat-header">
                     <button type="button" id="backToListBtn" class="icon-btn"><span class="icon-tile" data-icon="back"></span></button>
                     <svg class="aura-glyph" id="peerGlyph" aria-hidden="true" focusable="false"></svg>
-                    <span class="aura-name" id="peerName"></span>
-                    <span id="peerCode" class="aura-code"></span>
-                    <span id="peerVerified" class="verified-mark" title="safety number verified on this device" data-hidden>✓</span>
-                    <span id="roomMeta" class="aura-code room-meta" data-hidden></span>
+                    <div class="chat-title">
+                        <span class="aura-name" id="peerName"></span>
+                        <span id="peerCode" class="aura-code"></span>
+                        <span id="peerVerified" class="verified-mark" title="safety number verified on this device" data-hidden>✓</span>
+                        <span id="roomMeta" class="aura-code room-meta" data-hidden></span>
+                    </div>
                     <div class="chat-actions">
-                        <button type="button" id="membersBtn" class="icon-btn" data-hidden><span class="icon-tile" data-icon="members"></span><span class="icon-word"></span></button>
-                        <button type="button" id="roomCodeBtn" class="icon-btn" data-hidden><span class="icon-tile" data-icon="code"></span><span class="icon-word"></span></button>
-                        <button type="button" id="verifyBtn" class="icon-btn"><span class="icon-tile" data-icon="verify"></span><span class="icon-word"></span></button>
-                        <button type="button" id="burnBtn" class="icon-btn burn-btn"><span class="icon-tile" data-icon="burn"></span><span class="icon-word"></span></button>
+                        <button type="button" id="membersBtn" class="icon-btn" data-hidden><span class="icon-tile" data-icon="members"></span></button>
+                        <button type="button" id="roomCodeBtn" class="icon-btn" data-hidden><span class="icon-tile" data-icon="code"></span></button>
+                        <button type="button" id="verifyBtn" class="icon-btn"><span class="icon-tile" data-icon="verify"></span></button>
+                        <button type="button" id="burnBtn" class="icon-btn burn-btn"><span class="icon-tile" data-icon="burn"></span></button>
                     </div>
                 </div>
 
