@@ -106,7 +106,7 @@ test('a /me answer with this key and settings of the wrong type or out of range 
     const changes = [
         // the largest file: from one part to the bound any server may set (backend/internal/config)
         { file_max_bytes: undefined }, { file_max_bytes: '10485760' }, { file_max_bytes: FILE_PART - 1 }, { file_max_bytes: 0 },
-        { file_max_bytes: FILE_BOUND + 1 }, { file_max_bytes: 1.5 * FILE_PART }, { file_max_bytes: null }, { file_max_bytes: -FILE_MAX },
+        { file_max_bytes: FILE_BOUND + 1 }, { file_max_bytes: FILE_PART + 0.5 }, { file_max_bytes: null }, { file_max_bytes: -FILE_MAX },
         { message_ttl_days: '30' }, { message_ttl_days: 0 }, { message_ttl_days: MAX_MESSAGE_TTL_DAYS + 1 }, { message_ttl_days: 1.5 },
         { message_ttl_days: -1 }, { message_ttl_days: null }, { room_max_members: '8' }, { room_max_members: R.MIN_MEMBERS - 1 },
         { room_max_members: R.MAX_MEMBERS + 1 }, { room_max_ttl_hours: 0 }, { room_max_ttl_hours: MAX_ROOM_TTL_HOURS + 1 },
@@ -128,7 +128,9 @@ test('a /me answer with extra fields is taken for its known ones; a page size ou
         assert.equal(judged.ttlDays, 30);
         assert.deepEqual({ ...judged.limits }, { maxMembers: 8, maxTTLHours: 24, pageLimit: want, fileMaxBytes: FILE_MAX }, String(limit));
     }
-    for (const bytes of [FILE_PART, FILE_BOUND]) {
+    // Any whole number of bytes in the server's range (backend/internal/database/validate.go
+    // fileBounds: one part to MaxFileBytesBound), a multiple of a part or not
+    for (const bytes of [FILE_PART, 1.5 * FILE_PART, FILE_BOUND]) {
         assert.equal(judgeMe({ ...good, file_max_bytes: bytes }, mine).limits.fileMaxBytes, bytes);
     }
 });
@@ -315,7 +317,7 @@ test('a /me answer ends the stored session only on a 401 or another public key; 
     // enterApp wipes only on REFUSED: the one Keystore.wipeIdentity in it is behind that branch
     const auth = readFileSync(new URL('../js/auth.js', import.meta.url), 'utf8');
     const enter = auth.slice(auth.indexOf('async function enterApp'), auth.indexOf('// Raised whenever the login screen is left'));
-    assert.equal((enter.match(/wipeIdentity/g) || []).length, 1);
+    assert.equal((enter.match(/wipeIdentity\(/g) || []).length, 1);
     assert.match(enter, /if \(verdict\.entry === ENTRY\.REFUSED\) \{\n\s+\/\/[^\n]*\n\s+await Keystore\.wipeIdentity\(\);/);
 });
 
@@ -361,8 +363,10 @@ test('login: the run is taken before the first wait and every wait is followed b
     const auth = readFileSync(new URL('../js/auth.js', import.meta.url), 'utf8');
     const start = auth.indexOf('async function loginNow()');
     const body = auth.slice(start, auth.indexOf('\n}\n', start));
-    const runAt = body.indexOf('const run = loginRun;');
-    assert.ok(runAt > 0 && runAt < body.indexOf('await'), 'the run is taken after a wait');
+    // Order is read from the code, not from comments that name the first await
+    const code = body.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
+    const runAt = code.indexOf('const run = loginRun;');
+    assert.ok(runAt > 0 && runAt < code.indexOf('await'), 'the run is taken after a wait');
     assert.match(body, /const alive = \(\) => run === loginRun && isShown\('loginContainer'\);/);
     // Each wait inside the try is followed at once by the leave check (enterApp asks it itself)
     const waits = body.split('\n').map((line, i, lines) => [line, lines[i + 1]]).filter(([line]) => /await /.test(line));

@@ -54,21 +54,45 @@ const CounterRecords = (() => {
 
     // Keeps next within the sender bound (Counters.bound: what earlier recorded is never given up
     // to a made-up sender; a new off-roster sender at the bound is not recorded, a new roster
-    // member displaces the off-roster entry recorded longest ago, logged), as this tab's last one
-    // (it stands in when storage fails), and stores it unless the stored one already says the
-    // same. Every record this device writes therefore reads back whole. The senders not recorded
-    // are kept in conv.unrecorded, which the page shows (chat.js markUnrecorded); one recorded
-    // since (it joined the roster) leaves it.
+    // member displaces the off-roster entry recorded most recently, logged), as this tab's last
+    // one (it stands in when storage fails), and stores it unless the stored one already says the
+    // same. Every record this device writes therefore reads back whole. The senders not recorded,
+    // refused and displaced alike, are kept in conv.unrecorded, which the page shows (chat.js
+    // markUnrecorded, asking isUnrecorded); one recorded since (it joined the roster) leaves it.
     async function writeMark(conv, stored, earlier, next) {
         const kept = Counters.bound(earlier, next, keptSenders(conv));
-        if (kept.displaced > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
-        const recorded = new Map(kept.record.senders);
-        for (const key of conv.unrecorded) if (recorded.has(key)) conv.unrecorded.delete(key);
-        for (const key of kept.refused) conv.unrecorded.add(key);
+        if (kept.displaced.length > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
+        trackUnrecorded(conv, kept);
         conv.mark = kept.record;
         if (!Counters.same(kept.record, stored)) {
             await Keystore.saveCounters(conv.id, kept.record, conv.room ? conv.room.expiresAt : 0);
         }
+    }
+
+    // conv.unrecorded after a write (kept: Counters.bound's answer). It holds at most
+    // Counters.MAX_UNRECORDED senders, and the bound may only make the answer more conservative:
+    // a sender that finds it full sets conv.unrecordedOverflow, under which isUnrecorded calls
+    // every sender neither kept nor in the record unrecorded. Senders recorded since leave the
+    // set; the flag never clears for the life of the conversation in this tab: the senders the
+    // full set could not hold are forgotten, so clearing it would show them as recorded.
+    function trackUnrecorded(conv, kept) {
+        const recorded = new Map(kept.record.senders);
+        for (const key of conv.unrecorded) if (recorded.has(key)) conv.unrecorded.delete(key);
+        for (const key of [...kept.refused, ...kept.displaced]) {
+            if (conv.unrecorded.has(key)) continue;
+            if (conv.unrecorded.size < Counters.MAX_UNRECORDED) conv.unrecorded.add(key);
+            else conv.unrecordedOverflow = true;
+        }
+    }
+
+    // Whether sender's messages in conv are shown as not recorded (counters.js THE SENDER BOUND):
+    // the one place the page asks. Named in conv.unrecorded, or, once that overflowed, neither
+    // kept (keptSenders) nor in the record this tab holds (conv.mark): never an unknown sender
+    // shown as protected.
+    function isUnrecorded(conv, sender) {
+        if (conv.unrecorded.has(sender)) return true;
+        return conv.unrecordedOverflow && !keptSenders(conv).includes(sender) &&
+            !conv.mark.senders.some(([key]) => key === sender);
     }
 
     // Takes this account's next counter in a conversation, under the counter lock every tab
@@ -134,6 +158,6 @@ const CounterRecords = (() => {
 
     return Object.freeze({
         loadMark, saveMark, allocateCounter, releaseCounter, forgetMark, forgetRecord, pruneMarks,
-        park, parkedMark, clearParked
+        park, parkedMark, clearParked, trackUnrecorded, isUnrecorded
     });
 })();

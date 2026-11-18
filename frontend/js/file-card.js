@@ -13,16 +13,14 @@
 const FileCard = (() => {
     'use strict';
 
-    const SAVE_LABEL = 'save';
-    const FETCHING = 'fetching';
     const SAVE_TYPE = 'application/octet-stream';
     // Long enough for the browser to start the download; the URL is useless after it
     const REVOKE_AFTER_MS = 30000;
 
     async function save(card, message, status) {
-        status.textContent = FETCHING;
+        status.textContent = UI_TEXT.FILE_FETCHING;
         const fetched = await message.fetchFile({
-            onProgress: ({ done, total }) => { status.textContent = `${FETCHING} ${done}/${total}`; },
+            onProgress: ({ done, total }) => { status.textContent = UI_TEXT.FILE_PROGRESS(UI_TEXT.FILE_FETCHING, done, total); },
             cancelled: () => !card.isConnected
         });
         status.textContent = '';
@@ -60,7 +58,7 @@ const FileCard = (() => {
         status.setAttribute('role', 'status');
         const button = document.createElement('button');
         button.className = 'menu-opt file-action';
-        button.textContent = SAVE_LABEL;
+        button.textContent = UI_TEXT.FILE_SAVE;
         // One fetch per card at a time: a double click waits for the first
         const key = 'file-card-' + message.file.id + '-' + message.seq;
         button.addEventListener('click', () => once(key, () => save(card, message, status)));

@@ -32,8 +32,9 @@ const COMPOSER_MAX_HEIGHT_PX = 140;
 const DEFAULT_ROOM_MEMBERS = 8;
 const DEFAULT_ROOM_TTL_HOURS = 24;
 
-// Every word ui.js writes into the page that is no failure or warning (those are errors.js's,
-// by code): control labels, tags, marks, titles, hints and the empty-state sentences.
+// Every word ui.js, file-card.js and file-composer.js write into the page that is no failure or
+// warning (those are errors.js's, by code): control labels, tags, marks, titles, hints, progress
+// and the empty-state sentences.
 // A text with a part filled in is a function of that part.
 const UI_TEXT = Object.freeze({
     // conversation list
@@ -86,6 +87,14 @@ const UI_TEXT = Object.freeze({
     LEFT_WANTS_FRIENDS: 'left · wants to be friends',
     ACCEPT: 'accept',
     IGNORE: 'ignore',
+    // files: the received card (file-card.js) and the chosen file's chip (file-composer.js)
+    FILE_SAVE: 'save',
+    FILE_FETCHING: 'fetching',
+    FILE_PREPARING: 'preparing',
+    FILE_UPLOADING: 'uploading',
+    FILE_PROGRESS: (word, done, total) => `${word} ${done}/${total}`,
+    FILE_REMOVE: '×',
+    FILE_REMOVE_TITLE: 'remove the file',
     // sizes and times
     BYTES: (bytes) => `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`,
     NOW: 'now',
@@ -907,12 +916,12 @@ function disputedTag() {
     return tag;
 }
 
-// Tags (or untags) every message whose sender's key is in keys, with the tag makeTag() draws
-// (found again by its class tagClass)
-function markSenders(keys, tagClass, makeTag) {
+// Tags (or untags) every message whose sender's key isMarked(key) says, with the tag makeTag()
+// draws (found again by its class tagClass)
+function markSenders(isMarked, tagClass, makeTag) {
     document.querySelectorAll('#messageList .msg-sender').forEach(sender => {
         const tag = sender.querySelector('.' + tagClass);
-        const marked = keys.has(sender.dataset.sender);
+        const marked = isMarked(sender.dataset.sender);
         if (marked && !tag) {
             sender.appendChild(makeTag());
         } else if (!marked && tag) {
@@ -923,12 +932,12 @@ function markSenders(keys, tagClass, makeTag) {
 
 // keys: public keys whose name another key shares; tags (or untags) every message from them
 function markLookalikes(keys) {
-    markSenders(keys, 'lookalike-tag:not(.disputed-tag):not(.unrecorded-tag)', lookalikeTag);
+    markSenders(key => keys.has(key), 'lookalike-tag:not(.disputed-tag):not(.unrecorded-tag)', lookalikeTag);
 }
 
 // keys: public keys more than one seat claims; tags (or untags) every message from them
 function markDisputed(keys) {
-    markSenders(keys, 'disputed-tag', disputedTag);
+    markSenders(key => keys.has(key), 'disputed-tag', disputedTag);
 }
 
 // The tag on each message from a sender the full counter record did not take
@@ -938,9 +947,10 @@ function unrecordedTag() {
     return tag;
 }
 
-// keys: senders the room's counter record did not take; tags (or untags) every message from them
-function markUnrecorded(keys) {
-    markSenders(keys, 'unrecorded-tag', unrecordedTag);
+// isUnrecorded(key): whether the room's counter record did not take that sender
+// (CounterRecords.isUnrecorded); tags (or untags) every message from them
+function markUnrecorded(isUnrecorded) {
+    markSenders(isUnrecorded, 'unrecorded-tag', unrecordedTag);
 }
 
 // entries: verified roster (one entry per key); skipped: cards that failed to open (shown, never
@@ -993,11 +1003,12 @@ function renderRoomSafety(groups) {
     });
 }
 
-// What a friend request that cannot be accepted says instead (null: it can be accepted): one a
-// newer elyrn wrote, or one sent before binders (Rooms.notes)
+// The code of what a friend request that cannot be accepted says instead (null: it can be
+// accepted): one a newer elyrn wrote, or one sent before binders (Rooms.notes). The panel shows
+// it and chat.js's accept refuses with it.
 function noteRefusal(note) {
-    if (note.newer) return Errors.message(Errors.CODES.W_MESSAGE_FROM_NEWER);
-    if (!note.binder) return Errors.message(Errors.CODES.W_FRIEND_REQUEST_OUTDATED);
+    if (note.newer) return Errors.CODES.W_MESSAGE_FROM_NEWER;
+    if (!note.binder) return Errors.CODES.W_FRIEND_REQUEST_OUTDATED;
     return null;
 }
 
@@ -1013,7 +1024,7 @@ function renderNotes(notes, onAccept, onIgnore) {
         row.appendChild(memberTag(note.from ? UI_TEXT.WANTS_FRIENDS : UI_TEXT.LEFT_WANTS_FRIENDS));
         const refusal = noteRefusal(note);
         if (refusal) {
-            const reason = memberTag(refusal);
+            const reason = memberTag(Errors.message(refusal));
             reason.classList.add('lookalike-tag');
             row.appendChild(reason);
         } else {

@@ -87,3 +87,32 @@ test('a code doctored in its limit bytes opens the same room id and is told apar
     }
     assert.equal(Rooms.sameLimits(code, honest), true);
 });
+
+// The notes panel after accept, read from the real sources: drawing it needs a browser and is
+// driven by hand (docs/development/testing-and-contributing.md); what can be pinned is pinned.
+test('accepting a friend request draws the notes panel again on every answer, through its one render path', () => {
+    const chat = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
+    const ui = readFileSync(new URL('../js/ui.js', import.meta.url), 'utf8');
+    // One render path: refreshRoomPanels is the only caller of renderNotes
+    assert.equal((chat.match(/renderNotes\(/g) || []).length, 1);
+    const panels = chat.slice(chat.indexOf('async function refreshRoomPanels'));
+    assert.match(panels.slice(0, panels.indexOf('\n    }\n')), /renderNotes\(notes,/);
+    const start = chat.indexOf('async function acceptNoteNow');
+    const body = chat.slice(start, chat.indexOf('\n    }\n', start));
+    // The accepted request leaves the panel through dismissNote (count, then refreshRoomPanels)
+    // before the new conversation opens; a bare server dismissal left the stale request shown
+    assert.doesNotMatch(body, /Rooms\.dismissNote\(/);
+    assert.match(body, /await dismissNote\(conv, note\);\n\s*showSuccess\(Errors\.NOTICE\.FRIENDS_NOW\);[\s\S]*await open\(id\);/);
+    // Every other way out draws the panel again, except a session that ended meanwhile
+    const exits = body.split('return;').slice(0, -1);
+    assert.ok(exits.length >= 4);
+    for (const exit of exits) {
+        if (/if \(!me\) $/.test(exit)) continue;
+        assert.match(exit, /(refreshRoomPanels\(conv\)|dismissNote\(conv, note\));\s*$/, 'an accept answer leaves the panel stale');
+    }
+    // A refused request is refused with the code the panel shows for it (ui.js noteRefusal)
+    assert.match(body, /const refusal = noteRefusal\(note\);\n\s*if \(refusal\) \{\n\s*Errors\.report\(refusal\);\n\s*await refreshRoomPanels\(conv\);/);
+    assert.match(ui, /const refusal = noteRefusal\(note\);[\s\S]*memberTag\(Errors\.message\(refusal\)\)/);
+    assert.match(ui, /if \(note\.newer\) return Errors\.CODES\.W_MESSAGE_FROM_NEWER;/);
+    assert.match(ui, /if \(!note\.binder\) return Errors\.CODES\.W_FRIEND_REQUEST_OUTDATED;/);
+});
