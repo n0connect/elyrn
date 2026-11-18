@@ -1277,17 +1277,17 @@ const Chat = (() => {
     // Accepting redeems the invite inside the note, with the usual fingerprint check and the
     // binder check (Rooms.binderMatches). A request without a binder (sent before binders) or
     // from a newer elyrn is never redeemed: its invite stays unspent, and it can only be ignored.
+    // Whatever the answer, the notes panel is drawn again through refreshRoomPanels: an accepted
+    // request leaves it, a refused one shows what the server holds now and its registered reason.
     function acceptNote(conv, note) {
         return once(noteKey(note), () => acceptNoteNow(conv, note));
     }
 
     async function acceptNoteNow(conv, note) {
-        if (note.newer) {
-            Errors.report(Errors.CODES.W_MESSAGE_FROM_NEWER);
-            return;
-        }
-        if (!note.binder) {
-            Errors.report(Errors.CODES.W_FRIEND_REQUEST_OUTDATED);
+        const refusal = noteRefusal(note);
+        if (refusal) {
+            Errors.report(refusal);
+            await refreshRoomPanels(conv);
             return;
         }
         const validation = validateInviteCode(note.invite);
@@ -1303,14 +1303,17 @@ const Chat = (() => {
             return !relayed;
         };
         const id = await redeemInvite(invite, bound);
+        if (!me) return;
         if (!id) {
-            // A relayed request's invite is spent and its conversation burned: it is not offered again
-            if (relayed && me) await dismissNote(conv, note);
+            // A relayed request's invite is spent and its conversation burned: it is not offered
+            // again. Any other refusal was reported by redeemInvite; the panel is drawn again.
+            if (relayed) await dismissNote(conv, note);
+            else await refreshRoomPanels(conv);
             return;
         }
-        if (!me) return;
         listGeneration++;
-        await Rooms.dismissNote(api, conv, note.id);
+        // The accepted request leaves the panel before the new conversation opens
+        await dismissNote(conv, note);
         showSuccess(Errors.NOTICE.FRIENDS_NOW);
         await refreshConversations();
         await open(id);

@@ -1003,11 +1003,12 @@ function renderRoomSafety(groups) {
     });
 }
 
-// What a friend request that cannot be accepted says instead (null: it can be accepted): one a
-// newer elyrn wrote, or one sent before binders (Rooms.notes)
+// The code of what a friend request that cannot be accepted says instead (null: it can be
+// accepted): one a newer elyrn wrote, or one sent before binders (Rooms.notes). The panel shows
+// it and chat.js's accept refuses with it.
 function noteRefusal(note) {
-    if (note.newer) return Errors.message(Errors.CODES.W_MESSAGE_FROM_NEWER);
-    if (!note.binder) return Errors.message(Errors.CODES.W_FRIEND_REQUEST_OUTDATED);
+    if (note.newer) return Errors.CODES.W_MESSAGE_FROM_NEWER;
+    if (!note.binder) return Errors.CODES.W_FRIEND_REQUEST_OUTDATED;
     return null;
 }
 
@@ -1023,7 +1024,7 @@ function renderNotes(notes, onAccept, onIgnore) {
         row.appendChild(memberTag(note.from ? UI_TEXT.WANTS_FRIENDS : UI_TEXT.LEFT_WANTS_FRIENDS));
         const refusal = noteRefusal(note);
         if (refusal) {
-            const reason = memberTag(refusal);
+            const reason = memberTag(Errors.message(refusal));
             reason.classList.add('lookalike-tag');
             row.appendChild(reason);
         } else {
