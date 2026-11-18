@@ -46,49 +46,54 @@ The payload of a message (one-to-one and rooms alike) is exactly `{"t","ts","n"}
 `f` has exactly these five keys, each checked for shape and range (`frontend/js/crypto.js`
 `decodePayload`; `backend/internal/e2e/file.go` reads it the same way). With `f` the caption `t` may
 be empty; without it `t` keeps the message rules. The whole payload must still fit the 4094-byte
-frame (`payloadFits` reserves room for the description). There is no type field: the receiver
-decides what the bytes are from the bytes (magic numbers), never from the name. An invalid `f`
+frame (`payloadFits` reserves room for the description). There is no type field, and the client
+never looks at the bytes to find one: a file is delivered, never interpreted. An invalid `f`
 makes the message unreadable; a payload with keys other than these four is a newer elyrn's
 ("sent by a newer elyrn; reload this page to read it").
 
 **The name rule** (`frontend/validation.js` `isFileName`, the same as Go's `fileNameValid`): NFC as it
 is (never normalised on reading), 1 to 128 code points, at most 512 bytes of UTF-8, no leading dot,
 no `/` or `\`, no control character (Unicode Cc: C0, DEL, C1), no bidirectional control (U+061C,
-U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), no lone surrogate. A chosen file is sent
-under a name that passes it (`fileNameForSending`: NFC, refused characters replaced by `_`,
-leading dots dropped, cut to the bounds keeping the extension); a received name that fails it
-makes the message unreadable. A file is saved under its name with `<>:"|?*` replaced
+U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), no lone surrogate. A received name that
+fails it makes the message unreadable. A file is saved under its name with `<>:"|?*` replaced
 (`saveName`). Received names and captions are other people's data: shown as text only.
 
-## The browser
+**The name a file is sent under** (`frontend/validation.js` `outgoingFileName`): every file goes
+out as `file-<8 random hex>` plus the chosen file's extension when that extension, lowercased,
+is 1 to 8 characters of `[a-z0-9]` (`holiday photo.JPG` becomes `file-3fa2c19e.jpg`); otherwise
+with no extension. The chosen name never leaves the device, and the composer shows the name that
+will be sent, not the chosen one. This is the only thing elyrn. sets about a file.
+
+## The browser: delivery only
+
+**elyrn. delivers a file exactly as it is; it never reads, interprets, cleans or displays file
+content** (the owner's decision of 18 Nov 2026). The server's only job is to relay sealed bytes and
+the client's only job is to deliver them, as with messages. Decoding or parsing a file in the page
+is attack surface, on the receiving side for bytes written by strangers and on the sending side
+for whatever the user picked up elsewhere. Cleaning could only ever cover a couple of formats, and
+a tool that cleans some files teaches people to trust it with the ones it does not clean (HEIC,
+PDF, office documents, video). So nothing is cleaned and the user is told so every time.
 
 | Module | One job |
 |---|---|
 | `js/file-crypto.js` | part keys, sealing and opening of parts, the file's hash |
 | `js/file-transfer.js` | parts to and from the server, in order, with retries; nothing else |
-| `js/image-clean.js` | an image's hidden data stays behind; images recognised and decoded for viewing |
 | `js/file-composer.js` | the one chosen file of the open conversation, from choosing to its message being stored |
-| `js/file-card.js` | a received file in its bubble: view and save |
+| `js/file-card.js` | a received file in its bubble: its name, its size and `save` |
 
 **Choosing.** The attach control (`+`), pasting a file, or dropping one on the open conversation.
 One file per message (more is refused). It is checked before it is read: empty, or over this
 server's `file_max_bytes` (from `/me`, validated like the other limits: one part to the bound),
-with the limit in the sentence. It is read once; a file that changed or vanished while it was
-read is refused. The composer shows its name and size and a way to remove it; send stays off while
-it is being prepared or uploaded.
+with the limit in the sentence. It is read once and left as it is; a file that changed or vanished
+while it was read is refused. The composer shows the name it will be sent under, its size and a way
+to remove it; send stays off while it is being read or uploaded.
 
-**Images lose their metadata before they leave.** PNG, JPEG and WebP, recognised by their first
-bytes, are decoded with their orientation applied and encoded again from the pixels through a
-canvas: PNG stays PNG, JPEG stays JPEG (quality 0.92), WebP becomes PNG. EXIF, GPS, device, time,
-comments and text chunks stay behind, and the name becomes `image-<4 random hex>.<ext>`. What the
-engine's own encoder writes beside the pixels is dropped as well (WebKit writes an Exif segment of
-its own into a canvas JPEG): JPEG APP1 to APP15 and comment segments, PNG `tEXt`, `zTXt`, `iTXt`,
-`eXIf` and `tIME` chunks; an encoded image that does not parse is not sent. An image
-whose header declares, or whose pixels have, more than 4096 x 4096 is refused (the largest canvas
-every engine draws). An image that cannot be decoded or encoded here is refused with a sentence
-that says so and what to do; it is never sent as it was. A cleaned image that grew past the limit
-is refused. Anything else (GIF, PDF, archives, text) is sent as it is, and the user is told once per
-session that its hidden data goes along.
+**The notice.** At every chosen file, for as long as it is chosen, never dismissible and never
+"once per session", the composer says (`Errors.NOTICE.FILE_SENT_AS_IS`): *this file is delivered
+exactly as it is. photos and documents usually carry hidden data — where, when and on what device
+they were made, who wrote them — and the file itself can be recognised wherever the same file turns
+up. elyrn. removes none of it.* The cost is stated plainly: a user who ignores the notice can send
+a photo with the place it was taken in it, and that cannot be undone once a member has saved it.
 
 **Sending.** Pressing send uploads the parts in order (progress: parts done / total), then sends the
 announcing message through the one send path, so a roster that changed meanwhile (412) re-encrypts
@@ -98,20 +103,21 @@ times with a pause that doubles from 1 s; then the upload stops and says so, and
 continues under the same file id from the first part not stored, while the page lives. The
 server's request limit (a `429` without a file sentence) is waited out past part 0 and on every
 download: the transfer pauses 3 s (the server's default refill) and asks again, at most 120
-times per transfer. Leaving the
-conversation, removing the file, logging out or the session ending (401) cancels the upload between
-parts; nothing is sent, and the composer is empty.
+times per transfer. Leaving the conversation, removing the file, logging out or the session ending
+(401) cancels the upload between parts; nothing is sent, and the composer is empty.
 
-**Receiving.** The bubble shows a card: the name (text), the size, `view` and `save`. Nothing is
-fetched until one is pressed; a double click fetches once. `view` draws the opened bytes on a
-`<canvas>` only when they are PNG, JPEG or WebP by their first bytes and within the pixel limit;
-SVG, HTML and everything else are never rendered, only saved. `save` hands the bytes to the browser
-as a download (an object URL, revoked shortly after). One opened file is kept at a time. No CSP
-change: a canvas needs no `blob:` image source, and a download is not a fetch directive.
+**Receiving.** The bubble shows a card: the name the file was sent under (as text), its size, one
+control, `save`, and a fixed line (`Errors.NOTICE.FILE_FROM_MEMBER`): *sent by another member,
+exactly as they sent it — opening it is your own decision.* Nothing is fetched until `save` is
+pressed; then the parts are fetched and opened, the hash is checked, and the bytes are handed to
+the browser as a download under the saved name (an object URL, revoked shortly after; the bytes
+are not kept). There is no preview of any kind. Recipients must treat a received file as
+untrusted: it is whatever another member chose to send. No CSP change: a download is not a fetch
+directive.
 
-**Memory.** The sender holds the chosen file once (the cleaned copy replaces the original) plus
-one sealed part; the receiver holds the one buffer the file is assembled in plus one served part,
-and `save` makes the one copy the browser's download needs.
+**Memory.** The sender holds the chosen file once plus one sealed part; the receiver holds the one
+buffer the file is assembled in plus one served part, and `save` makes the one copy the browser's
+download needs.
 
 ## Server behaviour as seen by the client
 
@@ -140,9 +146,12 @@ conversation; `FILE_STORE_MAX_BYTES` per server; `FILE_ACCOUNT_DAILY_BYTES` per 
 
 ## Known limits
 
-- **A recipient can tell the sender's browser engine** from how an image was re-encoded (encoder
-  tables, chunk order, quality behaviour): cleaning removes what the camera wrote, not the trace
-  of the encoder that wrote the new file. Colour profiles are not kept either.
+- **A file carries whatever its maker put in it.** Location, device, author and time in photos and
+  documents reach every member who saves the file, and the file itself is a fingerprint: the same
+  file found elsewhere can be matched to it. elyrn. removes nothing and says so at every chosen
+  file; once a member has saved a file, nothing can take it back.
+- **A received file is untrusted.** elyrn. never opens it; what the receiver's own programs do with
+  it after `save` is outside elyrn.
 - **File ids** are random and chosen by the client; the server sees the same id for every part of
   a file, and a member who re-sends a file under a new id is not linked to the earlier upload.
 - **No deletion this round.** A file's parts live until their day rule or their conversation ends.
