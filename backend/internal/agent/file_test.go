@@ -87,7 +87,7 @@ func TestFileMessage_AgainstTheRuleIsBroken(t *testing.T) {
 	for name, file := range map[string]e2e.File{
 		"hidden name":     randomFile(t, ".env", 1),
 		"path in name":    randomFile(t, "../a.png", 1),
-		"bidi in name":    randomFile(t, "gpj.‮exe", 1),
+		"bidi in name":    randomFile(t, "gpj.\u202eexe", 1),
 		"empty file":      randomFile(t, "a.png", 0),
 		"too large":       randomFile(t, "a.png", config.MaxFileBytesBound+1),
 		"short key":       {ID: uuid.New(), Key: make([]byte, 31), Size: 1, Hash: make([]byte, 32), Name: "a"},

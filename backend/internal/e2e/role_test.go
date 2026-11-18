@@ -36,8 +36,8 @@ func TestRoleText_TheRule(t *testing.T) {
 	}
 	for _, bad := range []string{
 		strings.Repeat("a", RoleMaxChars+1), "#lider", "two words", "tab\there", "dot.ted", "emoji😀",
-		"owner", "OWNER", "Owner", "OwNeR", "you", "YOU", "yOu", "ｏｗｎｅｒ", "ＯＷＮＥＲ", "ＹＯＵ", "ｙｏｕ", "oｗner", "line\n", "\u0007", "zero‍width",
-		"swap‮me", "\xff", "a\x00",
+		"owner", "OWNER", "Owner", "OwNeR", "you", "YOU", "yOu", "ｏｗｎｅｒ", "ＯＷＮＥＲ", "ＹＯＵ", "ｙｏｕ", "oｗner", "line\n", "\u0007", "zero\u200dwidth",
+		"swap\u202eme", "\xff", "a\x00",
 	} {
 		if got, err := ValidateRoleText(bad); err == nil {
 			t.Errorf("ValidateRoleText(%q) accepted %q", bad, got)
@@ -149,7 +149,7 @@ func TestRole_OpenRefusesWhatACodeHolderMisSealed(t *testing.T) {
 		"too many runes":     rolePlain(strings.Repeat("a", RoleMaxChars+1)),
 		"short plaintext":    rolePlain("lider")[:rolePlainSize-1],
 		"control in text":    rolePlain("a\u0085"),
-		"bidi control alone": rolePlain("⁦"),
+		"bidi control alone": rolePlain("\u2066"),
 	} {
 		if got, err := room.OpenRole(a.member.Card, sealRolePlain(t, room, a.member.Card, plain)); err == nil {
 			t.Errorf("%s: opened as %q", name, got)

@@ -23,8 +23,14 @@ func fullBucket(tokens int) *TokenBucket {
 // another at 6 s (the old arithmetic restarted the interval at 4 s and gave none at 6 s).
 func TestTokenBucket_KeepsPartialRefill(t *testing.T) {
 	tb := fullBucket(2)
-	if !tb.allowLocked(testStart) || !tb.allowLocked(testStart) || tb.allowLocked(testStart) {
-		t.Fatal("a full bucket of 2 did not give exactly 2")
+	granted := 0
+	for range 3 {
+		if tb.allowLocked(testStart) {
+			granted++
+		}
+	}
+	if granted != 2 {
+		t.Fatalf("a full bucket of 2 gave %d of 3 requests at one instant, want exactly 2", granted)
 	}
 	for _, step := range []struct {
 		at   time.Duration
