@@ -69,7 +69,7 @@ function validCode(r) {
 
 test('message trim rule: the browser trims exactly the agent\'s set, and the shared samples agree', () => {
     const trimChars = get('MESSAGE_TRIM_CHARS');
-    assert.equal(trimChars, goMessageTrimChars(), 'validation.js MESSAGE_TRIM_CHARS differs from messages.go messageTrimChars');
+    assert.equal(trimChars, goMessageTrimChars(), 'validation.js MESSAGE_TRIM_CHARS differs from messagetext.go messageTrimChars');
     const validate = get('validateMessageText');
     for (const [text, sent] of MESSAGE_TRIM_SAMPLES) {
         const result = validate(text);

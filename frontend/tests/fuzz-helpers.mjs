@@ -185,7 +185,7 @@ export function goHexExact(patterns, size) {
     return new RegExp(`^${patterns.classHexLower}{${size * 2}}$`);
 }
 
-// Go's single-character string escapes, as messages.go spells its trim set
+// Go's single-character string escapes, as messagetext.go spells its trim set
 const GO_ESCAPES = { t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', '\\': '\\', '"': '"' };
 
 // The text of one Go interpreted string literal's body: \uXXXX, \UXXXXXXXX and the one-letter
@@ -199,12 +199,12 @@ function goSource(path) {
     return readFileSync(new URL('../../backend/' + path, import.meta.url), 'utf8');
 }
 
-// backend/internal/agent/messages.go messageTrimChars, decoded from the Go source: the agent's
+// backend/internal/agent/messagetext.go messageTrimChars, decoded from the Go source: the agent's
 // trim set, compared with the browser's MESSAGE_TRIM_CHARS rather than with a copy
 export function goMessageTrimChars() {
-    const source = goSource('internal/agent/messages.go');
+    const source = goSource('internal/agent/messagetext.go');
     const declaration = source.match(/const messageTrimChars = ((?:"[^"]*"(?:\s*\+\s*)?)+)/);
-    if (declaration === null) throw new Error('messages.go declares no messageTrimChars');
+    if (declaration === null) throw new Error('messagetext.go declares no messageTrimChars');
     return [...declaration[1].matchAll(/"([^"]*)"/g)].map((part) => decodeGoString(part[1])).join('');
 }
 

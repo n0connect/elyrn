@@ -15,7 +15,7 @@ const FORBIDDEN_TEXT_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F‪-‮⁦
 // The only characters trimmed from either end of a message: ECMAScript's WhiteSpace and
 // LineTerminator (what String.prototype.trim strips), spelled out so the rule never depends on
 // the engine's Unicode version. The agent trims exactly this set (backend/internal/agent
-// messages.go messageTrimChars, compared by frontend/tests/validation.fuzz.test.mjs). U+0085 is
+// messagetext.go messageTrimChars, compared by frontend/tests/validation.fuzz.test.mjs). U+0085 is
 // not in it (a C1 control, refused below) and neither is U+200B (content).
 const MESSAGE_TRIM_CHARS = '\t\n\v\f\r \u00A0\u1680' +
     '\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A' +
