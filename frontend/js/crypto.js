@@ -423,7 +423,7 @@ const ElyrnCrypto = (() => {
     }
 
     // Throws on any tampering (wrong conversation, message id, sender, or modified bytes)
-    async function decryptMessage(key, conversationId, messageId, senderPublicKey, ciphertext) {
+    async function decryptMessage({ key, conversationId, messageId, senderPublicKey, ciphertext }) {
         const data = b64urlDecode(ciphertext);
         if (data.length < NONCE_BYTES + TAG_BYTES + PAD_BLOCK) {
             throw new Error('ciphertext too short');

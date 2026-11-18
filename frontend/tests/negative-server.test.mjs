@@ -366,11 +366,11 @@ test('join: the request carries the room id, lookup, card, vault and limits only
 
 test('create: no proof of work, a 2xx naming another room, or three collisions create nothing', async () => {
     const root = await R.deriveRoomsRoot(ACCOUNT_A);
-    assert.deepEqual({ ...(await Rooms.create(apiCall, root, SEATS, 1, async () => null)) }, { status: 0 });
+    assert.deepEqual({ ...(await Rooms.create({ api: apiCall, root, maxMembers: SEATS, ttlHours: 1, solvePow: async () => null })) }, { status: 0 });
     serve(201, { success: true, conversation: { id: MARKUP[0] } });
-    assert.deepEqual({ ...(await Rooms.create(apiCall, root, SEATS, 1, async () => ({}))) }, { status: 201 });
+    assert.deepEqual({ ...(await Rooms.create({ api: apiCall, root, maxMembers: SEATS, ttlHours: 1, solvePow: async () => ({}) })) }, { status: 201 });
     serve(409, { success: false });
-    assert.deepEqual({ ...(await Rooms.create(apiCall, root, SEATS, 1, async () => ({}))) }, { status: 409 });
+    assert.deepEqual({ ...(await Rooms.create({ api: apiCall, root, maxMembers: SEATS, ttlHours: 1, solvePow: async () => ({}) })) }, { status: 409 });
 });
 
 // ---------- messages: `mine` that lies, a sender's clock ----------
@@ -383,8 +383,8 @@ test('a pair message whose `mine` flag lies does not open: the sender is bound i
     const keyA = await C.conversationKey(a.privateKey, b.publicKey, conversationId);
     const sealed = await C.encryptMessage({ key: keyA, conversationId, messageId, senderPublicKey: b.publicKey,
         text: MARKUP[0], sentAt: Date.now(), counter: 1 });
-    await assert.rejects(C.decryptMessage(keyA, conversationId, messageId, a.publicKey, sealed));
-    const opened = await C.decryptMessage(keyA, conversationId, messageId, b.publicKey, sealed);
+    await assert.rejects(C.decryptMessage({ key: keyA, conversationId, messageId, senderPublicKey: a.publicKey, ciphertext: sealed }));
+    const opened = await C.decryptMessage({ key: keyA, conversationId, messageId, senderPublicKey: b.publicKey, ciphertext: sealed });
     assert.equal(opened.text, MARKUP[0], 'markup arrives as text');
 });
 

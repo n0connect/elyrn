@@ -145,7 +145,7 @@ test('both peers derive the same conversation key and round-trip a message', asy
     const { a, ab, ba } = await peers();
     const msg = C.newMessageId();
     const ct = await C.encryptMessage({ key: ab, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, text: 'merhaba 👋 <b>', sentAt: 1729700000000, counter: 7 });
-    const out = await C.decryptMessage(ba, CONV, msg, a.publicKey, ct);
+    const out = await C.decryptMessage({ key: ba, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, ciphertext: ct });
     assert.deepEqual({ ...out }, { text: 'merhaba 👋 <b>', sentAt: 1729700000000, counter: 7 });
     // Length hiding: ciphertext size is a padded bucket, not the text length
     assert.equal(C.b64urlDecode(ct).length, 12 + 256 + 16);
@@ -164,7 +164,7 @@ test('ciphertext length is one of five power-of-two buckets', async () => {
 
 test('opens a message encrypted by the Go implementation (interop)', async () => {
     const { a, ba } = await peers();
-    const out = await C.decryptMessage(ba, CONV, GO_VECTOR.message, a.publicKey, GO_VECTOR.ciphertext);
+    const out = await C.decryptMessage({ key: ba, conversationId: CONV, messageId: GO_VECTOR.message, senderPublicKey: a.publicKey, ciphertext: GO_VECTOR.ciphertext });
     assert.deepEqual({ ...out }, { text: GO_VECTOR.text, sentAt: GO_VECTOR.sentAt, counter: GO_VECTOR.counter });
 });
 
@@ -172,14 +172,14 @@ test('AAD binding: wrong message id, sender, conversation, or tampered bytes fai
     const { a, b, ab, ba } = await peers();
     const msg = C.newMessageId();
     const ct = await C.encryptMessage({ key: ab, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, text: 'secret', sentAt: 1, counter: 1 });
-    await assert.rejects(C.decryptMessage(ba, CONV, C.newMessageId(), a.publicKey, ct));
-    await assert.rejects(C.decryptMessage(ba, CONV, msg, b.publicKey, ct)); // reflected as if sent by b
+    await assert.rejects(C.decryptMessage({ key: ba, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, ciphertext: ct }));
+    await assert.rejects(C.decryptMessage({ key: ba, conversationId: CONV, messageId: msg, senderPublicKey: b.publicKey, ciphertext: ct })); // reflected as if sent by b
     const otherConv = await C.conversationKey(b.privateKey, a.publicKey, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
-    await assert.rejects(C.decryptMessage(otherConv, CONV, msg, a.publicKey, ct));
+    await assert.rejects(C.decryptMessage({ key: otherConv, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, ciphertext: ct }));
     const raw = C.b64urlDecode(ct);
     raw[20] ^= 1;
     const tampered = Buffer.from(raw).toString('base64url');
-    await assert.rejects(C.decryptMessage(ba, CONV, msg, a.publicKey, tampered));
+    await assert.rejects(C.decryptMessage({ key: ba, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, ciphertext: tampered }));
 });
 
 test('invite code carries a fingerprint the redeemer can verify', async () => {
@@ -299,10 +299,10 @@ test('a one-to-one message a newer elyrn sealed opens as newer, and as unreadabl
     const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad },
         ab, frameOf(`{${VALID},"g":{"n":"later"}}`)));
     const ciphertext = C.b64urlEncode(C.concat(nonce, sealed));
-    await assert.rejects(C.decryptMessage(ba, CONV, id, a.publicKey, ciphertext), (e) => C.isNewerPayload(e));
+    await assert.rejects(C.decryptMessage({ key: ba, conversationId: CONV, messageId: id, senderPublicKey: a.publicKey, ciphertext }), (e) => C.isNewerPayload(e));
     const altered = C.b64urlDecode(ciphertext);
     altered[20] ^= 1;
-    await assert.rejects(C.decryptMessage(ba, CONV, id, a.publicKey, C.b64urlEncode(altered)), (e) => !C.isNewerPayload(e));
+    await assert.rejects(C.decryptMessage({ key: ba, conversationId: CONV, messageId: id, senderPublicKey: a.publicKey, ciphertext: C.b64urlEncode(altered) }), (e) => !C.isNewerPayload(e));
 });
 
 // ---------- the file field ----------

@@ -233,7 +233,7 @@ const Rooms = (() => {
 
     // Draws a code, pays a proof of work and stores the room. Returns { id, code } or a
     // { status } the caller explains.
-    async function create(api, root, maxMembers, ttlHours, solvePow) {
+    async function create({ api, root, maxMembers, ttlHours, solvePow }) {
         for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
             const code = R.newRoomCode(maxMembers, R.expiryHourFor(ttlHours, Date.now()));
             const keys = await R.deriveRoom(code.secret);

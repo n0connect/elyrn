@@ -628,7 +628,7 @@ const Chat = (() => {
     // The sender is bound into the AAD: a flipped `mine` names the wrong key and fails to open
     async function openPairMessage(conv, key, raw) {
         const sender = raw.mine ? me.publicKey : conv.peerPublicKey;
-        const plain = await ElyrnCrypto.decryptMessage(key, conv.id, raw.id, sender, raw.ciphertext);
+        const plain = await ElyrnCrypto.decryptMessage({ key, conversationId: conv.id, messageId: raw.id, senderPublicKey: sender, ciphertext: raw.ciphertext });
         return withFile(conv, { seq: raw.seq, mine: raw.mine, text: plain.text, sentAt: plain.sentAt, sender: sender, counter: plain.counter }, plain.file);
     }
 
@@ -1091,7 +1091,7 @@ const Chat = (() => {
         };
         let created;
         try {
-            created = await Rooms.create(api, owner.roomsRoot, maxMembers, ttlHours, solve);
+            created = await Rooms.create({ api, root: owner.roomsRoot, maxMembers, ttlHours, solvePow: solve });
         } catch (e) {
             created = { status: 0, failure: e };
         }
