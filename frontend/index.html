@@ -202,13 +202,41 @@
         <div class="app-container" id="appContainer" data-hidden>
             <header>
                 <div class="brand-small">elyrn.</div>
-                <div class="me-badge" id="meBadge" title="your aura — derived from your public key">
-                    <canvas class="aura-glyph" id="meGlyph" width="5" height="5"></canvas>
+                <!-- the identity badge opens the identity panel (deleting the identity lives there) -->
+                <button type="button" class="me-badge header-btn" id="meBadge" aria-expanded="false" aria-controls="identityPanel">
+                    <canvas class="aura-glyph" id="meGlyph" width="5" height="5" aria-hidden="true"></canvas>
                     <span class="aura-name" id="meName"></span>
-                </div>
-                <button id="alertsBtn" class="text-btn" aria-pressed="false" data-hidden>alerts off</button>
-                <button id="deleteIdentityBtn" class="text-btn">delete</button>
-                <button id="logoutBtn" class="text-btn">logout</button>
+                </button>
+                <!-- alerts: a pixel bell, solid when on, struck through when off (styles.css reads
+                     aria-pressed); alerts.js writes its name and title -->
+                <button type="button" id="alertsBtn" class="header-btn bell-btn" aria-pressed="false" aria-label="alerts off" title="alerts off" data-hidden>
+                    <svg class="bell-glyph" viewBox="0 0 11 11" aria-hidden="true" focusable="false" shape-rendering="crispEdges">
+                        <g class="bell-body">
+                            <rect x="5" y="0" width="1" height="1"/>
+                            <rect x="4" y="1" width="3" height="1"/>
+                            <rect x="3" y="2" width="5" height="1"/>
+                            <rect x="2" y="3" width="7" height="4"/>
+                            <rect x="1" y="7" width="9" height="1"/>
+                            <rect x="0" y="8" width="11" height="1"/>
+                            <rect x="5" y="10" width="1" height="1"/>
+                        </g>
+                        <g class="bell-gap">
+                            <rect x="2" y="0" width="1" height="1"/><rect x="3" y="1" width="1" height="1"/>
+                            <rect x="4" y="2" width="1" height="1"/><rect x="5" y="3" width="1" height="1"/>
+                            <rect x="6" y="4" width="1" height="1"/><rect x="7" y="5" width="1" height="1"/>
+                            <rect x="8" y="6" width="1" height="1"/><rect x="9" y="7" width="1" height="1"/>
+                            <rect x="10" y="8" width="1" height="1"/>
+                        </g>
+                        <g class="bell-strike">
+                            <rect x="1" y="0" width="1" height="1"/><rect x="2" y="1" width="1" height="1"/>
+                            <rect x="3" y="2" width="1" height="1"/><rect x="4" y="3" width="1" height="1"/>
+                            <rect x="5" y="4" width="1" height="1"/><rect x="6" y="5" width="1" height="1"/>
+                            <rect x="7" y="6" width="1" height="1"/><rect x="8" y="7" width="1" height="1"/>
+                            <rect x="9" y="8" width="1" height="1"/><rect x="10" y="9" width="1" height="1"/>
+                        </g>
+                    </svg>
+                </button>
+                <button type="button" id="logoutBtn" class="header-btn">logout</button>
             </header>
 
             <!-- HOME: conversations -->
@@ -217,6 +245,16 @@
                     <button id="newInviteBtn" class="primary-btn">+ invite</button>
                     <button id="newRoomBtn" class="secondary-btn">+ room</button>
                     <button id="showJoinBtn" class="secondary-btn">join</button>
+                </div>
+
+                <!-- opened by the identity badge in the header; delete identity opens #deletePanel -->
+                <div id="identityPanel" class="pair-panel" data-hidden>
+                    <p class="account-number-label">your identity</p>
+                    <p id="identityAura" class="identity-aura"></p>
+                    <p class="pair-hint">your aura — derived from your public key</p>
+                    <div class="identity-end">
+                        <button type="button" id="deleteIdentityBtn" class="text-btn identity-delete">delete identity…</button>
+                    </div>
                 </div>
 
                 <div id="invitePanel" class="pair-panel" data-hidden>

@@ -110,7 +110,7 @@ To test end-to-end encryption locally between two parties:
    - Send a message; the other side receives it in realtime.
    - Click **verify** and compare the safety number with your peer over another channel, then **mark as verified**.
    - **burn** erases the conversation and every ciphertext for both participants.
-   - **delete** (next to logout) erases the whole identity: paste the account number to confirm. Every conversation is burned for both sides and the number can never log in again.
+   - Your identity badge (glyph and name, in the header) opens a small panel; **delete identity…** at its bottom erases the whole identity: paste the account number to confirm. Every conversation is burned for both sides and the number can never log in again.
 
 > [!TIP]
 > **Over Tor:** `make onion` publishes the same app as a Tor onion service and `make onion-address` prints its address; open it in Tor Browser (security level Standard). See [**Onion Service (Tor)**](../operations/onion-service.md).

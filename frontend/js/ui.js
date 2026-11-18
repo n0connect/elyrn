@@ -32,7 +32,7 @@ const COMPOSER_MAX_HEIGHT_PX = 140;
 const DEFAULT_ROOM_MEMBERS = 8;
 const DEFAULT_ROOM_TTL_HOURS = 24;
 
-// Every word ui.js, file-card.js and file-composer.js write into the page that is no failure or
+// Every word ui.js, alerts.js, file-card.js and file-composer.js write into the page that is no failure or
 // warning (those are errors.js's, by code): control labels, tags, marks, titles, hints, progress
 // and the empty-state sentences.
 // A text with a part filled in is a function of that part.
@@ -48,6 +48,10 @@ const UI_TEXT = Object.freeze({
     AURA_CODE_PREFIX: '·',
     ROOM_NAME_PREFIX: '#',
     ME_TITLE: (name, code) => 'you are ' + name + ' · ' + code,
+    // the app header's alerts bell (alerts.js): its name, and a title that also says what it does
+    ALERTS_ON: 'alerts on',
+    ALERTS_OFF: 'alerts off',
+    ALERTS_TITLE: (name) => `${name} · a notification without any content when a message arrives while this tab is hidden — nothing leaves this device`,
     ROOM_META: (members, maxMembers, left) => `${members}/${maxMembers} · ${left}`,
     // the open conversation
     VERIFIED_ON: '✓ verified — unmark',
@@ -337,10 +341,17 @@ function appendAura(parent, aura) {
     parent.appendChild(code);
 }
 
+// The header badge (glyph and name; on a phone the glyph alone, so its name is set explicitly)
+// and the identity panel it opens (glyph, name and code)
 function renderMe(aura) {
     drawGlyph(document.getElementById('meGlyph'), aura.grid);
     document.getElementById('meName').textContent = aura.name;
-    document.getElementById('meBadge').title = UI_TEXT.ME_TITLE(aura.name, aura.code);
+    const badge = document.getElementById('meBadge');
+    badge.title = UI_TEXT.ME_TITLE(aura.name, aura.code);
+    badge.setAttribute('aria-label', badge.title);
+    const line = document.getElementById('identityAura');
+    clearChildren(line);
+    appendAura(line, aura);
 }
 
 // ---------- home ----------
@@ -350,21 +361,26 @@ function showHome() {
     document.getElementById('homeView').style.display = 'block';
 }
 
-const PAIR_PANELS = ['invitePanel', 'roomPanel', 'joinPanel', 'deletePanel'];
+const PAIR_PANELS = ['identityPanel', 'invitePanel', 'roomPanel', 'joinPanel', 'deletePanel'];
+
+// The one place a pair panel is shown or hidden by these two: a control that names the panel in
+// aria-controls (the identity badge) says whether it is open
+function setPairPanel(id, shown) {
+    document.getElementById(id).style.display = shown ? 'block' : 'none';
+    document.querySelectorAll(`[aria-controls="${id}"]`).forEach(control => {
+        control.setAttribute('aria-expanded', shown ? 'true' : 'false');
+    });
+}
 
 // Opens panelId alone, or closes every pair panel when it is already open (or null)
 function togglePairPanel(panelId) {
-    PAIR_PANELS.forEach(id => {
-        const panel = document.getElementById(id);
-        panel.style.display = id === panelId && panel.style.display === 'none' ? 'block' : 'none';
-    });
+    const opening = panelId !== null && !isShown(panelId);
+    PAIR_PANELS.forEach(id => setPairPanel(id, opening && id === panelId));
 }
 
 // Opens panelId and closes the others, whatever was open
 function showPairPanel(panelId) {
-    PAIR_PANELS.forEach(id => {
-        document.getElementById(id).style.display = id === panelId ? 'block' : 'none';
-    });
+    PAIR_PANELS.forEach(id => setPairPanel(id, id === panelId));
 }
 
 // While the proof of work runs, the invite scrambles exactly like a new account number does.

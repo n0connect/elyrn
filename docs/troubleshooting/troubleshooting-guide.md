@@ -295,9 +295,9 @@ own text is never shown.
 | *"this conversation is gone (burned, expired or left) — the file was not sent"* | `404` during the upload: the room expired or the conversation was burned or left meanwhile. | Nothing to do: no message was sent. |
 | *"this file is no longer available — …"* | A part answered `404`: it expired with the messages' day rule, or its conversation lost it. | Ask the sender to send it again. |
 | *"this file failed its integrity check — nothing of it was kept"* | A part did not open, its padding was not zero, or the file did not match its hash: altered in storage or announced wrongly. | Ask the sender to send it again; if it repeats, the server is misbehaving. |
-| no **alerts** control in the header | This browser has no Notification API (some embedded browsers, older mobile browsers): content-free alerts cannot exist here. | Use a browser that has it. |
-| *"this browser blocks notifications for this site — allow them in its site settings, then turn alerts on"* | Notifications for this site were denied in the browser. | Allow them in the browser's site settings, then press **alerts off** again. |
-| *"notifications were not allowed — alerts stay off"* | The browser's question was closed without an answer. | Press **alerts off** again and allow. |
+| no **alerts** bell in the header | This browser has no Notification API (some embedded browsers, older mobile browsers): content-free alerts cannot exist here. | Use a browser that has it. |
+| *"this browser blocks notifications for this site — allow them in its site settings, then turn alerts on"* | Notifications for this site were denied in the browser. | Allow them in the browser's site settings, then press the struck-through bell (**alerts off**) again. |
+| *"notifications were not allowed — alerts stay off"* | The browser's question was closed without an answer. | Press the struck-through bell (**alerts off**) again and allow. |
 | *"notifications are no longer allowed for this site — alerts turned off"* | Permission was withdrawn after alerts were turned on. | Allow them again in the site settings, then turn alerts on. |
 | alerts are on and nothing shows | An alert shows only while elyrn. is open in some tab and that tab is hidden, once until the tab is seen again; the operating system's do-not-disturb or the browser's own notification settings can still hold it back, and some browsers refuse page notifications altogether (logged as `W_ALERT_NOT_SHOWN`). | Keep a tab open; check the system's notification settings for the browser. |
 

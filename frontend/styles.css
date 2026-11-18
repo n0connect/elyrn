@@ -45,6 +45,15 @@
     /* One red for everything destructive or failed: deep enough to sit with the monochrome UI */
     --danger: #cc0000;
     --danger-bg: #fff5f5;
+    /* The smallest hit area a control gets on a touch-width screen */
+    --touch-min: 40px;
+    /* Pixel glyphs scaled up crisp: the aura's 5x5 grid and the alerts bell's 11x11 grid, both
+       drawn about the same height in the header */
+    --glyph-size: 20px;
+    --bell-size: 22px;
+    /* The focus ring every control of the app shares */
+    --focus-ring: 2px solid var(--fg);
+    --focus-offset: 2px;
 }
 
 body {
@@ -507,8 +516,8 @@ button:disabled {
 header {
     display: flex;
     flex-wrap: wrap;
-    justify-content: space-between;
     align-items: center;
+    gap: 4px;
     margin-bottom: 48px;
     padding-bottom: 24px;
     border-bottom: 1px solid var(--border);
@@ -521,31 +530,69 @@ header {
     text-transform: lowercase;
 }
 
-/* Header actions: plain text that takes a frame on hover, on one baseline */
-#deleteIdentityBtn,
-#logoutBtn {
+/* Header controls (identity badge, alerts bell, logout): one height, one baseline, plain until
+   hovered or focused, when they take a thin frame */
+.header-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: var(--touch-min);
+    margin: 0;
+    padding: 0 12px;
     font-size: 16px;
-    padding: 8px 16px;
-    margin-top: 0;
+    color: var(--muted);
+    background: transparent;
     border: 1px solid transparent;
     box-shadow: none;
 }
 
-#deleteIdentityBtn {
-    margin-right: 4px;
+.header-btn:hover,
+.header-btn:active,
+.header-btn:focus-visible {
+    border-color: var(--border);
+    color: var(--fg);
+    background: transparent;
+    transform: none;
+    box-shadow: none;
 }
 
-#logoutBtn:hover,
-#logoutBtn:focus-visible {
+.header-btn:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-offset);
+}
+
+/* The badge's panel is open: framed while open, as when hovered */
+.me-badge[aria-expanded="true"] {
     border-color: var(--border);
     color: var(--fg);
 }
 
-#deleteIdentityBtn:hover,
-#deleteIdentityBtn:focus-visible {
-    border-color: var(--danger);
-    color: var(--danger);
-    background: var(--danger-bg);
+/* The alerts bell: a square hit area; solid and full colour when on, struck through and dimmer
+   when off. Its shapes live once, in index.html; aria-pressed picks one here. */
+.bell-btn {
+    min-width: var(--touch-min);
+    padding: 0;
+}
+
+.bell-glyph {
+    width: var(--bell-size);
+    height: var(--bell-size);
+    fill: currentColor;
+}
+
+.bell-btn[aria-pressed="true"] {
+    color: var(--fg);
+}
+
+.bell-btn[aria-pressed="true"] .bell-gap,
+.bell-btn[aria-pressed="true"] .bell-strike {
+    display: none;
+}
+
+/* The gap beside the strike is cut out of the bell in the page's colour, so the line reads */
+.bell-btn .bell-gap {
+    fill: var(--bg);
 }
 
 /* ========================================
@@ -964,8 +1011,8 @@ header {
 
 /* Key-derived 5x5 glyph: drawn at 5px, scaled up crisp */
 .aura-glyph {
-    width: 20px;
-    height: 20px;
+    width: var(--glyph-size);
+    height: var(--glyph-size);
     padding: 2px;
     box-sizing: content-box;
     border: 1px solid var(--border);
@@ -984,14 +1031,37 @@ header {
     color: var(--muted);
 }
 
+/* The identity badge: glyph and name, pushed to the right with the bell and logout after it */
 .me-badge {
-    display: flex;
-    align-items: center;
-    gap: 8px;
     margin-left: auto;
-    margin-right: 12px;
-    color: var(--muted);
-    cursor: default;
+    padding: 0 8px;
+    text-transform: none;
+}
+
+.me-badge .aura-glyph {
+    width: var(--glyph-size);
+    height: var(--glyph-size);
+}
+
+/* The identity panel: glyph, name and code on one line; deleting the identity set apart below */
+.identity-aura {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin-bottom: 12px;
+}
+
+.identity-end {
+    margin-top: 16px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+}
+
+.pair-panel .identity-delete:hover,
+.pair-panel .identity-delete:focus-visible {
+    color: var(--danger);
+    background: var(--danger-bg);
 }
 
 /* ========================================

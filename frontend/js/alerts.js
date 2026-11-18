@@ -7,7 +7,7 @@
 // device. The text is fixed and says nothing (never a sender, a room, a count or any content):
 // whoever sees the screen learns only that elyrn. got a message.
 //
-// Off by default; the control in the account header turns it on (asking the browser's
+// Off by default; the bell in the account header turns it on (asking the browser's
 // permission inside that click) and the choice is kept on this device with the identity
 // (Keystore.loadAlerts / saveAlerts; every wipe of the identity forgets it). One notification at
 // a time under a fixed tag, and none again until the page was visible; clicking it focuses the
@@ -23,10 +23,9 @@ const Alerts = (() => {
     // Replaced, never stacked: every tab and every raise share it
     const TAG = 'elyrn-new-message';
     const CONTROL_ID = 'alertsBtn';
-    const CONTROL_DISPLAY = 'inline-block';
-    const LABEL_ON = 'alerts on';
-    const LABEL_OFF = 'alerts off';
-    const HINT = 'a notification without any content when a message arrives while this tab is hidden — nothing leaves this device';
+    // The control is a pixel bell (index.html): its two shapes follow aria-pressed in styles.css,
+    // its words (name and title) are UI_TEXT's
+    const CONTROL_DISPLAY = 'inline-flex';
     // Notification.permission's answers
     const GRANTED = 'granted';
     const DENIED = 'denied';
@@ -45,12 +44,26 @@ const Alerts = (() => {
         return document.getElementById(CONTROL_ID);
     }
 
+    // What the control shows for a state (the pure part of render, tested on its own): hidden
+    // outside a session or without the API; pressed, named and titled by whether alerts are on
+    function controlState({ session, supported, on }) {
+        const pressed = on === true;
+        const name = pressed ? UI_TEXT.ALERTS_ON : UI_TEXT.ALERTS_OFF;
+        return Object.freeze({
+            shown: session === true && supported === true,
+            pressed: pressed ? 'true' : 'false',
+            name,
+            title: UI_TEXT.ALERTS_TITLE(name)
+        });
+    }
+
     function render() {
         const button = control();
-        button.style.display = session && supported() ? CONTROL_DISPLAY : 'none';
-        button.textContent = on ? LABEL_ON : LABEL_OFF;
-        button.setAttribute('aria-pressed', on ? 'true' : 'false');
-        button.title = HINT;
+        const state = controlState({ session, supported: supported(), on });
+        button.style.display = state.shown ? CONTROL_DISPLAY : 'none';
+        button.setAttribute('aria-pressed', state.pressed);
+        button.setAttribute('aria-label', state.name);
+        button.title = state.title;
     }
 
     // Whether a raise now shows a notification (the pure part of raise, tested on its own)
@@ -175,5 +188,5 @@ const Alerts = (() => {
         close();
     }
 
-    return Object.freeze({ TITLE, BODY, TAG, start, stop, toggle, raise, onVisible, due });
+    return Object.freeze({ TITLE, BODY, TAG, start, stop, toggle, raise, onVisible, due, controlState });
 })();

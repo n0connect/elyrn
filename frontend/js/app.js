@@ -210,13 +210,37 @@ function setupRegisterListeners() {
     document.getElementById('continueBtn').addEventListener('click', continueWithAccountNumber);
 }
 
-// App header: logging out and deleting the identity
+const IDENTITY_PANEL = 'identityPanel';
+const IDENTITY_BADGE = 'meBadge';
+
+function isChatShown() {
+    return document.getElementById('chatView').style.display !== 'none';
+}
+
+// The identity badge opens the identity panel on the home view (from a conversation it goes home
+// first, open); a second press closes it
+function toggleIdentityPanel() {
+    if (isChatShown()) {
+        Chat.backToList();
+        showPairPanel(IDENTITY_PANEL);
+        return;
+    }
+    togglePairPanel(IDENTITY_PANEL);
+}
+
+// Escape closes the identity panel and gives focus back to the badge that opened it
+function closeIdentityPanel() {
+    togglePairPanel(null);
+    document.getElementById(IDENTITY_BADGE).focus();
+}
+
+// App header: the identity badge (its panel holds deleting the identity), alerts and logging out
 function setupAccountListeners() {
     document.getElementById('logoutBtn').addEventListener('click', logout);
     document.getElementById('alertsBtn').addEventListener('click', Alerts.toggle);
+    document.getElementById(IDENTITY_BADGE).addEventListener('click', toggleIdentityPanel);
     document.getElementById('deleteIdentityBtn').addEventListener('click', () => {
-        Chat.backToList();
-        togglePairPanel('deletePanel');
+        showPairPanel('deletePanel');
         document.getElementById('deleteAccountInput').focus();
     });
     document.getElementById('closeDeleteBtn').addEventListener('click', () => {
@@ -289,8 +313,8 @@ function setupComposerListeners() {
 
 // Keys and page events that apply whatever is on screen
 function setupGlobalListeners() {
-    // Escape leaves a conversation, the robot side (its doors and the robot entrance), or a
-    // pre-login screen (the same way as its back button)
+    // Escape leaves a conversation, the robot side (its doors and the robot entrance), a
+    // pre-login screen (the same way as its back button), or the identity panel
     document.addEventListener('keydown', function(e) {
         if (e.key !== 'Escape' || e.isComposing) return;
         if (isRobotSide()) {
@@ -299,8 +323,10 @@ function setupGlobalListeners() {
             leaveLogin();
         } else if (isShown('registerContainer')) {
             cancelRegistration();
-        } else if (document.getElementById('chatView').style.display !== 'none') {
+        } else if (isChatShown()) {
             Chat.backToList();
+        } else if (isShown(IDENTITY_PANEL)) {
+            closeIdentityPanel();
         }
     });
 
