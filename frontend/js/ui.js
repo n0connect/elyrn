@@ -43,7 +43,9 @@ const DEFAULT_ROOM_TTL_HOURS = 24;
 const UI_TEXT = Object.freeze({
     // conversation list
     NO_CONVERSATIONS: 'no conversations yet — invite someone you trust, or open a room and share its code',
-    UNREAD_MARK: 'new',
+    // an unread row's dot names itself so (the dot is the only unread cue: never the title)
+    UNREAD: 'unread',
+    BACK_UNREAD: 'back, unread conversations',
     NOTES_MARK: 'request',
     VERIFIED_MARK: '✓',
     VERIFIED_TITLE: 'safety number verified on this device',
@@ -547,8 +549,7 @@ function renderConversationList(items, onOpen, onLeave) {
 
         const marker = document.createElement('span');
         marker.className = 'unread-marker';
-        const mark = item.unread ? UI_TEXT.UNREAD_MARK : (item.room && item.room.notes > 0 ? UI_TEXT.NOTES_MARK : null);
-        if (mark) marker.textContent = mark;
+        if (item.room && item.room.notes > 0) marker.textContent = UI_TEXT.NOTES_MARK;
         else Pixels.setIcons(marker, OPEN_ICON);
 
         row.appendChild(createGlyph(item.aura.grid));
@@ -561,6 +562,7 @@ function renderConversationList(items, onOpen, onLeave) {
             verified.textContent = UI_TEXT.VERIFIED_MARK;
             row.appendChild(verified);
         }
+        if (item.unread) row.appendChild(unreadDot());
         row.appendChild(marker);
         row.addEventListener('click', () => onOpen(item.id));
         row.addEventListener('keydown', (e) => {
@@ -568,6 +570,30 @@ function renderConversationList(items, onOpen, onLeave) {
         });
         list.appendChild(row);
     });
+}
+
+// The back tile says when another conversation is unread: the same dot on its corner, and its name
+function setBackUnread(unread) {
+    const back = document.getElementById('backToListBtn');
+    const dot = back.querySelector('.' + UNREAD_DOT_CLASS);
+    if (unread && !dot) back.appendChild(unreadDot(true));
+    if (!unread && dot) dot.remove();
+    back.setAttribute('aria-label', unread ? UI_TEXT.BACK_UNREAD : UI_TEXT.BACK);
+}
+
+// An unread row's dot: a solid square left of the chevron, information (no frame), named unread
+// (inside a control the control's own name says it: the dot is then hidden from assistive tech)
+const UNREAD_DOT_CLASS = 'unread-dot';
+function unreadDot(inControl = false) {
+    const dot = document.createElement('span');
+    dot.className = UNREAD_DOT_CLASS;
+    if (inControl) {
+        dot.setAttribute('aria-hidden', 'true');
+    } else {
+        dot.setAttribute('role', 'img');
+        dot.setAttribute('aria-label', UI_TEXT.UNREAD);
+    }
+    return dot;
 }
 
 // A room that failed verification: named from its id, marked, never opened. Its one action

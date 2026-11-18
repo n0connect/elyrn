@@ -1317,11 +1317,26 @@ header {
     font-weight: bold;
 }
 
-.conversation-item.unread .unread-marker {
+/* An unread row: one solid square, two aura pixels (four icon pixels) on a side, just left of the
+   chevron, vertically centred; information, so no frame; black on the row's hover too */
+.unread-dot {
+    flex: 0 0 auto;
+    width: calc(var(--icon-px) * 4);
+    height: calc(var(--icon-px) * 4);
+    margin-left: auto;
     background: var(--fg);
-    color: var(--bg);
-    padding: 0 6px;
-    letter-spacing: 1px;
+}
+
+.unread-dot + .unread-marker {
+    margin-left: 0;
+}
+
+/* The back tile while another conversation is unread: the same square on its top right corner */
+.icon-btn > .unread-dot {
+    position: absolute;
+    top: calc(var(--icon-px) * -2);
+    right: calc(var(--icon-px) * -2);
+    margin: 0;
 }
 
 /* ========================================

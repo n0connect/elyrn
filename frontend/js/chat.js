@@ -19,8 +19,6 @@ const Chat = (() => {
     // How far the server lets a new room's expiry stray from its own clock (backend chat
     // expirySkew): a device clock further off than this explains a refused room
     const SERVER_CLOCK_SKEW_MS = 10 * 60 * SECOND_MS;
-    // The page title, prefixed by the unread count when there is one
-    const APP_TITLE = 'elyrn.';
 
     let me = null;                    // { privateKey, publicKey, roomsRoot, aura, ttlDays, limits }
     const conversations = new Map();  // id -> conversation state
@@ -96,15 +94,6 @@ const Chat = (() => {
         return conv.key;
     }
 
-    // The open conversation counts too while the page is hidden: what arrived then is not read
-    function updateTitle() {
-        let unread = 0;
-        conversations.forEach(conv => {
-            if ((conv.id !== activeId || !isPageVisible()) && conv.lastSeq > conv.readSeq) unread++;
-        });
-        document.title = unread > 0 ? `(${unread}) ${APP_TITLE}` : APP_TITLE;
-    }
-
     // The server keeps no cross-conversation recency, so ordering is decided here:
     // unread first, then activity seen during this session, then newest conversation
     function renderList() {
@@ -119,7 +108,7 @@ const Chat = (() => {
         });
         items.sort((a, b) => (b.unread - a.unread) || (rank(a.id) - rank(b.id)));
         renderConversationList(items, open, leaveUnverified);
-        updateTitle();
+        setBackUnread(items.some(item => item.unread && item.id !== activeId));
     }
 
     // A message newer than any known in conv was found (a poll, or a sync): on a hidden page that
@@ -193,7 +182,6 @@ const Chat = (() => {
         document.getElementById('inviteInput').value = '';
         document.getElementById('deleteAccountInput').value = '';
         setComposer('');
-        document.title = APP_TITLE;
     }
 
     // ---------- conversations ----------
@@ -719,8 +707,8 @@ const Chat = (() => {
         if (isPageVisible() && conv.maxSeq > conv.readSeq) {
             conv.readSeq = conv.maxSeq;
             await api('POST', `/conversations/${conv.id}/read`, { seq: conv.maxSeq });
+            renderList();
         }
-        updateTitle();
     }
 
     // Enter held down or a double click sends once
