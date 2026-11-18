@@ -182,6 +182,68 @@ Decided exception (Q-01): `Errors.format()` in `frontend/js/errors.js` throws tw
 texts for the module's own misuse (unknown code, missing parameter); the user-facing path `message()`
 maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 
+### Found 17 and 18 Nov
+
+Everything below is in the tree of the full verification at `ce2c588` (State). "Audit" rows are the
+22 records of the security audit of 18 Nov (`needs_validation` there: no target code was executed);
+each fix came with a test that fails without it, and those tests ran in that verification.
+
+| Id | Finding | Fix | State |
+|---|---|---|---|
+| C-23 | [high] In Safari (WebKit) a reload opened the main menu: the engine cannot read an X25519 `CryptoKey` back from IndexedDB, so `Keystore.load()` found no identity. The 14 Nov fix (C-22) had been tried in Chromium only | `Keystore.keepsKeys()` probes the engine; only where the key does not survive, the identity is kept as PKCS#8 wrapped under a non-extractable AES-GCM device key (AAD `"NAID"`, version, public key); `W_IDENTITY_NOT_KEPT`, `W_IDENTITY_UNREADABLE` | verified 18 Nov; reproduced and fixed in the real WKWebView engine, 0.15 s to the app after a reload |
+| C-24 | [high] New messages did not appear without a tab switch: `onMessageEvent` dropped events while the page was hidden, and a proxy holding the stream delayed the rest | a hidden page syncs but marks read only when visible; heartbeat 10 s, silence limit 25 s, hidden polling 30 s with back-off on 5xx; nginx passes `X-Accel-Buffering` (`live-updates.js`) | verified 18 Nov; hidden page 0.27 s, behind a holding proxy first message within 27 s, then 5 s, both engines |
+| F-02 | [feature] Member roles (`#tag`), set by the room owner for anyone or by a member for itself | sealed 93-byte blob under a key derived from the room secret, bound to room and card; the server stores it unread; owner-or-self, `E_ROLE_NOT_ALLOWED`; reserved words compared after NFKC and case fold ([rooms](../architecture/rooms.md)) | verified 18 Nov |
+| F-03 | [feature] Files in a conversation | delivery only (D-2026-11-17-f): 256 KiB sealed parts, one key per part, the server relays bytes; no cleaning, no viewing; the name sent is `file-<8 hex>[.ext]`; a standing notice says a file can fingerprint its sender; limits 10 MiB a file, 100 MiB a conversation, a share per member, 100 MiB an account a day (memory only), 2 GiB a store ([files](../architecture/files.md)) | verified 18 Nov |
+| F-04 | [feature] Alerts without content | Notification API only, title `elyrn.`, body `new message`, one tag, off by default; no Web Push, no service worker (`alerts.js`) | verified 18 Nov |
+| D-25 | [medium] HSTS never reached a browser and had two homes; API answers carried two copies of some security headers; logout left site data to the browser | HSTS from nginx alone (`nginx-hsts.sh`, one year by default in production); one copy of each header on API answers; `Clear-Site-Data: "cookies", "storage"` on logout and account deletion | verified 18 Nov (`check-hardening`); the live instance's settings are the owner's to confirm (State) |
+| S-11 | [audit] A room message's header card was not bound to the sending member | the header card must be the sender's stored card (`400 Sender card mismatch`) | verified 18 Nov |
+| S-12 | [audit] A member could register a second card under another member's key and shadow it | a key under more than one card is a disputed seat: no role, no friend request, shown as disputed; the safety number counts seats when they differ from keys | verified 18 Nov |
+| S-13 | [audit] A burned room could be created again by anyone holding its code | `burned_rooms` keeps the id until the room's original expiry. Limit: after that expiry the id is free again, as for any expired room | verified 18 Nov |
+| S-14 | [audit] A friend request (an invite in a room note) was not bound to the member who sent the note | a binder derived from the requester's account key and the room keys; a relayed request is refused (`E_FRIEND_REQUEST_RELAYED`). Limit: a build before binders drops such a note unread | verified 18 Nov |
+| S-15 | [audit] A refused clipboard clear was silent | the clear is bounded and a failure is said (`W_CLIPBOARD_NOT_CLEARED`) | verified 18 Nov |
+| S-16 | [audit] The login mask branch could show the real account number | login never shows the number | verified 18 Nov |
+| S-17 | [audit] A login left midway kept running | the run is taken before the first wait and every wait is followed by the leave check | verified 18 Nov |
+| S-18 | [audit] A rate-limited or failed `/me` wiped the stored identity | only a `401` or another public key ends the stored session | verified 18 Nov |
+| S-19 | [audit] The per-sender counter record had no bound a member could not abuse | at most 4,096 senders (agent 256); a full record refuses new off-roster senders and always records roster members (see A-12 to A-15, C-25) | verified 18 Nov |
+| S-20 | [audit] An event stream outlived the revocation of its session | a revocation generation ends streams at once; each heartbeat checks the session again (one indexed lookup per stream per 10 s) | verified 18 Nov |
+| S-21 | [audit] Deleting an account or burning a conversation deleted every row in one statement, which other members could make exceed the request budget | access ends at once; rows are purged in batches by the retention job (`orphaned_conversations`) | verified 18 Nov |
+| S-22 | [audit] Retention deleted in one statement and rolled back whole on a timeout | batches | verified 18 Nov |
+| S-23 | [audit] One member could use up a room's file quota | a share per member (`507 File share reached`) | verified 18 Nov |
+| S-24 | [audit] The proof-of-work issuer refused everyone once its tracked-client table was full | an overflow bucket shared by untracked clients | verified 18 Nov |
+| S-25 | [audit] nginx had no share of connections per client: slow bodies and streams could hold the pool | per-client and whole-pool shares for the API, the event stream, pages and files; `worker_connections` sized from them (`check-hardening` proves the sum) | verified 18 Nov |
+| S-26 | [audit] The file pool had no per-client share | `files_per_client`; a file slot is taken only after authentication | verified 18 Nov |
+| S-27 | [audit] Proxied bodies were spooled to a tmpfs | no spooling on the API locations | verified 18 Nov |
+| S-28 | [audit] The agent reached an onion origin through any proxy the environment named | an onion origin is used only through a `socks5h` `ALL_PROXY` | verified 18 Nov |
+| S-29 | [audit] The agent named a sender by its 12-bit name alone | name and code, `left` when the key is off the roster, `same_name` when another key shows the name | verified 18 Nov |
+| S-30 | [audit] Go's JSON reader took keys in any case and repaired invalid UTF-8 where the browser refused | exact keys and strict UTF-8 for every sealed payload (`e2e/strictjson.go`) and for the agent's state file | verified 18 Nov |
+| S-31 | [audit] A public instance could run in development mode | startup refuses development mode with an `https` or `.onion` origin | verified 18 Nov |
+| S-32 | [audit] The release workflow signed the frontend of any pushed tag | only a commit on `main`. Limit: who may push a tag is the hosting service's rule | verified 18 Nov |
+| D-26 | [low, audit hardening notes] `SendNote` 500 on a vanished conversation; `MarkRead` on an expired room; no rate bucket on conversation delete; `TRUSTED_PROXIES` took `/0`; received file names took invisible format characters; the restore runbook did not say to replace `JWT_SECRET`; `.gitignore` gaps; logout reported success after a partial revocation; seconds settings became durations unchecked; a key byte was logged | each fixed in its own commit | verified 18 Nov |
+| A-12 | [medium, commit review] In the agent a flood of made-up senders in one loaded sequence stopped a roster member from being tracked | a kept sender (own key, roster) is always tracked; an untracked sender is reported and its messages say `unrecorded` | verified 18 Nov |
+| A-13, C-25 | [medium, commit review] A roster member arriving at a full record displaced the oldest off-roster entry silently | it displaces the off-roster entry recorded most recently (a long-held entry is a real former member; a flood is recorded later), and the displaced sender is marked unrecorded; agent and browser alike | verified 18 Nov |
+| A-14, C-26 | [medium, commit review] The bounded set of unrecorded senders failed open when full | once a key does not fit, a flag that never clears marks every sender that is neither kept nor in the record | verified 18 Nov |
+| A-15 | [medium] An earlier page in the agent did not report the senders its ledger left untracked | every ledger reports them | verified 18 Nov |
+| A-16 | [medium, found by the first full run] The MCP `join` tool checked a room code's prefix only; the agent parsed it. A refused call could reach the agent | one rule, `agent.ValidateRoomCode`, used by the tool and the agent | verified 18 Nov (`FuzzToolArguments`) |
+| A-17 | [low, found by fuzz] The agent's state file did not load identically after a save (an empty `order`) | one load rule; keys matched byte for byte | verified 18 Nov (`FuzzDecodeCounterRooms`, seed kept) |
+| C-27 | [low] Sealing a room message with an invalid file description threw before returning its promise | it rejects | verified 18 Nov |
+| C-28 | [low] After a friend request was accepted the notes panel kept showing it | accept and every refusal redraw through `refreshRoomPanels` | verified 18 Nov |
+| Q-05 | [tests, found by the first full run] A test helper that called itself (`holdHub`) took the integration package down; seven browser tests were wrong in themselves (two files built from the same bytes compared as different, order pins that read comments, a limit the server accepts listed as refused); a roles test looked a rejoined member up under its earlier card; `check-hardening` held an older rule for `pages_all` | each fixed at its cause; no assertion was loosened | verified 18 Nov |
+| D-27 | [decided] The Argon2id hash of the auth key (S-07) | removed with its column (D-2026-11-18-a); schema version 2: a binary of version 1 refuses the migrated database (`E_SCHEMA_NEWER`), so going back means restoring the backup taken before the update | verified 18 Nov |
+
+Known limits recorded in this round (none is a regression):
+
+- **Open, S-33 (audit, deferred unit):** stored message volume has no bound per conversation or per
+  instance beyond retention and the request limits; a member can grow the database until the
+  retention period ends. Not hunted to the end in the audit; no fix yet.
+- `RedeemInvite` maps a retired conversation id to `409` like `CreateRoom`; no test, because the id
+  is drawn at random and forcing a collision would need a stand-in, which the tests do not use.
+- The per-account daily file allowance is held in memory and is per account: many accounts and
+  many addresses can still fill the store up to `FILE_STORE_MAX_BYTES`.
+- Unrecorded senders are remembered per process (agent) and per tab (browser), not across restarts;
+  a refused sender is refused and marked again on its next message.
+- The audit run is closed as incomplete (60 agent invocations, 33 units, 22 records, five checked
+  twice); its report is kept outside the repository.
+
 ## Order of work (the snowball)
 
 1. Stage 1 (Q-01..Q-04, S-01..S-05, S-09, F-01), the negative-use suites and the fuzz campaign
