@@ -149,16 +149,21 @@ const Keystore = (() => {
     async function run(storeNames, mode, action) {
         const db = await open();
         try {
-            return await new Promise((resolve, reject) => {
-                const tx = db.transaction(storeNames, mode);
-                const request = action(tx);
-                tx.oncomplete = () => resolve(request ? request.result : undefined);
-                tx.onerror = () => reject(tx.error);
-                tx.onabort = () => reject(tx.error);
-            });
+            return await inTransaction(db, storeNames, mode, action);
         } finally {
             db.close();
         }
+    }
+
+    // The same, on a connection the caller opened and closes
+    function inTransaction(db, storeNames, mode, action) {
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(storeNames, mode);
+            const request = action(tx);
+            tx.oncomplete = () => resolve(request ? request.result : undefined);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error);
+        });
     }
 
     function transact(mode, action, storeName = STORE) {
@@ -239,21 +244,47 @@ const Keystore = (() => {
         };
     }
 
-    // { present, identity }: whether a record is stored, and the identity it gives, or null. The
-    // record is counted in a transaction of its own: a get this engine fails on (a key the
-    // released build stored, read back in WebKit) aborts only its own transaction, so the record
-    // still counts as present instead of the whole store as unavailable.
+    // { present, identity }: whether a record is stored, and the identity it gives, or null.
+    // Throws when the store does not answer (it does not open, the count fails, another tab
+    // retired it meanwhile): that is "unavailable", never "unreadable". The record is counted in
+    // a transaction of its own on one connection: a get this engine fails on (a key the released
+    // build stored, read back in WebKit) aborts only its own transaction, so the record still
+    // counts as present.
     async function readIdentity() {
-        const present = (await run(STORE, 'readonly', tx => tx.objectStore(STORE).count(RECORD))) > 0;
-        if (!present) return { present: false, identity: null };
-        let record = null;
+        const db = await open();
         try {
-            record = await run(STORE, 'readonly', tx => tx.objectStore(STORE).get(RECORD));
-        } catch (e) {
-            // The cause is kept in the log; the page says W_IDENTITY_UNREADABLE (app.js)
-            Log.warn(Errors.CODES.W_IDENTITY_UNREADABLE, e);
+            const count = await inTransaction(db, STORE, 'readonly', tx => tx.objectStore(STORE).count(RECORD));
+            if (count === 0) return { present: false, identity: null };
+            let record = null;
+            try {
+                record = await inTransaction(db, STORE, 'readonly', tx => tx.objectStore(STORE).get(RECORD));
+            } catch (e) {
+                if (retired) throw e;
+                // The cause is kept in the log; the page says W_IDENTITY_UNREADABLE (app.js)
+                Log.warn(Errors.CODES.W_IDENTITY_UNREADABLE, e);
+            }
+            return { present: true, identity: await identityFrom(record) };
+        } finally {
+            db.close();
         }
-        return { present: true, identity: await identityFrom(record) };
+    }
+
+    // What a start does with what it read: { identity, unreadable }. unreadable (a record is
+    // stored and gives no identity) means the record is removed (load). Pure, so the rule is one
+    // line: a readable identity is never unreadable, and nothing stored is never unreadable.
+    function startVerdict(read) {
+        return { identity: read.identity || null, unreadable: read.present === true && !read.identity };
+    }
+
+    // Removes the identity record only: the counter records, the verified marks, the owner, the
+    // device key, the alerts setting and every other store stay, and no server call is made
+    async function forgetUnreadableIdentity() {
+        try {
+            await transact('readwrite', store => store.delete(RECORD));
+        } catch (e) {
+            // The record stays, so the next load finds it and warns again
+            Log.warn(Errors.INTERNAL.W_IDENTITY_NOT_FORGOTTEN, e);
+        }
     }
 
     // The identity a stored record gives, or null. A record from before rooms has no rooms root:
@@ -275,18 +306,29 @@ const Keystore = (() => {
         return { privateKey: privateKey, publicKey: record.publicKey, roomsRoot: record.roomsRoot };
     }
 
-    // { identity, unreadable }: the stored identity, or null; unreadable when a record is stored
-    // but gives no identity (an engine that cannot read its key back, a damaged record, one the
-    // released build wrote in a form WebKit cannot read). The main menu says so once
-    // (app.js, W_IDENTITY_UNREADABLE); the next login replaces the record.
+    // { identity, unreadable }: the stored identity, or null. Where the decision lives:
+    //   - unreadable: the store answers, a record is counted, and reading it fails or gives no
+    //     identity (an engine that cannot read its key back, a record the released build wrote
+    //     in a form WebKit cannot read, a damaged record). This engine can never read it, so it
+    //     is useless key material at rest: the identity record alone is removed
+    //     (forgetUnreadableIdentity), and the main menu says so once (app.js,
+    //     W_IDENTITY_UNREADABLE). The next load finds no record and says nothing.
+    //   - a store that does not answer at all (a private window, blocked storage, a failed open)
+    //     removes nothing and keeps its own message (W_STORAGE_UNAVAILABLE).
+    //   - a readable identity is never removed here. Only a 401 or another public key ends a
+    //     stored session (audit rule C1, auth.js meVerdict): that rule is about server answers
+    //     and this path does not touch it.
     async function load() {
+        let read;
         try {
-            const read = await readIdentity();
-            return { identity: read.identity, unreadable: read.present && !read.identity };
+            read = await readIdentity();
         } catch (e) {
             unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
             return { identity: null, unreadable: false };
         }
+        const verdict = startVerdict(read);
+        if (verdict.unreadable) await forgetUnreadableIdentity();
+        return verdict;
     }
 
     // Whether alerts were turned on on this device for the identity kept here
@@ -447,7 +489,7 @@ const Keystore = (() => {
     }
 
     return Object.freeze({
-        keepsKeys, save, load, wipeIdentity, wipeAll, setVerified, isVerified, loadAlerts, saveAlerts,
+        keepsKeys, save, load, startVerdict, wipeIdentity, wipeAll, setVerified, isVerified, loadAlerts, saveAlerts,
         loadCounters, saveCounters, forgetCounters, pruneCounters, withCounterLock
     });
 })();

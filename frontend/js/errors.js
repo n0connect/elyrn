@@ -127,8 +127,8 @@ const Errors = (() => {
         // Storage works, but neither form of the identity read back (keystore.js save)
         W_IDENTITY_NOT_KEPT: w('this browser cannot keep your identity — you will need your account number after a reload'),
         // A stored identity record gave no identity at load (an engine that cannot read its key
-        // back, a record an older build stored, a damaged record): the main menu says so once,
-        // and the next login replaces the record (keystore.js load, app.js)
+        // back, a record an older build stored, a damaged record): the record alone is removed
+        // and the main menu says so once (keystore.js load, app.js)
         W_IDENTITY_UNREADABLE: w('your key could not be read back in this browser — log in once with your account number; nothing is lost'),
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_COPY_MANUALLY: w('copy it manually'),
@@ -264,6 +264,9 @@ const Errors = (() => {
         // Storing, reading back or deleting the throwaway key of Keystore.keepsKeys failed: the
         // engine counts as one that cannot keep keys, and the sealed form is made
         W_KEY_PROBE_FAILED: 'W_KEY_PROBE_FAILED',
+        // An unreadable identity record (W_IDENTITY_UNREADABLE) could not be removed: it stays,
+        // and the next load warns again (keystore.js forgetUnreadableIdentity)
+        W_IDENTITY_NOT_FORGOTTEN: 'W_IDENTITY_NOT_FORGOTTEN',
         W_COUNTERS_UNAVAILABLE: 'W_COUNTERS_UNAVAILABLE',
         E_SYNC_FAILED: 'E_SYNC_FAILED',
         W_REQUEST_TIMED_OUT: 'W_REQUEST_TIMED_OUT',

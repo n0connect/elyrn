@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { load } from './fuzz-helpers.mjs';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const html = read('../index.html');
@@ -47,18 +48,56 @@ test('start view: without scripting the stylesheet hides it and shows the main m
     assert.match(block, /#mainMenu \{\s*display: block;\s*\}/);
 });
 
-// Reading IndexedDB needs a browser (the drill); what decides the path is pinned from the sources
-test('a stored identity that cannot be read back opens the main menu with W_IDENTITY_UNREADABLE, never silently', () => {
-    const app = read('../js/app.js');
-    const keystore = read('../js/keystore.js');
+// ---------- a stored identity this browser cannot read back (keystore.js load, app.js) ----------
+// IndexedDB itself needs a browser (the drill): the decision is the real Keystore.startVerdict,
+// loaded as the browser loads it, and what load does with it is pinned from the source.
+
+const keystore = read('../js/keystore.js');
+const app = read('../js/app.js');
+const Keystore = load({}, ['../js/keystore.js']).get('Keystore');
+const READABLE = Object.freeze({ publicKey: 'A'.repeat(43) });
+const body = (source, head) => {
+    const start = source.indexOf(head);
+    return source.slice(start, source.indexOf('\n    }\n', start));
+};
+const loadBody = body(keystore, '    async function load()');
+const forgetBody = body(keystore, '    async function forgetUnreadableIdentity()');
+
+test('identity present but unreadable: warned once, only the identity record removed, the next start silent', () => {
+    // First start: a record is counted and gives no identity
+    const first = Keystore.startVerdict({ present: true, identity: null });
+    assert.deepEqual({ ...first }, { identity: null, unreadable: true });
+    // load removes the record exactly then, and app.js says so on the main menu
+    assert.match(loadBody, /const verdict = startVerdict\(read\);\n\s*if \(verdict\.unreadable\) await forgetUnreadableIdentity\(\);\n\s*return verdict;/);
     const resume = app.slice(app.indexOf('async function resumeSession'), app.indexOf('\n}\n', app.indexOf('async function resumeSession')));
     assert.match(resume, /if \(!identity\) \{\n\s*showMainMenu\(\);\n\s*if \(stored\.unreadable\) Errors\.report\(Errors\.CODES\.W_IDENTITY_UNREADABLE\);\n\s*return;/);
-    // The record is counted in a transaction of its own, before and apart from the get, so a get
-    // that fails (a record the released build wrote, in WebKit) still leaves it present
-    const readId = keystore.slice(keystore.indexOf('async function readIdentity'), keystore.indexOf('async function identityFrom'));
-    assert.match(readId, /const present = \(await run\(STORE, 'readonly', tx => tx\.objectStore\(STORE\)\.count\(RECORD\)\)\) > 0;/);
-    assert.match(readId, /try \{\n\s*record = await run\(STORE, 'readonly', tx => tx\.objectStore\(STORE\)\.get\(RECORD\)\);\n\s*\} catch/);
-    assert.match(readId, /return \{ present: true, identity: await identityFrom\(record\) \};/);
-    const load = keystore.slice(keystore.indexOf('    async function load()'));
-    assert.match(load.slice(0, load.indexOf('\n    }\n')), /return \{ identity: read\.identity, unreadable: read\.present && !read\.identity \};/);
+    // The removal deletes the identity record alone: counter records, verified marks, owner,
+    // device key and alerts stay; nothing goes to the server
+    assert.match(forgetBody, /await transact\('readwrite', store => store\.delete\(RECORD\)\);/);
+    assert.doesNotMatch(forgetBody, /ALERTS|OWNER|COUNTERS_STORE|VERIFIED_STORE|clear\(|wipe|apiCall|deleteDatabase/);
+    // A removal that fails is logged under its own code, and nothing else changes
+    assert.match(forgetBody, /catch \(e\) \{\n(?:\s*\/\/[^\n]*\n)*\s*Log\.warn\(Errors\.INTERNAL\.W_IDENTITY_NOT_FORGOTTEN, e\);\n\s*\}/);
+    // Second start: the record is gone, so no warning
+    assert.deepEqual({ ...Keystore.startVerdict({ present: false, identity: null }) }, { identity: null, unreadable: false });
+});
+
+test('a store that does not answer removes nothing and keeps its own message', () => {
+    // The store's own failures (open, count, a tab that retired it) throw out of readIdentity,
+    // and load answers them before any verdict: unavailable, never unreadable
+    assert.match(loadBody, /try \{\n\s*read = await readIdentity\(\);\n\s*\} catch \(e\) \{\n\s*unavailable\(Errors\.INTERNAL\.W_KEYSTORE_UNAVAILABLE, e\);\n\s*return \{ identity: null, unreadable: false \};\n\s*\}/);
+    const readBody = body(keystore, '    async function readIdentity()');
+    assert.match(readBody, /const db = await open\(\);/);
+    assert.match(readBody, /const count = await inTransaction\(db, STORE, 'readonly', tx => tx\.objectStore\(STORE\)\.count\(RECORD\)\);/);
+    assert.match(readBody, /\} catch \(e\) \{\n\s*if \(retired\) throw e;/);
+    assert.ok(loadBody.indexOf('unavailable(') < loadBody.indexOf('forgetUnreadableIdentity'));
+    // Nothing stored is never unreadable
+    assert.equal(Keystore.startVerdict({ present: false, identity: null }).unreadable, false);
+});
+
+test('a readable identity is never removed and never warned about', () => {
+    const verdict = Keystore.startVerdict({ present: true, identity: READABLE });
+    assert.equal(verdict.identity, READABLE);
+    assert.equal(verdict.unreadable, false);
+    // A present flag that is not exactly true counts as nothing stored, never as unreadable
+    assert.equal(Keystore.startVerdict({ present: 1, identity: null }).unreadable, false);
 });
