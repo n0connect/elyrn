@@ -533,7 +533,7 @@ Delivers a sealed note (a friend request carrying an invite) to the one member w
   "blob": "NADN note: exactly one wrap, roster digest over the addressee's card"
 }
 ```
-- **Errors:** `400` malformed, sealed for someone else, or addressed to the caller; `404` no member has that card; `400` `{"success":false,"message":"Sender card mismatch"}` (`E_SENDER_CARD_MISMATCH`, judged after the addressee) the note's header card is not the caller's stored card; `409 Conflict` a note from the caller already waits for them (or this very note, same `id` and `blob`, is the one waiting); `409` `{"success":false,"message":"Id taken"}` the `id` is held by another note (another room, sender, addressee or `blob`): nothing stored, seal again under a fresh `id`.
+- **Errors:** `400` malformed, sealed for someone else, or addressed to the caller; `404` no member has that card, or the room is gone (burned or expired, also when that happens while the note is being sent) or the caller is not in it; `400` `{"success":false,"message":"Sender card mismatch"}` (`E_SENDER_CARD_MISMATCH`, judged after the addressee) the note's header card is not the caller's stored card; `409 Conflict` a note from the caller already waits for them (or this very note, same `id` and `blob`, is the one waiting); `409` `{"success":false,"message":"Id taken"}` the `id` is held by another note (another room, sender, addressee or `blob`): nothing stored, seal again under a fresh `id`.
 - **Response:** `201 Created`. The addressee gets a `conv` event.
 
 ### `GET /api/v2/conversations/{id}/notes`

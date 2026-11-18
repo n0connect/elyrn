@@ -128,6 +128,19 @@ func lockSelf(tx store.ChatRepository, me *Member) (*Member, *models.User, error
 	return self, row, nil
 }
 
+// lockConversation row-locks an existing conversation for a member's write. A conversation that
+// went (burned, purged) after the caller's earlier read answers ErrNotFound, as every route
+// answers for a conversation that is gone, never a server fault.
+func lockConversation(tx store.ChatRepository, id uuid.UUID) error {
+	if _, err := tx.LockConversation(id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 func roomMembership(owner *Member, in *RoomInput, joinedSeq int64) (models.ConversationMember, error) {
 	tag, err := owner.tag(in.ID)
 	if err != nil {
@@ -397,10 +410,7 @@ func (s *Service) SetRole(me *Member, id uuid.UUID, card, role string) ([]string
 	}
 	var streams []string
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
-		if _, err := tx.LockConversation(id); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrNotFound
-			}
+		if err := lockConversation(tx, id); err != nil {
 			return err
 		}
 		caller, err := s.requireMembership(tx, me, id)
@@ -450,10 +460,7 @@ func (s *Service) leaveRoom(me *Member, id uuid.UUID) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.LockConversation(id); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrNotFound
-			}
+		if err := lockConversation(tx, id); err != nil {
 			return err
 		}
 		member, err := s.requireMembership(tx, self, id)

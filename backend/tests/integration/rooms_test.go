@@ -838,6 +838,77 @@ func TestRoomNotes_AreAddressedStrictly(t *testing.T) {
 	}
 }
 
+// lockWaitDeadline bounds how long a test waits for a request to queue behind a row lock it holds
+const lockWaitDeadline = 5 * time.Second
+
+// waitForLockWaiter returns once another session of this database waits for a lock: the request
+// the test started has passed its checks outside the transaction and queues behind the row lock
+// the test holds.
+func waitForLockWaiter(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(lockWaitDeadline)
+	for time.Now().Before(deadline) {
+		var waiting int64
+		if err := database.DB.Raw("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() " +
+			"AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()").Scan(&waiting).Error; err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the request never queued behind the held conversation lock")
+}
+
+// A room burned after SendNote found it live but before the note's transaction took the
+// conversation lock answers 404, as every route answers for a gone conversation; before the fix
+// the lock's "no such row" passed through as a 500. The burn is made deterministic: the test holds
+// the conversation row lock, lets the note queue behind it, removes the room's rows as a burn
+// does (room, members, conversation) and only then lets go.
+func TestRoomNotes_ARoomBurnedBeforeTheLockAnswersNotFound(t *testing.T) {
+	mux := setup(t)
+	a, b := roomOfTwo(t, mux)
+	noteID, note := a.note(t, b, "noaddx:x")
+
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		t.Fatalf("begin: %v", tx.Error)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+	if err := tx.Exec("SELECT id FROM conversations WHERE id = ? FOR UPDATE", a.room.ID).Error; err != nil {
+		t.Fatalf("hold the conversation lock: %v", err)
+	}
+	answer := make(chan *httptest.ResponseRecorder, 1)
+	go func() { answer <- a.postNote(noteID, b.member.Card, note) }()
+	waitForLockWaiter(t)
+	if err := tx.Where("id = ?", a.room.ID).Delete(&models.Room{}).Error; err != nil {
+		t.Fatalf("burn the room: %v", err)
+	}
+	if err := tx.Where("conversation_id = ?", a.room.ID).Delete(&models.ConversationMember{}).Error; err != nil {
+		t.Fatalf("burn the members: %v", err)
+	}
+	if err := tx.Where("id = ?", a.room.ID).Delete(&models.Conversation{}).Error; err != nil {
+		t.Fatalf("burn the conversation: %v", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatalf("commit the burn: %v", err)
+	}
+	committed = true
+	select {
+	case rr := <-answer:
+		expectAnswer(t, rr, apperr.NotFound, "a note to a room burned before its lock")
+	case <-time.After(lockWaitDeadline):
+		t.Fatal("the note never answered after the burn")
+	}
+	expectRows(t, &models.RoomNote{}, 0, "a note for a burned room")
+}
+
 // A member's room message and note carry, in their header, the card the server stored when it
 // joined, byte for byte: a card sealed afresh for its own key (as a client deriving its card per
 // session does) or one sealed for a key it made up is refused with 400 "Sender card mismatch"

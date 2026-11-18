@@ -41,7 +41,8 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 	var stream string
 	var refused *models.RoomNote
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
-		if _, err := tx.LockConversation(id); err != nil {
+		// A room burned between requireRoom and the lock answers 404 (lockConversation)
+		if err := lockConversation(tx, id); err != nil {
 			return err
 		}
 		sender, err := s.requireMembership(tx, me, id)
