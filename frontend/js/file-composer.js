@@ -18,11 +18,6 @@
 const FileComposer = (() => {
     'use strict';
 
-    const PREPARING = 'preparing';
-    const UPLOADING = 'uploading';
-    const REMOVE_LABEL = '×';
-    const REMOVE_TITLE = 'remove the file';
-
     let maxBytes = 0;                    // this server's file_max_bytes; 0 outside a session
     let activeConversation = () => null; // chat.js: the open conversation's id
     // The chosen file: { convId, bytes, name, size, ready, upload: { file, next, done } | null }
@@ -145,7 +140,7 @@ const FileComposer = (() => {
         try {
             const outcome = await FileTransfer.upload({
                 api, conversationId: conv.id, file: state.file, bytes: mine.bytes, from: state.next,
-                onProgress: ({ done, total }) => showStatus(`${UPLOADING} ${done}/${total}`),
+                onProgress: ({ done, total }) => showStatus(UI_TEXT.FILE_PROGRESS(UI_TEXT.FILE_UPLOADING, done, total)),
                 cancelled: () => cancelled() || chosen !== mine
             });
             if (outcome.ok) {
@@ -201,11 +196,11 @@ const FileComposer = (() => {
         el('fileChipNotice').textContent = Errors.NOTICE.FILE_SENT_AS_IS;
         el('fileChipName').textContent = chosen.ready ? chosen.name : '';
         el('fileChipSize').textContent = chosen.ready ? formatFileSize(chosen.size) : '';
-        if (!chosen.ready) showStatus(PREPARING);
+        if (!chosen.ready) showStatus(UI_TEXT.FILE_PREPARING);
         else if (!chosen.uploading) showStatus('');
         const remove = el('fileRemoveBtn');
-        remove.textContent = REMOVE_LABEL;
-        remove.title = REMOVE_TITLE;
+        remove.textContent = UI_TEXT.FILE_REMOVE;
+        remove.title = UI_TEXT.FILE_REMOVE_TITLE;
         el('sendBtn').disabled = !chosen.ready || chosen.uploading;
     }
 

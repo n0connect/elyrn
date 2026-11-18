@@ -32,8 +32,9 @@ const COMPOSER_MAX_HEIGHT_PX = 140;
 const DEFAULT_ROOM_MEMBERS = 8;
 const DEFAULT_ROOM_TTL_HOURS = 24;
 
-// Every word ui.js writes into the page that is no failure or warning (those are errors.js's,
-// by code): control labels, tags, marks, titles, hints and the empty-state sentences.
+// Every word ui.js, file-card.js and file-composer.js write into the page that is no failure or
+// warning (those are errors.js's, by code): control labels, tags, marks, titles, hints, progress
+// and the empty-state sentences.
 // A text with a part filled in is a function of that part.
 const UI_TEXT = Object.freeze({
     // conversation list
@@ -86,6 +87,14 @@ const UI_TEXT = Object.freeze({
     LEFT_WANTS_FRIENDS: 'left · wants to be friends',
     ACCEPT: 'accept',
     IGNORE: 'ignore',
+    // files: the received card (file-card.js) and the chosen file's chip (file-composer.js)
+    FILE_SAVE: 'save',
+    FILE_FETCHING: 'fetching',
+    FILE_PREPARING: 'preparing',
+    FILE_UPLOADING: 'uploading',
+    FILE_PROGRESS: (word, done, total) => `${word} ${done}/${total}`,
+    FILE_REMOVE: '×',
+    FILE_REMOVE_TITLE: 'remove the file',
     // sizes and times
     BYTES: (bytes) => `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`,
     NOW: 'now',
