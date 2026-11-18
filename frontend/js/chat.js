@@ -1414,9 +1414,18 @@ const Chat = (() => {
             if (conv && result.status === HTTP_STATUS.NO_CONTENT) CounterRecords.forgetMark(conv);
             // Nothing typed for a burned conversation is kept
             setComposer('');
-            backToList();
-            showSuccess(leaving ? Errors.NOTICE.ROOM_LEFT : Errors.NOTICE.BURNED);
             scheduleRefresh();
+            const done = () => {
+                backToList();
+                showSuccess(leaving ? Errors.NOTICE.ROOM_LEFT : Errors.NOTICE.BURNED);
+            };
+            // The person who burned sees the fire once the server confirmed it (204), and the
+            // home view under it once the flames cover the window; leaving and a 404 have none
+            if (!leaving && result.status === HTTP_STATUS.NO_CONTENT) {
+                BurnFire.play(done).then(focusHome);
+            } else {
+                done();
+            }
         } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
             Errors.report(leaving ? Errors.CODES.E_ROOM_NOT_LEFT : Errors.CODES.E_CONVERSATION_NOT_BURNED, null, result);
         }

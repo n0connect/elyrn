@@ -185,6 +185,8 @@ A client accepts a message only if every check passes, in this order: the size i
 | Expire | At `expires_at` the room stops answering at once; the retention task deletes the room, its members and notes within five minutes, and its messages and file parts in bounded batches over the next cycles. |
 | Delete account | Rooms the account owns are burned (with their tombstone), rooms it joined are left. |
 
+The person who burns a room or a one-to-one conversation sees a short pixel fire fill the window and burn out onto the home view (`frontend/js/burn-fire.js`; not under reduced motion or on a hidden page, and a key or pointer press ends it). It is decoration only: it starts after the server has confirmed the burn (`204`), never delays or decides the request, and a refused burn shows its message without it.
+
 Lock order (LOCK_HIERARCHY.md): `invites` → `users` → `rooms` → `conversations`. Join, leave and send all take the conversation row lock, so a message is always checked against the roster it is stored under.
 
 ---

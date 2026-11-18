@@ -45,6 +45,14 @@
     /* One red for everything destructive or failed: deep enough to sit with the monochrome UI */
     --danger: #cc0000;
     --danger-bg: #fff5f5;
+    /* The warning yellow (a warning notification's frame) */
+    --warning: #ffc107;
+    /* The burn fire's four steps, coolest to hottest (burn-fire.js reads them): black, the
+       destructive red, the warning yellow, white */
+    --fire-smoke: #000000;
+    --fire-flame: var(--danger);
+    --fire-glow: var(--warning);
+    --fire-core: #ffffff;
     /* The smallest hit area a control gets on a touch-width screen */
     --touch-min: 40px;
     /* Pixel glyphs: the aura's 5x5 and every icon's 10x10 fill this one box, inside a tile of
@@ -1085,7 +1093,7 @@ header {
 
 .notification.warning {
     background: #fff3cd;
-    border-color: #ffc107;
+    border-color: var(--warning);
     color: #856404;
 }
 
@@ -1926,4 +1934,16 @@ body.in-conversation #chatView > .message-list {
     flex: 1 1 0;
     height: auto;
     min-height: var(--list-min-height);
+}
+
+/* The burn fire (burn-fire.js): one canvas over the whole window for the length of the
+   animation, above everything, taking every pointer press so the page under it takes none; its
+   cells are square pixels, never smoothed */
+.burn-fire {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 2000;
+    image-rendering: pixelated;
+    pointer-events: auto;
 }

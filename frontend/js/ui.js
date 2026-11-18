@@ -432,6 +432,12 @@ function showHome() {
     setConversationShown(false);
 }
 
+// Focus on the home view's first control (after the burn fire, which held the page)
+function focusHome() {
+    const first = document.querySelector('#homeView button');
+    if (first) first.focus();
+}
+
 function setConversationShown(shown) {
     document.body.classList.toggle(CONVERSATION_CLASS, shown);
 }
