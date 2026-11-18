@@ -300,9 +300,9 @@ const Errors = (() => {
         // The burn fire could not tell whether reduced motion is asked for: it does not play, and
         // the burn completes as it would without it (burn-fire.js)
         W_FIRE_MOTION_UNKNOWN: 'W_FIRE_MOTION_UNKNOWN',
-        // What the burn does once the fire covers the window threw: the fire still ends, and the
-        // error is logged by its name only (burn-fire.js)
-        E_FIRE_COVER_FAILED: 'E_FIRE_COVER_FAILED',
+        // Drawing the burn fire threw: the fire ends at once and the burn completes as it would
+        // without it; the error is logged by its name only (burn-fire.js)
+        E_FIRE_FAILED: 'E_FIRE_FAILED',
         // No Notification API: the alerts control is not shown (alerts.js)
         W_ALERTS_UNSUPPORTED: 'W_ALERTS_UNSUPPORTED',
         // The browser has the API but refused to show a notification from the page (alerts.js)

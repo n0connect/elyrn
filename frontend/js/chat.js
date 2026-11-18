@@ -1388,6 +1388,12 @@ const Chat = (() => {
         return once('burn', burnNow);
     }
 
+    // Whether a confirmed burn plays the fire: only the person's own burn the server confirmed
+    // (204); leaving and a 404 have none
+    function playsFire(leaving, status) {
+        return !leaving && status === HTTP_STATUS.NO_CONTENT;
+    }
+
     async function burnNow() {
         const id = activeId;
         const conv = conversations.get(id);
@@ -1403,14 +1409,23 @@ const Chat = (() => {
             // Nothing typed for a burned conversation is kept
             setComposer('');
             scheduleRefresh();
+            let navigated = false;
             const done = () => {
+                if (navigated) return;
+                navigated = true;
                 backToList();
                 showSuccess(leaving ? Errors.NOTICE.ROOM_LEFT : Errors.NOTICE.BURNED);
             };
-            // The person who burned sees the fire once the server confirmed it (204), and the
-            // home view under it once the flames cover the window; leaving and a 404 have none
-            if (!leaving && result.status === HTTP_STATUS.NO_CONTENT) {
-                BurnFire.play(done).then(focusHome);
+            // The burned view goes up in flames and the home view is switched in under the full
+            // cover (play's callback); done runs exactly once whichever way the fire ends (its
+            // callback, then the promise settling: the end, a key, the hard stop, an error, even a
+            // throw while starting); without the fire it runs at once
+            if (playsFire(leaving, result.status)) {
+                const finish = () => {
+                    done();
+                    focusHome();
+                };
+                Promise.resolve().then(() => BurnFire.play(done)).then(finish, finish);
             } else {
                 done();
             }
