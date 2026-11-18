@@ -30,8 +30,8 @@ const ElyrnFileCrypto = (() => {
     const SEALED_PART_CHARS = Math.ceil(SEALED_PART_BYTES * 4 / 3);
     const MAX_PARTS = Math.ceil(C.MAX_FILE_BYTES_BOUND / FILE_PART_BYTES);
     const KEY_BYTES = C.KEY_BYTES;
-    const KEY_BITS = KEY_BYTES * 8;
-    const TAG_BITS = C.TAG_BYTES * 8;
+    const KEY_BITS = KEY_BYTES * C.BITS_PER_BYTE;
+    const TAG_BITS = C.TAG_BYTES * C.BITS_PER_BYTE;
     const U32_BYTES = 4;
     const VERSION = 0x01;
     // "noaddx" in these labels is the protocol namespace, not the product name: it never changes.

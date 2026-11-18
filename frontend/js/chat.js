@@ -68,7 +68,7 @@ const Chat = (() => {
 
     function isPublicKey(value) {
         try {
-            ElyrnCrypto.b64urlDecode(value, 32);
+            ElyrnCrypto.b64urlDecode(value, ElyrnCrypto.KEY_BYTES);
             return true;
         } catch (e) {
             return false;
