@@ -41,10 +41,6 @@ const Alerts = (() => {
         return typeof window.Notification === 'function' && typeof window.Notification.requestPermission === 'function';
     }
 
-    function visible() {
-        return document.visibilityState === 'visible';
-    }
-
     function control() {
         return document.getElementById(CONTROL_ID);
     }
@@ -156,7 +152,7 @@ const Alerts = (() => {
             revoked();
             return;
         }
-        if (!due({ session, on, raised, visible: visible(), permission })) return;
+        if (!due({ session, on, raised, visible: isPageVisible(), permission })) return;
         raised = true;
         try {
             const notification = new window.Notification(TITLE, { body: BODY, tag: TAG });
@@ -174,7 +170,7 @@ const Alerts = (() => {
 
     // The page is seen: what the notification said is known now
     function onVisible() {
-        if (!visible()) return;
+        if (!isPageVisible()) return;
         raised = false;
         close();
     }
