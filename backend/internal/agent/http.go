@@ -290,19 +290,35 @@ func (a *Agent) authenticated(ctx context.Context, method, path string, body any
 // with the server's registry.
 const serverIDTaken = "Id taken"
 
+// serverSenderCardMismatch is the message of the server's 400 "Sender card mismatch" (audit A1,
+// in JSON beside the generic 400): the header card of a room message is not the sending member's
+// stored card, so nothing was stored. Repeated here for the same reason as serverIDTaken.
+const serverSenderCardMismatch = "Sender card mismatch"
+
 // failureBody is the one field read from a backend failure answered in JSON.
 type failureBody struct {
 	Message string `json:"message"`
 }
 
-// idTaken reports whether ans is the server's 409 "Id taken", told from the 409 "Conflict" (the
-// earlier attempt is stored, plain text) by its registered message, never shown.
-func idTaken(ans *answer) bool {
-	if ans == nil || ans.status != http.StatusConflict {
+// serverSaid reports whether ans is a failure of status whose registered message is message (read,
+// never shown).
+func serverSaid(ans *answer, status int, message string) bool {
+	if ans == nil || ans.status != status {
 		return false
 	}
 	var body failureBody
-	return json.Unmarshal(ans.body, &body) == nil && body.Message == serverIDTaken
+	return json.Unmarshal(ans.body, &body) == nil && body.Message == message
+}
+
+// idTaken reports whether ans is the server's 409 "Id taken", told from the 409 "Conflict" (the
+// earlier attempt is stored, plain text) by its registered message, never shown.
+func idTaken(ans *answer) bool {
+	return serverSaid(ans, http.StatusConflict, serverIDTaken)
+}
+
+// senderCardMismatch reports whether ans is the server's 400 "Sender card mismatch".
+func senderCardMismatch(ans *answer) bool {
+	return serverSaid(ans, http.StatusBadRequest, serverSenderCardMismatch)
 }
 
 func decodeAnswer(ans *answer, out any) error {

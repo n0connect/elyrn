@@ -70,7 +70,8 @@ const (
 	maxCardChars           = 80
 	maxPendingTokenChars   = 2048
 	maxCookieValueChars    = 4096
-	maxTrackedSenders      = 256
+	maxTrackedSenders      = 256  // per room record: THE SENDER BOUND (counters.go)
+	maxUnrecordedSenders   = 4096 // per room, for this process: senders the full record refused
 	maxPendingGaps         = 64
 	maxCreateAttempts      = 3 // a fresh secret per attempt, as rooms.js MAX_CREATE_ATTEMPTS
 	maxRosterRetries       = 2 // a 412 re-encrypts under the same id at most twice

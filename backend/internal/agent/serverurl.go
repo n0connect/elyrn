@@ -114,16 +114,43 @@ func isOnionHost(origin string) bool {
 	return err == nil && strings.HasSuffix(strings.ToLower(u.Hostname()), onionSuffix)
 }
 
-// proxyFunc picks the proxy of each request as curl does, with one documented difference.
+// proxyFor picks the proxy chooser for origin: an onion origin is reached through Tor only
+// (onionProxy), every other origin (or none yet) by clearnetProxy's rules.
+func proxyFor(origin string) (func(*http.Request) (*url.URL, error), error) {
+	if origin != "" && isOnionHost(origin) {
+		return onionProxy()
+	}
+	return clearnetProxy()
+}
+
+// onionProxy is the one route to an onion service: the socks5h:// proxy that ALL_PROXY (or
+// all_proxy) names, for every request, whatever HTTP_PROXY, HTTPS_PROXY or NO_PROXY say: those are
+// not read at all. net/http's ProxyFromEnvironment would hand a plain-http .onion request, the
+// login body included, to an ordinary forward proxy (its vendored httpproxy returns HTTP_PROXY for
+// any http URL that NO_PROXY does not match, before ALL_PROXY is ever consulted). socks5h, not
+// socks5 or http: the name must reach Tor unresolved, and only Tor carries an onion address.
+// Missing, malformed or of any other scheme, the agent refuses to start (E_AGENT_ONION_PROXY).
+func onionProxy() (func(*http.Request) (*url.URL, error), error) {
+	raw := allProxyValue()
+	u, err := url.Parse(raw)
+	if raw == "" || err != nil || len(raw) > maxServerURLChars || u.Scheme != proxySchemeSOCKS5H || u.Host == "" ||
+		u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fail(CodeOnionProxy, err)
+	}
+	return http.ProxyURL(u), nil
+}
+
+// clearnetProxy picks the proxy of each request as curl does, with one documented difference.
 //   - HTTPS_PROXY (https requests) or HTTP_PROXY (http requests), upper or lower case, when set:
 //     http.ProxyFromEnvironment decides, NO_PROXY and its matching included.
-//   - Otherwise ALL_PROXY (curl's variable, which net/http does not read), so that
-//     ALL_PROXY=socks5h://127.0.0.1:9050 reaches an onion service. NO_PROXY does NOT apply to it:
-//     its matching lives in golang.org/x/net/http/httpproxy, a dependency this program does not
-//     take and whose rules it will not copy. Only localhost, 127.0.0.1 and ::1 bypass ALL_PROXY.
+//   - Otherwise ALL_PROXY (curl's variable, which net/http does not read). NO_PROXY does NOT
+//     apply to it: its matching lives in golang.org/x/net/http/httpproxy, a dependency this
+//     program does not take and whose rules it will not copy. Only localhost, 127.0.0.1 and ::1
+//     bypass ALL_PROXY.
 //
-// The environment is read once, as net/http itself caches it.
-func proxyFunc() (func(*http.Request) (*url.URL, error), error) {
+// An onion origin never comes here (proxyFor). The environment is read once, as net/http itself
+// caches it.
+func clearnetProxy() (func(*http.Request) (*url.URL, error), error) {
 	all, err := allProxy()
 	if err != nil {
 		return nil, err
@@ -153,12 +180,18 @@ func envSet(names ...string) bool {
 	return false
 }
 
-// allProxy parses ALL_PROXY (or all_proxy); unset is no proxy, malformed is refused.
-func allProxy() (*url.URL, error) {
-	raw := os.Getenv(envAllProxy)
-	if raw == "" {
-		raw = os.Getenv(envAllProxyLower)
+// allProxyValue is ALL_PROXY, or all_proxy when the first is unset or empty (curl's order).
+func allProxyValue() string {
+	if raw := os.Getenv(envAllProxy); raw != "" {
+		return raw
 	}
+	return os.Getenv(envAllProxyLower)
+}
+
+// allProxy parses ALL_PROXY (or all_proxy) for a clearnet origin; unset is no proxy, malformed is
+// refused.
+func allProxy() (*url.URL, error) {
+	raw := allProxyValue()
 	if raw == "" {
 		return nil, nil
 	}
@@ -170,23 +203,4 @@ func allProxy() (*url.URL, error) {
 		return nil, fail(CodeProxy, nil)
 	}
 	return u, nil
-}
-
-// requireProxyForOnion refuses an onion server that no configured proxy would reach.
-func requireProxyForOnion(origin string, proxy func(*http.Request) (*url.URL, error)) error {
-	if !isOnionHost(origin) {
-		return nil
-	}
-	req, err := http.NewRequest(http.MethodGet, origin+pathMe, nil)
-	if err != nil {
-		return fail(CodeServerURL, err)
-	}
-	via, err := proxy(req)
-	if err != nil {
-		return fail(CodeProxy, err)
-	}
-	if via == nil {
-		return fail(CodeOnionProxy, nil)
-	}
-	return nil
 }

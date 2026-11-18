@@ -133,7 +133,7 @@ func (fx *roomFixture) seal(tb testing.TB, roster []string, sender int, counter 
 
 // state is the room as this agent holds it after a fresh start: nothing seen, nothing recorded.
 func (fx *roomFixture) state() *roomState {
-	return &roomState{id: fx.keys.ID, keys: fx.keys, member: fx.members[fuzzSelf], selfName: "self",
+	return &roomState{id: fx.keys.ID, keys: fx.keys, member: fx.members[fuzzSelf],
 		counters: newCounterRecord(), seen: make(map[uuid.UUID]seenMessage)}
 }
 
@@ -229,7 +229,7 @@ func (h *pageHarness) forward(items []servedItem, after int64) {
 	accepted := h.accepted(items, after, 0)
 	l := newLedger(st.counters)
 	got := st.openPage(h.dtos(items), st.forwardWindow(after, l))
-	l.snapshot(st.counters, got.last)
+	st.settle(l, got.last)
 	h.check(got, accepted, func(e poolEntry, seq int64) {
 		if seq <= recordSeq {
 			return

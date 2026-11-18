@@ -47,8 +47,10 @@ This is the design of record. Decisions are dated and final unless the owner rev
 - **D8. Stored and wire names keep the old protocol namespace** (see *Rename* below).
 - **D9. Onion servers over plain http, through Tor only** (D-2026-11-12-c). `http://*.onion` is
   accepted besides `https://` and loopback `http://`, because Tor encrypts and authenticates the
-  connection; the program refuses to start unless a proxy (in practice
-  `ALL_PROXY=socks5h://127.0.0.1:9050`) would carry it.
+  connection. Since 18 Nov (audit F1) "through Tor only" is enforced: for an onion origin the
+  agent's only proxy is the `socks5h://` URL in `ALL_PROXY` (or `all_proxy`), for every request;
+  `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are not read for it, and the program refuses to start
+  (`E_AGENT_ONION_PROXY`) when that proxy is missing, malformed or of another scheme.
 
 ## Decisions (17 Nov 2026)
 
@@ -67,10 +69,77 @@ This is the design of record. Decisions are dated and final unless the owner rev
   file's id, key, size, SHA-256 and name; `backend/internal/e2e/file.go`). The agent shows such a message as its text (which may be empty)
   plus `file: {name, size}`; the key, the hash and the file id are never returned by a tool, and the
   agent neither downloads nor sends files. A description that breaks the format (a name with a
-  path separator, a control or bidirectional character, a leading dot, not NFC, longer than 128
-  characters or 512 bytes; a size outside `1..104857600`; a key, hash or id of the wrong shape)
-  makes the message `broken`. The agent checks `/me`'s `file_max_bytes` against
+  path separator, a control character (`Cc`), a format character (`Cf`: zero-width characters,
+  the byte order mark, the soft hyphen, every bidirectional control, tag characters), two or more
+  space characters (`Zs`) in a row, a leading dot, not NFC, longer than 128 characters or 512
+  bytes; a size outside `1..104857600`; a key, hash or id of the wrong shape) makes the message
+  `broken`. The name rule is `validation.js` `isFileName` and `e2e` `fileNameValid`, pinned by the
+  shared cases of `backend/internal/e2e/filename_test.go`; the two read Unicode categories from
+  their own tables (Go's `unicode` package, the browser's ICU), so a code point assigned to `Cf`
+  or `Zs` in one Unicode version and unassigned in the other may be judged differently. The agent checks `/me`'s `file_max_bytes` against
   `262144..104857600` like the other limits, so it needs a server that reports it.
+
+## Decisions (18 Nov 2026, after the security audit)
+
+- **D12. The Go reader takes exactly what the browser takes** (audit F3). A payload and a file
+  description are read by `backend/internal/e2e/strictjson.go`, never by binding a struct:
+  keys are compared byte for byte after JSON unescaping (`"T"`, `"N"`, a Kelvin sign for `k`
+  no longer pass as `t`, `n`, `k`), the bytes must be valid UTF-8 and hold no lone surrogate
+  escape, `t` must be a string and `ts`, `n`, `s` integer literals within JavaScript's safe
+  integers. This holds whichever `encoding/json` the toolchain builds in (Go 1.27's jsonv2
+  default, or the legacy decoder): nothing the decoder could relax is left to it. A repeated key
+  keeps its last value, as `JSON.parse` does: refusing it would make a payload readable to people
+  and unreadable to the agent. Known limits, Go being the stricter side: a number written with a
+  fraction or an exponent (`1.0`, `1e3`) is refused although `JSON.parse` reads a whole number from
+  it, and a lone surrogate escape in a message's text is refused although the browser would show
+  the text with a broken character.
+
+- **D13. A key under two seats is disputed** (audit A2,
+  `room-roster/duplicate-member-key-card-shadows-member`). A card proves the room code, not the key
+  it announces, so any code holder can take a seat with a card carrying another member's key. The
+  agent applies the browser's rule (`rooms.js` `verifyMembers`, `disputed`): every key is listed
+  once, in the order first served; a key that more than one served card opens to is
+  `disputed: true`, shows no role, and `room_role` refuses it (`E_AGENT_ROLE_MEMBER_DISPUTED`);
+  its `owner` is true when any of its cards is flagged owner (only the server flags the owner, and
+  an impostor's seat is never the owner's); `room_members` carries the warning
+  `E_AGENT_SEAT_DISPUTED`, or `E_AGENT_OWN_SEAT_DISPUTED` when the copied key is the agent's own.
+  The room safety number covers the distinct keys and, when the served rows (duplicates and cards
+  that do not open included) outnumber them, `"noaddx/room/seats/v1" || u32be(rows)` after them
+  (`e2e.RoomSafetyNumber`, pinned by the browser's `safety_number_disputed` vector): a room with a
+  duplicated seat shows other digits, a room without one keeps the number it always had. Messages
+  stay attributed by key, as they are authenticated.
+
+- **D14. The agent seals its stored card** (audit A1,
+  `backend/internal/chat/rooms.go:checkRoomMessage:header-card-not-bound-to-sending-member`). The
+  server refuses a room message whose header card is not the sending member's stored card (400,
+  `Sender card mismatch`). A card is sealed under a random nonce, so the card an agent derives
+  for a room differs from the one stored when it joined; the agent takes its stored card from the
+  roster row flagged `mine` (as `rooms.js` `loadRoster` does) and seals that one. The refusal has
+  its own code, `E_AGENT_SENDER_CARD_MISMATCH`; nothing was stored, and the next send reads the
+  roster again. Known cost: an `elyrn-agent` older than this release seals the card it derives and
+  cannot send to a server of this release; update the agent with the server.
+
+- **D15. Senders are named as the browser shows them** (audit F2,
+  `agent-room-message/sender-reported-by-12bit-name-without-code-or-roster-binding`). An aura
+  name is 12 bits, so a member can grind a key that shows another member's name. Every message,
+  gap and replay names its sender by `sender` (the name) and `sender_code`; `left: true` when the
+  sender's key is not on the room's current member list (which a read loads when the agent holds
+  none, and drops on a `conv` event or a `412`); `same_name: true` when another key in view shows
+  the same name, the keys in view being the member list, every sender the agent judged in that
+  room during the process, and the senders of the result. The tool descriptions and the MCP
+  instructions say to identify a sender by name and code.
+
+- **D16. The sender bound keeps the roster** (as `counters.js` `bound`). A room's counter
+  record names at most 256 senders (the agent's own bound; the browser's is 4096). At the bound a
+  new sender that is neither the agent itself nor on the room's current member list is not
+  recorded: its messages say `unrecorded: true` (replay protection is not kept for it on this
+  agent) and `E_AGENT_SENDER_UNRECORDED` is logged. A new member of the current list is always
+  recorded and displaces the off-list entry recorded longest ago; the agent's own entry and the
+  list's are never displaced. The record keeps the order senders were first recorded in
+  (`"order"` in `agent.counters.json`; a record written before it has none and is read in key
+  order). Remaining differences from the browser: the bound (256 against 4096), and a record above
+  the bound fails the file closed (`E_AGENT_STATE_FILE`) where the browser trims it, since no agent
+  ever writes one.
 
 ## The program
 
@@ -90,10 +159,10 @@ elyrn-agent whoami                      aura name and code, public key, server; 
 | `room_create` | `max_members` (2..server limit), `ttl_hours` (1..server limit) | room id, room code, expiry |
 | `room_join` | `code` | room id, member count, expiry |
 | `rooms` | none | the rooms this account is in: id, name, members, expiry, unread |
-| `room_members` | `room` | per-room names and codes, which one is this agent, which is the owner, each member's role (`""` when none), room safety number |
-| `room_role` | `room`, `role` (0..16 characters, the rule of D10; empty clears), `member` (optional: a code as `room_members` lists it; omitted = this agent) | the member's name and code and the role stored; the owner may set anyone's role, any other member only its own |
+| `room_members` | `room` | per-room names and codes, which one is this agent, which is the owner, each member's role (`""` when none), `disputed` (D13), room safety number, warnings |
+| `room_role` | `room`, `role` (0..16 characters, the rule of D10; empty clears), `member` (optional: a code as `room_members` lists it; omitted = this agent) | the member's name and code and the role stored; the owner may set anyone's role, any other member only its own; a disputed member gets none (D13) |
 | `room_send` | `room`, `text` (1..2000 characters; no word that reads as an account number) | sequence number (`null`, with `stored: true`, when only the refusal of a resent copy confirmed the store) |
-| `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name, mine, text, `file: {name, size}` when the message announces a file (D11), sent time; gaps per sender; replays (seq, sender, mine; no text) |
+| `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name and code (`left`, `same_name`: D15), mine, text, `file: {name, size}` when the message announces a file (D11), sent time; gaps per sender; replays (seq, sender, mine; no text) |
 | `room_wait` | `room`, `after`, `timeout_seconds` | as `room_read`, after waiting for something new (falls back to reading every 2 s when the event stream cannot be held; `timed_out` only once the timeout has passed) |
 | `room_leave` | `room` | leaves; the owner burns the room for everyone and the result says so |
 

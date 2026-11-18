@@ -82,6 +82,13 @@ const (
 	CodeRoleNotAllowed      Code = "E_AGENT_ROLE_NOT_ALLOWED"
 	CodeRoleMemberGone      Code = "E_AGENT_ROLE_MEMBER_GONE"
 	CodeRoleIgnored         Code = "E_AGENT_ROLE_IGNORED" // log only: a served role shown as none
+	CodeRoleMemberDisputed  Code = "E_AGENT_ROLE_MEMBER_DISPUTED"
+
+	// Seats and senders
+	CodeSeatDisputed       Code = "E_AGENT_SEAT_DISPUTED"     // a warning in room_members
+	CodeOwnSeatDisputed    Code = "E_AGENT_OWN_SEAT_DISPUTED" // a warning in room_members
+	CodeSenderCardMismatch Code = "E_AGENT_SENDER_CARD_MISMATCH"
+	CodeSenderUnrecorded   Code = "E_AGENT_SENDER_UNRECORDED" // log only: the full record refused a sender
 
 	CodeInternal Code = "E_AGENT_INTERNAL"
 )
@@ -101,7 +108,7 @@ var sentences = map[Code]string{
 	CodeServerURL:           "The server address must be https://host[:port], or http:// for localhost, 127.0.0.1, ::1 or a .onion host, with no path, query or credentials; fix --server.",
 	CodeServerMissing:       "No identity exists yet, so the agent needs the server address; start it with --server URL.",
 	CodeServerMismatch:      "This identity belongs to another server; start with that server's address, or restore the right identity file from a backup if this one replaced it. The file is the account's only copy: moving it away to create a new identity abandons the account and its rooms.",
-	CodeOnionProxy:          "A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again.",
+	CodeOnionProxy:          "A .onion server is reached only through Tor's SOCKS proxy: set ALL_PROXY to socks5h://host:port of your Tor SOCKS port (for example socks5h://127.0.0.1:9050; no other scheme is accepted) and start again. HTTP_PROXY, HTTPS_PROXY and NO_PROXY are ignored for it.",
 	CodeProxy:               "The proxy configured in the environment (HTTPS_PROXY, HTTP_PROXY or ALL_PROXY) is malformed; fix or unset it and start again.",
 	CodeConfigDir:           "The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again.",
 	CodeIdentityMissing:     "No identity exists yet; run elyrn-agent init --server URL, or call the identity tool.",
@@ -150,7 +157,13 @@ var sentences = map[Code]string{
 	CodeRoleNotAllowed:      "Only the room's owner may set another member's role; leave member out to set this agent's own role, or ask the owner.",
 	CodeRoleMemberGone:      "The server no longer lists that member in this room (it left, or the room is gone); call room_members and try again.",
 	CodeRoleIgnored:         "A member's role did not open under the room's code or broke the role rule, so that member is shown without a role; nothing to do unless it repeats.",
-	CodeInternal:            "An internal error occurred in the agent; retry, and report it if it persists.",
+	CodeRoleMemberDisputed:  "More than one seat of this room claims that member's identity, so no role can be set for it (it could land on the seat of whoever copied the identity); compare the room safety number with the members on another channel.",
+
+	CodeSeatDisputed:       "Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat.",
+	CodeOwnSeatDisputed:    "Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room.",
+	CodeSenderCardMismatch: "The server refused the message because its sender card is not the card the server stores for this agent's seat, so it was not sent. The next send reads the member list again and uses the stored card: send it again, and update elyrn-agent if this repeats (a release older than the server's sends a card of its own).",
+	CodeSenderUnrecorded:   "A sender outside the current member list arrived while this room's counter record was full, so it is not recorded: replay protection is not kept for it on this agent (its messages carry unrecorded: true); nothing to do unless this repeats.",
+	CodeInternal:           "An internal error occurred in the agent; retry, and report it if it persists.",
 }
 
 // Sentence returns what the operator should do next for code.
@@ -188,6 +201,13 @@ func fail(code Code, cause error) *Error {
 // warn logs a registered code the program recovers from by itself (never a cause's text).
 func warn(code Code) {
 	logger.At(utils.LogLevelWARN, string(code), "warning code=%s", code)
+}
+
+// warningOf is a warning a result carries (logged by its code as warn does): the code and its
+// sentence, never anything else.
+func warningOf(code Code) Warning {
+	warn(code)
+	return Warning{Code: code, Message: Sentence(code)}
 }
 
 // Fail is fail for the packages built on this one (the MCP layer, the command).

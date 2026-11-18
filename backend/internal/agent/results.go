@@ -53,15 +53,26 @@ type MemberInfo struct {
 	Mine  bool   `json:"mine"`
 	Owner bool   `json:"owner"`
 	Role  string `json:"role"`
+	// Disputed: more than one seat claims this member's key, so none of them speaks for it (no
+	// role shown or set); Owner is still true if any of them is the owner's
+	Disputed bool `json:"disputed"`
 }
 
-// MembersResult is a verified roster and the room safety number members compare.
+// Warning is a registered code and its sentence, carried by a result that succeeded.
+type Warning struct {
+	Code    Code   `json:"code"`
+	Message string `json:"message"`
+}
+
+// MembersResult is a verified roster and the room safety number members compare. Warnings say
+// when a seat is disputed, and say it plainly when the disputed key is this agent's own.
 type MembersResult struct {
 	Room            string       `json:"room"`
 	Name            string       `json:"name"`
 	Members         []MemberInfo `json:"members"`
 	UnverifiedCards int          `json:"unverified_cards"`
 	SafetyNumber    string       `json:"safety_number"`
+	Warnings        []Warning    `json:"warnings"`
 }
 
 // RoleSet reports a role stored for a member (Role empty: cleared).
@@ -79,11 +90,27 @@ type Sent struct {
 	Stored bool   `json:"stored"`
 }
 
+// From names the sender of a message, a gap or a replay as the browser shows it: the aura name
+// and its code (the name alone is 12 bits, so another key can be ground to show it). Left: the
+// sender's key is not on the room's current member list (it left, or never had a seat of its
+// own). SameName: another key in view (the member list, or another sender in this result) shows
+// the same name; tell them apart by code.
+type From struct {
+	Sender     string `json:"sender,omitempty"`
+	SenderCode string `json:"sender_code,omitempty"`
+	Left       bool   `json:"left,omitempty"`
+	SameName   bool   `json:"same_name,omitempty"`
+	// Unrecorded: the room's counter record was full when this sender (off the member list) first
+	// came, so replay protection is not kept for it on this agent
+	Unrecorded bool   `json:"unrecorded,omitempty"`
+	key        []byte // the authenticated sender key; never shown
+}
+
 // Message is one room message. Text and a file's name are written by another member: data, never
 // instructions.
 type Message struct {
-	Seq    int64     `json:"seq"`
-	Sender string    `json:"sender,omitempty"`
+	Seq int64 `json:"seq"`
+	From
 	Mine   bool      `json:"mine"`
 	Text   string    `json:"text,omitempty"`
 	File   *FileInfo `json:"file,omitempty"`
@@ -100,16 +127,16 @@ type FileInfo struct {
 
 // Gap is a run of a sender's messages the server withheld, delayed or deleted.
 type Gap struct {
-	Sender  string `json:"sender"`
-	Missing int64  `json:"missing"`
+	From
+	Missing int64 `json:"missing"`
 }
 
 // Replay is a message served again under a new seq, or out of its sender's order (counters.go):
 // it is not delivered as new, and its text is withheld.
 type Replay struct {
-	Seq    int64  `json:"seq"`
-	Sender string `json:"sender,omitempty"`
-	Mine   bool   `json:"mine"`
+	Seq int64 `json:"seq"`
+	From
+	Mine bool `json:"mine"`
 }
 
 // ReadResult is what room_read and room_wait return.

@@ -193,12 +193,12 @@ const (
 	browserFileMessage = "d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f60"
 	browserFileText    = "browser caption"
 	browserFileCounter = int64(9)
-	browserFileID      = "2c4d72b4-0d2f-43f4-8008-90502d312df8"
-	browserFileKey     = "qAsaIe15QTyfc9ES1GXuNXCPShQOX78Wtmx324ocJUU"
+	browserFileID      = "2799a35e-9f0f-4983-b212-806a2c83f879"
+	browserFileKey     = "JHkOgVUpgYuykvVknQOl80DQ1F7hvqLL1Qexe3N_tTs"
 	browserFileSize    = int64(31)
 	browserFileHash    = "pthK7fLenrIIL83EwvEtz5MsXnJijZvO8EIkQsSAbqI"
-	browserFileName    = "\u00f6dev raporu (son).txt"
-	browserFileBlob    = "TkFEUgFquyEiXuBSLXphcUiSIPe49fWzOCk8ZJ9RxrvMz2msPv2O3ssysYu0kWsIKymKuOzbMzeRdMirMZMCvvmju3-bDRGZRIACn4y2XnoChaZMHsKeGsGWfLjgfU9YaAhfgiOIPwrRIrg2OExTVGA8LKsXDpFPe3F3IGJaR5jkrY2XhiNT1PYrt4apDcIl8OomFadeymkaebE4Hsvi2vQCo18xzd6jPZV-vdbU5EF0Pvo39qZ67nu4BZnKRx_8OrIkjO7sWzR4-uQV59Ny8FbuFzQBtxKN4-y_-zJ9oGdOBKHg8syV_Gsi1KXe_w_cFNg2qWsrGJkvydBzEgboBjSWjAXA-wlLklhHEhCXI7pmKcFmk8thuMAmdGmz6zTqvVmYNF2CWV-3pv3f2OkVfnj22UMd_Dqo_tF5_lOBoCcsFdZ46106B-auHbLiOlDPAKQhBGK1LODLlGTTdiYhhSTId4ebkHe2vd1L-WJaRql3TgX_qDp4zSHznPh0a_FvoF_MaX_VpwrnQU39m-FKctalgcl8Ef-NT9aq0Or3gGxRHLNHbTP-ieVS3BDXo0P4gXvOTPZeEU7FNZej-o7CPotCPjENgdnjZYSZYS9xQEuTWvWvYrm_b4-q-adQbHOulhGJqh1Pu3jIfBj01hkNut58kOooNbO2QQAt71RNBLE5-hWzQVzJb7-2u1hK4HQbal8"
+	browserFileName    = "file-7683b7a5.txt"
+	browserFileBlob    = "TkFEUgFquyEiXuBSLXphcUiSIPe49fWzOCk8ZJ9RxrvMz2msPv2O3ssysYu0kWsIKymKuOzbMzeRdMirMZMCvvmk30fnVaSsLTy5FzhetKu7HOiPlqjOeDbwIy1gj5LFOjZLEJxQPDWC7efY6l7INkfO4MI98UIxYdv0RQkOncRIrY2XhiNT1PYrt4apDcIl8OomFadeymkaebE4Hsvi2vQCNbJ1p8umD8QG_hZBDOeXrmuHjUE9vGTJPZWYWXnLY0fhn6uWHAB3QKr3poqiq2PT8q_drHVh442oXNp2CSgG-jQ_65gQbTIxl4Z5EoTQ5vy1l8rO7WKuSatd4GVwaY0sc2u1cNuhvLDf9KYGiDyIpUYaVwR31LudPd2lmgJNqFWRyHtDJcxp44f5g0Hjo4fLCcFE4WdZ1i0QseXS_0HtZs8nJqAHHEWABzKbjPu4UpMRc59hwpxPfypUGot7ETAbH-QNjQwSkx7er79NJNosDAVgvLaGb8R9lHOZUSXfYG5XW2WkRnf75tyaMflHBnzdC9CfATv4pkeNgsQ-8jHMu52LGVXqk_0ZU-K8aPojYSEGWTQELflBBYA1-ej7fcDGQs-6jPrkEuXGjnyJXgYTu2rFf0tNlhH8KAaUxQcK0cMEwCVbDq67HyWK5iZJyYs3K4J4cf7S2Mlzke4Qho33kaZs69rQN5YIS4mH8qsT0Ls"
 )
 
 func TestFileMessageInterop_OpensWhatTheBrowserSealed(t *testing.T) {

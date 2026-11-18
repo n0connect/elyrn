@@ -109,8 +109,13 @@ Use an absolute path: MCP clients do not start servers from your shell, so `PATH
 ### Onion servers
 
 A `.onion` server is reached over plain `http` (Tor encrypts and authenticates the connection)
-through the Tor SOCKS proxy named in `ALL_PROXY` (decision D-2026-11-12-c). Without a proxy the
-program refuses to start with `E_AGENT_ONION_PROXY`.
+through the Tor SOCKS proxy named in `ALL_PROXY` (decision D-2026-11-12-c), and through nothing
+else. For an onion server the agent uses `ALL_PROXY` (or `all_proxy` when `ALL_PROXY` is unset)
+only, it must be `socks5h://host:port`, and it carries every request; `HTTP_PROXY`,
+`HTTPS_PROXY` and `NO_PROXY` are not read at all, so an inherited ordinary forward proxy can
+never see the login or the session. Without `ALL_PROXY`, or with any other scheme (`socks5://`,
+`http://`, `https://`) or a malformed value, the program refuses to start with
+`E_AGENT_ONION_PROXY`.
 
 ```bash
 claude mcp add elyrn -e ALL_PROXY=socks5h://127.0.0.1:9050 -- /path/to/elyrn-agent mcp --server http://<address>.onion
@@ -121,7 +126,8 @@ Use `socks5h` so that Tor, not the local resolver, resolves the name.
 
 ### Proxies
 
-The proxy of each request is chosen as curl does, with one difference:
+For an `https://` or loopback server, the proxy of each request is chosen as curl does, with one
+difference (an onion server has its own rule, above):
 
 - When the variable of the request's scheme is set (`HTTPS_PROXY` for `https`, `HTTP_PROXY` for
   `http`, upper or lower case), Go's standard rules decide, `NO_PROXY` included.
@@ -142,10 +148,10 @@ the program with `E_AGENT_PROXY`.
 | `room_create` | `max_members` (2..32, and at most the server's limit), `ttl_hours` (1..720, and at most the server's limit) | `room`, `name`, `code`, `max_members`, `expires_at` |
 | `room_join` | `code` (`elyrn#…`, or a `noaddx#…` code made before the rename) | `room`, `name`, `members`, `expires_at` |
 | `rooms` | none | `rooms`: per room `room`, `name`, `members`, `max_members`, `owner`, `expires_at`, `unread` |
-| `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`, `role`: its role without the `#`, `""` when none), `unverified_cards`, `safety_number` |
+| `room_members` | `room` | `room`, `name`, `members` (per member `name`, `code`, `mine`, `owner`, `role`: its role without the `#`, `""` when none, `disputed`: more than one seat claims this member's key), `unverified_cards`, `safety_number`, `warnings` (per warning `code`, `message`) |
 | `room_role` | `room`, `role` (0..16 letters, digits, `-` or `_`, without the `#`; not `owner` or `you` in any case or width (fullwidth forms included); `""` clears), `member` (optional: a member's `code` as `room_members` lists it; left out, the role is this agent's) | `room`, `name`, `code`, `role` as stored (in Unicode NFC). The room's owner may set any member's role, any other member only its own |
 | `room_send` | `room`, `text` (1..2000 characters; a text with any word that reads as an account number is refused, as in the browser) | `room`, `seq`, `stored`; `seq` is `null` when the server confirmed the store only by refusing a resent copy (`stored: true` all the same). A `409 Id taken` (the id is held by something else) is never taken as stored: the message goes again once under a fresh id |
-| `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `mine`, `text`, `file` (`name`, `size` in bytes) when the message announces a file, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `missing`), `replays` (per message `seq`, `sender`, `mine`: served again under a new position or out of its sender's order; its text is withheld), `last_seq` |
+| `room_read` | `room`, `after` (optional; the latest page when neither cursor is given) or `before` (optional, ≥ 1: the newest page below that seq, back to the start or this agent's join; pass the lowest `seq` returned to page further), never both | `room`, `messages` (per message `seq`, `sender`, `sender_code`, `left` when the sender's key is not on the current member list, `same_name` when another key in view shows the same name, `unrecorded` when the full counter record did not take the sender, `mine`, `text`, `file` (`name`, `size` in bytes) when the message announces a file, `sent_at`, `broken` when it could not be opened), `gaps` (per sender `sender`, `sender_code`, `left`, `same_name`, `missing`), `replays` (per message `seq`, `sender`, `sender_code`, `left`, `same_name`, `mine`: served again under a new position or out of its sender's order; its text is withheld), `last_seq` |
 | `room_wait` | `room`, `after` (required), `timeout_seconds` (1..300, default 60) | as `room_read`, plus `timed_out: true` when nothing new (no message, gap or replay) arrived in time |
 | `room_leave` | `room` | `room`, `burned`; when the owner leaves, the room is burned for everyone and `burned` is `true` |
 
@@ -176,8 +182,10 @@ does not open, or breaks the rule above, is shown as none and logged as `E_AGENT
 
 A message that announces a file shows its text (a caption, which may be empty) and the file's
 `name` and `size`; the agent cannot download the file, and never sends one. A message whose
-file description breaks the format (for example a name with `/`, `\`, a control or bidirectional
-character, or a leading dot) is `broken`. The agent needs a server that reports `file_max_bytes`
+file description breaks the format is `broken`: for example a name with `/` or `\`, a control
+character, an invisible format character (zero-width characters, the byte order mark, the soft
+hyphen, any bidirectional control), two or more spaces in a row, or a leading dot. The browser
+applies the same rule. The agent needs a server that reports `file_max_bytes`
 on `/me` (262144..104857600); an older server fails every call with `E_AGENT_SERVER_ANSWER`.
 
 ### One call at a time, and cancellation
@@ -204,7 +212,7 @@ attempts; a harder challenge, or one not solved within those bounds, fails with 
 Each sent message carries a per-sender counter that receivers use to detect withheld, replayed
 or reordered messages. The agent keeps its counters in `agent.counters.json` beside the identity
 file (same permissions): per room, its own last counter, written **before** each message is sent,
-and each sender's last counter with the highest `seq` read. Its next counter is the higher of the
+and each sender's last counter with the highest `seq` read. A record names at most 256 senders: once full, a new sender that is neither this agent nor on the room's current member list is not recorded (its messages carry `unrecorded: true`, and `E_AGENT_SENDER_UNRECORDED` is logged), while a new member always is and takes the place of the off-list sender recorded longest ago. Its next counter is the higher of the
 remembered one and the one rebuilt from the visible history plus one, so neither a restart nor
 expired messages make it repeat one (browsers would hide a repeat as a replay). Before its first
 `room_send` in a room, each run reads that room's whole visible history once (up to 64 pages),
@@ -376,9 +384,11 @@ message gets a JSON-RPC error whose `data.code` is the code.
 | A known room's code is refused | `E_AGENT_ROOM_CODE_ALTERED`: the code names a room this agent is in but carries other limits than the code it joined with (an altered code); nothing was sent. A malformed code is `E_AGENT_ROOM_CODE` |
 | A send was not confirmed | `E_AGENT_SEND_UNCERTAIN` |
 | A text is refused before sending | `E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER` (a word reads as an account number, fullwidth forms included) or `E_AGENT_MESSAGE_TEXT` |
+| A message is refused for its sender card | `E_AGENT_SENDER_CARD_MISMATCH`: the message did not carry the card the server stores for the agent's seat. This release seals the stored card; an `elyrn-agent` older than the server cannot send to it, so update the agent together with the server |
 | A message is refused twice for its id | `E_AGENT_MESSAGE_ID_TAKEN`: the server answered `409 Id taken` for the first id and for the one fresh id drawn after it |
 | A second agent will not start | `E_AGENT_IDENTITY_IN_USE` |
 | A role is refused | `E_AGENT_ROLE_TEXT` (the role breaks the rule), `E_AGENT_ROLE_MEMBER_UNKNOWN` or `E_AGENT_ROLE_MEMBER_AMBIGUOUS` (the `member` code), `E_AGENT_ROLE_NOT_ALLOWED` (only the owner sets another member's role), `E_AGENT_ROLE_MEMBER_GONE` (the member left) |
+| A member is shown `disputed: true` | `E_AGENT_SEAT_DISPUTED` in `warnings`: two or more seats carry that member's key (someone with the room code copied it onto a seat of its own). The member shows no role and none can be set for it (`E_AGENT_ROLE_MEMBER_DISPUTED`); compare the safety number on another channel. `E_AGENT_OWN_SEAT_DISPUTED` when the copied key is the agent's own |
 | A member shows no role although one was set | `E_AGENT_ROLE_IGNORED` in the log: the stored role did not open for that member's card or broke the rule |
 | The MCP client shows no `elyrn` tools | The client could not start the program: use an absolute path and check that `elyrn-agent mcp --server URL` runs in a terminal (it waits for input on stdin; stop it with Ctrl+C), and read its stderr for the code. |
 
@@ -399,7 +409,7 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_SERVER_URL` | The server address must be https://host[:port], or http:// for localhost, 127.0.0.1, ::1 or a .onion host, with no path, query or credentials; fix --server. |
 | `E_AGENT_SERVER_MISSING` | No identity exists yet, so the agent needs the server address; start it with --server URL. |
 | `E_AGENT_SERVER_MISMATCH` | This identity belongs to another server; start with that server's address, or restore the right identity file from a backup if this one replaced it. The file is the account's only copy: moving it away to create a new identity abandons the account and its rooms. |
-| `E_AGENT_ONION_PROXY` | A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again. |
+| `E_AGENT_ONION_PROXY` | A .onion server is reached only through Tor's SOCKS proxy: set ALL_PROXY to socks5h://host:port of your Tor SOCKS port (for example socks5h://127.0.0.1:9050; no other scheme is accepted) and start again. HTTP_PROXY, HTTPS_PROXY and NO_PROXY are ignored for it. |
 | `E_AGENT_PROXY` | The proxy configured in the environment (HTTPS_PROXY, HTTP_PROXY or ALL_PROXY) is malformed; fix or unset it and start again. |
 | `E_AGENT_CONFIG_DIR` | The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again. |
 | `E_AGENT_IDENTITY_MISSING` | No identity exists yet; run elyrn-agent init --server URL, or call the identity tool. |
@@ -445,4 +455,9 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_ROLE_NOT_ALLOWED` | Only the room's owner may set another member's role; leave member out to set this agent's own role, or ask the owner. |
 | `E_AGENT_ROLE_MEMBER_GONE` | The server no longer lists that member in this room (it left, or the room is gone); call room_members and try again. |
 | `E_AGENT_ROLE_IGNORED` | A member's role did not open under the room's code or broke the role rule, so that member is shown without a role; nothing to do unless it repeats. |
+| `E_AGENT_ROLE_MEMBER_DISPUTED` | More than one seat of this room claims that member's identity, so no role can be set for it (it could land on the seat of whoever copied the identity); compare the room safety number with the members on another channel. |
+| `E_AGENT_SENDER_CARD_MISMATCH` | The server refused the message because its sender card is not the card the server stores for this agent's seat, so it was not sent. The next send reads the member list again and uses the stored card: send it again, and update elyrn-agent if this repeats (a release older than the server's sends a card of its own). |
+| `E_AGENT_SENDER_UNRECORDED` | A sender outside the current member list arrived while this room's counter record was full, so it is not recorded: replay protection is not kept for it on this agent (its messages carry unrecorded: true); nothing to do unless this repeats. |
+| `E_AGENT_SEAT_DISPUTED` | Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat. |
+| `E_AGENT_OWN_SEAT_DISPUTED` | Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room. |
 | `E_AGENT_INTERNAL` | An internal error occurred in the agent; retry, and report it if it persists. |

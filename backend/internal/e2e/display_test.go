@@ -1,8 +1,11 @@
 package e2e
 
 import (
+	"encoding/hex"
 	"slices"
 	"testing"
+
+	"elyrn/internal/cryptoengine"
 
 	"github.com/google/uuid"
 )
@@ -45,7 +48,7 @@ func TestAuraMatchesTheBrowser(t *testing.T) {
 
 func TestRoomSafetyNumberMatchesTheBrowserInAnyOrder(t *testing.T) {
 	for _, keys := range [][][]byte{{displayKeyA, displayKeyB}, {displayKeyB, displayKeyA}} {
-		got, err := RoomSafetyNumber(keys)
+		got, err := RoomSafetyNumber(keys, len(keys))
 		if err != nil || !slices.Equal(got, safetyVector) {
 			t.Fatalf("RoomSafetyNumber = %v, %v", got, err)
 		}
@@ -59,17 +62,59 @@ func TestDisplayRefusesMalformedKeys(t *testing.T) {
 	if _, err := RoomAura(uuid.Nil); err == nil {
 		t.Fatal("RoomAura accepted the nil id")
 	}
-	if _, err := RoomSafetyNumber(nil); err == nil {
+	if _, err := RoomSafetyNumber(nil, 0); err == nil {
 		t.Fatal("RoomSafetyNumber accepted no keys")
 	}
-	if _, err := RoomSafetyNumber([][]byte{displayKeyA, {1}}); err == nil {
+	if _, err := RoomSafetyNumber([][]byte{displayKeyA, {1}}, 2); err == nil {
 		t.Fatal("RoomSafetyNumber accepted a short key")
 	}
 	tooMany := make([][]byte, MaxRoomMembers+1)
 	for i := range tooMany {
 		tooMany[i] = displayKeyA
 	}
-	if _, err := RoomSafetyNumber(tooMany); err == nil {
+	if _, err := RoomSafetyNumber(tooMany, len(tooMany)); err == nil {
 		t.Fatal("RoomSafetyNumber accepted more keys than a room has seats")
+	}
+}
+
+// The browser's vector for a disputed room (vectors-js.json safety_number_disputed): the member
+// keys of the room vector, served under three cards (two open to one key) and under two.
+const (
+	disputedSafetyInput   = "6e6f616464782f726f6f6d2f7361666574792f763146bd62f6859f7193131d3dd95b239f4e8f08edb7693367f64cf403d6bd77aa4b5bc792d26c6993ae2dda291548afd38eeb80b67754a47d7f5e0b038b439b266f6e6f616464782f726f6f6d2f73656174732f763100000003"
+	undisputedSafetyInput = "6e6f616464782f726f6f6d2f7361666574792f763146bd62f6859f7193131d3dd95b239f4e8f08edb7693367f64cf403d6bd77aa4b5bc792d26c6993ae2dda291548afd38eeb80b67754a47d7f5e0b038b439b266f"
+)
+
+var (
+	disputedSafetyDigits   = []string{"06715", "65360", "05436", "06981", "25277", "41004"}
+	undisputedSafetyDigits = []string{"85841", "84549", "45068", "72184", "50057", "56593"}
+)
+
+func TestRoomSafetyNumber_CountsSeatsAsTheBrowserDoes(t *testing.T) {
+	a, b := mustDecode(t, roomVectorPublicA), mustDecode(t, roomVectorPublicB)
+	for _, tc := range []struct {
+		keys   [][]byte
+		seats  int
+		input  string
+		digits []string
+	}{
+		{[][]byte{a, b}, 3, disputedSafetyInput, disputedSafetyDigits},
+		{[][]byte{b, a, a}, 3, disputedSafetyInput, disputedSafetyDigits}, // a key listed twice counts once
+		{[][]byte{a, b}, 2, undisputedSafetyInput, undisputedSafetyDigits},
+	} {
+		got, err := RoomSafetyNumber(tc.keys, tc.seats)
+		if err != nil || !slices.Equal(got, tc.digits) {
+			t.Fatalf("RoomSafetyNumber(seats %d) = %v, %v; want %v", tc.seats, got, err, tc.digits)
+		}
+		input, err := hex.DecodeString(tc.input)
+		if err != nil {
+			t.Fatalf("decode the vector input: %v", err)
+		}
+		digest, err := cryptoengine.SHA256(input)
+		if err != nil || !slices.Equal(digitGroups(digest), tc.digits) {
+			t.Fatalf("the vector's input does not give its digits: %v", err)
+		}
+	}
+	if _, err := RoomSafetyNumber([][]byte{a, b}, -1); err == nil {
+		t.Fatal("a negative seat count was accepted")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 // account's counters (browsers would hide the repeats as replays while this agent reported them
 // stored) nor forgets which counters it has seen from others.
 //
-//	{"version":1,"rooms":{"<room id>":{"seq":12,"mine":4,"senders":{"<public key>":7},"expires":1767225600}}}
+//	{"version":1,"rooms":{"<room id>":{"seq":12,"mine":4,"senders":{"<public key>":7},"order":["<public key>"],"expires":1767225600}}}
 //
 // Policy. The file is written, empty, as soon as the identity file is (register), so every
 // identity has one from its first run on and a healthy start logs nothing. A missing file is an
@@ -116,6 +117,30 @@ func validRecord(r *counterRecord) bool {
 		if _, ok := utils.DecodeExact(key, identity.KeySize); !ok || counter < 1 || !isSeq(counter) {
 			return false
 		}
+	}
+	return validOrder(r)
+}
+
+// validOrder checks that Order lists every key of Senders once and nothing else. A record written
+// before Order was kept has none: its senders are taken as recorded in key order, so a later
+// displacement picks among them deterministically.
+func validOrder(r *counterRecord) bool {
+	if r.Order == nil {
+		r.Order = slices.Sorted(maps.Keys(r.Senders))
+		return true
+	}
+	if len(r.Order) != len(r.Senders) {
+		return false
+	}
+	listed := make(map[string]struct{}, len(r.Order))
+	for _, key := range r.Order {
+		if _, ok := r.Senders[key]; !ok {
+			return false
+		}
+		if _, dup := listed[key]; dup {
+			return false
+		}
+		listed[key] = struct{}{}
 	}
 	return true
 }

@@ -160,6 +160,10 @@ func FuzzDecodeCounterRooms(f *testing.F) {
 		`{"version":1,"rooms":{},"extra":true}`,
 		`{"version":1,"rooms":{}} {}`,
 		`{"VERSION":1,"Rooms":{}}`,
+		`{"version":1,"rooms":{"` + fuzzRoomID + `":{"seq":3,"mine":2,"senders":{"` + fuzzSenderKey + `":1},"order":["` + fuzzSenderKey + `"]}}}`,
+		`{"version":1,"rooms":{"` + fuzzRoomID + `":{"seq":3,"mine":2,"senders":{"` + fuzzSenderKey + `":1},"order":[]}}}`,
+		`{"version":1,"rooms":{"` + fuzzRoomID + `":{"seq":3,"mine":2,"senders":{"` + fuzzSenderKey + `":1},"order":["` + fuzzSenderKey + `","` + fuzzSenderKey + `"]}}}`,
+		`{"version":1,"rooms":{"` + fuzzRoomID + `":{"seq":3,"mine":2,"senders":{},"order":["` + fuzzSenderKey + `"]}}}`,
 	} {
 		f.Add([]byte(seed))
 	}
@@ -205,6 +209,14 @@ func checkCounterBounds(t *testing.T, rooms map[uuid.UUID]*counterRecord) {
 		}
 		if record == nil || record.Senders == nil || len(record.Senders) > maxTrackedSenders {
 			t.Fatal("a record without senders or above the senders bound")
+		}
+		if len(record.Order) != len(record.Senders) {
+			t.Fatal("a record whose order does not list its senders")
+		}
+		for _, key := range record.Order {
+			if _, ok := record.Senders[key]; !ok {
+				t.Fatal("a record whose order names a key it does not hold")
+			}
 		}
 		for _, n := range []int64{record.Seq, record.Mine, record.Expires} {
 			if n < 0 || n > maxSafeSeq {

@@ -16,7 +16,6 @@ import (
 type roomState struct {
 	id         uuid.UUID
 	name       string
-	selfName   string
 	vault      string
 	keys       *e2e.Room
 	member     *e2e.RoomMember
@@ -36,6 +35,7 @@ type roomState struct {
 	seen           map[uuid.UUID]seenMessage // message id → where it was served, and the verdict (bounded)
 	pendingGaps    []Gap                     // found while syncing counters, reported by the next read
 	pendingReplays []Replay                  // likewise
+	unrecorded     map[string]struct{}       // senders the full counter record did not take (bounded)
 }
 
 func isCount(value, max int) bool { return value >= 0 && value <= max }
@@ -86,12 +86,8 @@ func (a *Agent) roomFromCode(id uuid.UUID, code *e2e.RoomCode, vault string, ite
 	if err != nil {
 		return nil, fail(CodeInternal, err)
 	}
-	self, err := e2e.AuraOf(member.Public)
-	if err != nil {
-		return nil, fail(CodeInternal, err)
-	}
 	st := &roomState{
-		id: id, name: roomAura.Name, selfName: self.Name, vault: vault, keys: keys, member: member,
+		id: id, name: roomAura.Name, vault: vault, keys: keys, member: member,
 		maxMembers: code.MaxMembers, expiresAt: time.Unix(code.ExpiresAt(), 0),
 		counters: a.counters.record(id, code.ExpiresAt()), seen: make(map[uuid.UUID]seenMessage),
 	}

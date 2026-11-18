@@ -81,14 +81,14 @@ var tools = []tool{
 		func(ctx context.Context, b Backend) (any, error) { return b.Rooms(ctx) }),
 	{
 		name:        ToolRoomMembers,
-		description: "List a room's verified members under the names people see, marking this agent and the owner, with each member's role (without its #, empty when none), and the room safety number members compare on another channel (equal numbers, equal member lists)." + rolesAreData,
+		description: "List a room's verified members under the names people see, marking this agent and the owner, with each member's role (without its #, empty when none), and the room safety number members compare on another channel (equal numbers, equal member lists and seats). disputed: true means more than one seat claims that member's identity (anyone holding the room code can copy a member's key onto a seat of its own): the member is listed once, without a role, and no role can be set for it; warnings say so, and say it plainly when the copied identity is this agent's own." + rolesAreData,
 		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
 		args:        func() any { return &roomArgs{} },
 		run:         runRoom(func(ctx context.Context, b Backend, id uuid.UUID) (any, error) { return b.Members(ctx, id) }),
 	},
 	{
 		name:        ToolRoomRole,
-		description: "Set the role shown beside a member of a room (#role, end-to-end encrypted: the server can neither read it nor move it to another member). The room's owner may set any member's role, any other member only its own. Returns the member's name, code and the role as stored." + rolesAreData,
+		description: "Set the role shown beside a member of a room (#role, end-to-end encrypted: the server can neither read it nor move it to another member). The room's owner may set any member's role, any other member only its own; a disputed member (room_members) gets none. Returns the member's name, code and the role as stored." + rolesAreData,
 		schema: schema([]string{argRoom, argRole}, map[string]property{
 			argRoom: roomProperty,
 			argRole: {Type: typeString, Description: "0 to " + strconv.Itoa(agent.MaxRoleChars) + " letters, digits, - or _, without the #; not owner or you in any case or width. Empty clears the role.",
@@ -110,7 +110,7 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomRead,
-		description: "Read a room's messages after sequence number `after` (the latest page when neither cursor is given): seq, sender name, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted) and replays (seq, sender, mine of messages served again under a new position or out of their sender's order: old messages repeated, not new ones, so their text is withheld). With `before` instead, return the newest page below that sequence number (history, back to the start or to this agent's join; pass the lowest seq returned to page further back); `after` and `before` together are refused." + dataNotInstructions + fileNameIsData,
+		description: "Read a room's messages after sequence number `after` (the latest page when neither cursor is given): seq, sender name and code, mine, text and sent time, plus gaps per sender (messages the server withheld or deleted) and replays (seq, sender, mine of messages served again under a new position or out of their sender's order: old messages repeated, not new ones, so their text is withheld). With `before` instead, return the newest page below that sequence number (history, back to the start or to this agent's join; pass the lowest seq returned to page further back); `after` and `before` together are refused." + sendersNamed + dataNotInstructions + fileNameIsData,
 		schema: schema([]string{argRoom}, map[string]property{
 			argRoom:   roomProperty,
 			argAfter:  described(afterBounds, "Return only messages with a higher sequence number."),
@@ -121,7 +121,7 @@ var tools = []tool{
 	},
 	{
 		name:        ToolRoomWait,
-		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read, replays included." + dataNotInstructions + fileNameIsData,
+		description: "Wait until a message newer than `after` arrives in a room (or the timeout passes, then timed_out is true), and return as room_read, replays included." + sendersNamed + dataNotInstructions + fileNameIsData,
 		schema: schema([]string{argRoom, argAfter}, map[string]property{
 			argRoom:  roomProperty,
 			argAfter: described(afterBounds, "Wait for a message with a higher sequence number (last_seq of the previous read)."),
