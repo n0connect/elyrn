@@ -181,7 +181,15 @@ NGINX_BASE_BYTES = 8 << 20
 CONNECTIONS_PER_PROXIED = 2
 # Every per-client zone is keyed on $client_network, the backend's client (IPv4, IPv6 /64, a circuit)
 CLIENT_KEYED_ZONES = ("api", "api_per_client", "events_per_client", "files_per_client")
-SHARED_KEYED_ZONES = ("api_all", "events_all", "files", "pages_all")
+SHARED_KEYED_ZONES = ("api_all", "events_all", "files")
+# The message and note pages' global zone counts GET and HEAD alone (nginx.conf): keyed by
+# $page_pool_key, whose map gives GET and HEAD one and the same non-empty key and every other
+# method the empty key, which nginx does not count; any other shape fails
+PAGE_POOL_ZONE = "pages_all"
+PAGE_POOL_KEY = "$page_pool_key"
+PAGE_POOL_MAP = re.compile(r"^map \$request_method \$page_pool_key \{\n(.*?)\n\}", re.MULTILINE | re.DOTALL)
+PAGE_POOL_METHODS = ("GET", "HEAD")
+NGINX_EMPTY_VALUE = '""'
 HUB_GO = ROOT / "backend/internal/realtime/hub.go"
 HUB_PER_CLIENT = re.compile(r"^\s*MaxSubscribersPerClient = (\d+)$", re.MULTILINE)
 # The message page (nginx-site.conf's messages location): the input contract's ciphertext bound,
@@ -765,6 +773,7 @@ def check_nginx_pool(services):
     for zone in SHARED_KEYED_ZONES:
         if zones.get(zone, ("",))[0] != "$shared_pool_key":
             fail("nginx", f"zone {zone} must hold every client under one key")
+    check_page_pool(conf, zones)
     check_client_map(conf)
     # (c) nothing spooled, every body in memory, the largest message page in memory
     if "proxy_max_temp_file_size 0;" not in proxy.splitlines():
@@ -856,6 +865,26 @@ def client_network_reference(packed):
     if packed[:8] == TOR_CIRCUIT_PREFIX:
         return None
     return ":".join(f"{packed[i] << 8 | packed[i + 1]:x}" for i in range(0, 8, 2))
+
+
+def check_page_pool(conf, zones):
+    """pages_all is keyed by $page_pool_key, and its one map gives exactly GET and HEAD the same
+    non-empty key and everything else (default) the empty key: all page requests are counted under
+    one key, no other request is counted."""
+    if zones.get(PAGE_POOL_ZONE, ("",))[0] != PAGE_POOL_KEY:
+        fail("nginx", f"zone {PAGE_POOL_ZONE} must be keyed by {PAGE_POOL_KEY}")
+    maps = PAGE_POOL_MAP.findall(conf)
+    entries = []
+    for line in maps[0].splitlines() if len(maps) == 1 else ():
+        found = re.fullmatch(r"\s*(\S+)\s+(\S+);\s*", line)
+        entries.append((found.group(1), found.group(2)) if found else (None, None))
+    keys = [key for key, _ in entries]
+    values = dict(entries)
+    method_values = {values.get(method) for method in PAGE_POOL_METHODS}
+    if (len(maps) != 1 or sorted(keys) != sorted(PAGE_POOL_METHODS + ("default",))
+            or len(method_values) != 1 or method_values & {None, NGINX_EMPTY_VALUE}
+            or values.get("default") != NGINX_EMPTY_VALUE):
+        fail("nginx", f"{PAGE_POOL_KEY} must map GET and HEAD to one non-empty key and every other method to {NGINX_EMPTY_VALUE}")
 
 
 def check_client_map(conf):
