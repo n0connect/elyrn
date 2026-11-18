@@ -938,7 +938,7 @@ header {
     }
 
     .burn-btn {
-        margin-left: 4px;
+        margin-left: 0;
     }
 
     /* The glyph alone identifies you on small screens; the name lives in its tooltip */
@@ -1309,19 +1309,24 @@ header {
 @media (max-width: 480px) {
     .chat-header {
         flex-wrap: wrap;
+        column-gap: 4px;
+    }
+
+    .chat-actions {
+        gap: 0;
     }
 
     .chat-header .aura-name {
         min-width: 0;
-        flex: 0 1 auto;
+        flex: 1 1 0;
         overflow: hidden;
         text-overflow: ellipsis;
+        font-size: 16px;
     }
 
     .room-meta {
         order: 1;
         flex-basis: 100%;
-        text-align: right;
     }
 }
 

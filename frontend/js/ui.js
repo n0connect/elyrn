@@ -556,7 +556,10 @@ function actionButton(text, extraClass, onClick) {
 
 function showChatView(aura, room) {
     drawGlyph(document.getElementById('peerGlyph'), aura.grid);
-    document.getElementById('peerName').textContent = room ? roomName(aura) : aura.name;
+    // A phone may cut a long name short (styles.css): its title keeps it whole
+    const peerName = document.getElementById('peerName');
+    peerName.textContent = room ? roomName(aura) : aura.name;
+    peerName.title = peerName.textContent;
     document.getElementById('peerCode').textContent = room ? '' : auraCode(aura);
     document.getElementById('safetyPanel').style.display = 'none';
     document.getElementById('burnConfirm').style.display = 'none';
