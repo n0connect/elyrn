@@ -417,14 +417,17 @@ func FuzzAura(f *testing.F) {
 }
 
 // FuzzRoomSafetyNumber: 1..32 keys of 32 bytes give six groups of five digits, the same in any
-// order; a key of another size or a roster out of bounds is refused.
+// order and for any seat count; a key of another size or a roster out of bounds is refused.
 func FuzzRoomSafetyNumber(f *testing.F) {
-	f.Add(mustDecode(f, roomVectorPublicA), 0)
-	f.Add(append(mustDecode(f, roomVectorPublicA), mustDecode(f, roomVectorPublicB)...), 0)
-	f.Add(make([]byte, keySize*(MaxRoomMembers+1)), 0)
-	f.Add(make([]byte, keySize+1), 1)
-	f.Add([]byte{}, 0)
-	f.Fuzz(func(t *testing.T, material []byte, cut int) {
+	f.Add(mustDecode(f, roomVectorPublicA), 0, uint8(1))
+	f.Add(append(mustDecode(f, roomVectorPublicA), mustDecode(f, roomVectorPublicB)...), 0, uint8(2))
+	f.Add(append(mustDecode(f, roomVectorPublicA), mustDecode(f, roomVectorPublicB)...), 0, uint8(3))
+	f.Add(append(mustDecode(f, roomVectorPublicA), mustDecode(f, roomVectorPublicA)...), 0, uint8(2))
+	f.Add(make([]byte, keySize*(MaxRoomMembers+1)), 0, uint8(MaxRoomMembers))
+	f.Add(make([]byte, keySize+1), 1, uint8(1))
+	f.Add([]byte{}, 0, uint8(0))
+	f.Fuzz(func(t *testing.T, material []byte, cut int, seatCount uint8) {
+		seats := int(seatCount)
 		var keys [][]byte
 		for len(material) > 0 && len(keys) < maxFuzzKeys {
 			size := min(len(material), keySize)
@@ -434,7 +437,7 @@ func FuzzRoomSafetyNumber(f *testing.F) {
 			keys = append(keys, material[:size])
 			material = material[size:]
 		}
-		groups, err := RoomSafetyNumber(keys)
+		groups, err := RoomSafetyNumber(keys, seats)
 		valid := len(keys) >= 1 && len(keys) <= MaxRoomMembers
 		for _, key := range keys {
 			valid = valid && len(key) == keySize
@@ -457,7 +460,7 @@ func FuzzRoomSafetyNumber(f *testing.F) {
 		for i, key := range keys {
 			reversed[len(keys)-1-i] = key
 		}
-		if again, err := RoomSafetyNumber(reversed); err != nil || strings.Join(again, " ") != strings.Join(groups, " ") {
+		if again, err := RoomSafetyNumber(reversed, seats); err != nil || strings.Join(again, " ") != strings.Join(groups, " ") {
 			t.Fatal("the safety number depends on the order of the keys")
 		}
 	})

@@ -82,6 +82,11 @@ const (
 	CodeRoleNotAllowed      Code = "E_AGENT_ROLE_NOT_ALLOWED"
 	CodeRoleMemberGone      Code = "E_AGENT_ROLE_MEMBER_GONE"
 	CodeRoleIgnored         Code = "E_AGENT_ROLE_IGNORED" // log only: a served role shown as none
+	CodeRoleMemberDisputed  Code = "E_AGENT_ROLE_MEMBER_DISPUTED"
+
+	// Seats and senders
+	CodeSeatDisputed    Code = "E_AGENT_SEAT_DISPUTED"     // a warning in room_members
+	CodeOwnSeatDisputed Code = "E_AGENT_OWN_SEAT_DISPUTED" // a warning in room_members
 
 	CodeInternal Code = "E_AGENT_INTERNAL"
 )
@@ -150,7 +155,11 @@ var sentences = map[Code]string{
 	CodeRoleNotAllowed:      "Only the room's owner may set another member's role; leave member out to set this agent's own role, or ask the owner.",
 	CodeRoleMemberGone:      "The server no longer lists that member in this room (it left, or the room is gone); call room_members and try again.",
 	CodeRoleIgnored:         "A member's role did not open under the room's code or broke the role rule, so that member is shown without a role; nothing to do unless it repeats.",
-	CodeInternal:            "An internal error occurred in the agent; retry, and report it if it persists.",
+	CodeRoleMemberDisputed:  "More than one seat of this room claims that member's identity, so no role can be set for it (it could land on the seat of whoever copied the identity); compare the room safety number with the members on another channel.",
+
+	CodeSeatDisputed:    "Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat.",
+	CodeOwnSeatDisputed: "Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room.",
+	CodeInternal:        "An internal error occurred in the agent; retry, and report it if it persists.",
 }
 
 // Sentence returns what the operator should do next for code.
@@ -188,6 +197,13 @@ func fail(code Code, cause error) *Error {
 // warn logs a registered code the program recovers from by itself (never a cause's text).
 func warn(code Code) {
 	logger.At(utils.LogLevelWARN, string(code), "warning code=%s", code)
+}
+
+// warningOf is a warning a result carries (logged by its code as warn does): the code and its
+// sentence, never anything else.
+func warningOf(code Code) Warning {
+	warn(code)
+	return Warning{Code: code, Message: Sentence(code)}
 }
 
 // Fail is fail for the packages built on this one (the MCP layer, the command).

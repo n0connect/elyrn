@@ -94,6 +94,21 @@ This is the design of record. Decisions are dated and final unless the owner rev
   it, and a lone surrogate escape in a message's text is refused although the browser would show
   the text with a broken character.
 
+- **D13. A key under two seats is disputed** (audit A2,
+  `room-roster/duplicate-member-key-card-shadows-member`). A card proves the room code, not the key
+  it announces, so any code holder can take a seat with a card carrying another member's key. The
+  agent applies the browser's rule (`rooms.js` `verifyMembers`, `disputed`): every key is listed
+  once, in the order first served; a key that more than one served card opens to is
+  `disputed: true`, shows no role, and `room_role` refuses it (`E_AGENT_ROLE_MEMBER_DISPUTED`);
+  its `owner` is true when any of its cards is flagged owner (only the server flags the owner, and
+  an impostor's seat is never the owner's); `room_members` carries the warning
+  `E_AGENT_SEAT_DISPUTED`, or `E_AGENT_OWN_SEAT_DISPUTED` when the copied key is the agent's own.
+  The room safety number covers the distinct keys and, when the served rows (duplicates and cards
+  that do not open included) outnumber them, `"noaddx/room/seats/v1" || u32be(rows)` after them
+  (`e2e.RoomSafetyNumber`, pinned by the browser's `safety_number_disputed` vector): a room with a
+  duplicated seat shows other digits, a room without one keeps the number it always had. Messages
+  stay attributed by key, as they are authenticated.
+
 ## The program
 
 ```text
@@ -112,8 +127,8 @@ elyrn-agent whoami                      aura name and code, public key, server; 
 | `room_create` | `max_members` (2..server limit), `ttl_hours` (1..server limit) | room id, room code, expiry |
 | `room_join` | `code` | room id, member count, expiry |
 | `rooms` | none | the rooms this account is in: id, name, members, expiry, unread |
-| `room_members` | `room` | per-room names and codes, which one is this agent, which is the owner, each member's role (`""` when none), room safety number |
-| `room_role` | `room`, `role` (0..16 characters, the rule of D10; empty clears), `member` (optional: a code as `room_members` lists it; omitted = this agent) | the member's name and code and the role stored; the owner may set anyone's role, any other member only its own |
+| `room_members` | `room` | per-room names and codes, which one is this agent, which is the owner, each member's role (`""` when none), `disputed` (D13), room safety number, warnings |
+| `room_role` | `room`, `role` (0..16 characters, the rule of D10; empty clears), `member` (optional: a code as `room_members` lists it; omitted = this agent) | the member's name and code and the role stored; the owner may set anyone's role, any other member only its own; a disputed member gets none (D13) |
 | `room_send` | `room`, `text` (1..2000 characters; no word that reads as an account number) | sequence number (`null`, with `stored: true`, when only the refusal of a resent copy confirmed the store) |
 | `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name, mine, text, `file: {name, size}` when the message announces a file (D11), sent time; gaps per sender; replays (seq, sender, mine; no text) |
 | `room_wait` | `room`, `after`, `timeout_seconds` | as `room_read`, after waiting for something new (falls back to reading every 2 s when the event stream cannot be held; `timed_out` only once the timeout has passed) |

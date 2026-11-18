@@ -5,12 +5,16 @@ package e2e
 //
 //	aura          = SHA-256("noaddx/aura" || key): adjective[d0 % 64] "-" noun[d1 % 64], code hex(d2 d3)
 //	room aura     = aura of SHA-256("noaddx/room-aura" || room id)
-//	safety number = six groups of five digits from SHA-256("noaddx/room/safety/v1" || sorted member keys)
+//	safety number = six groups of five digits from SHA-256("noaddx/room/safety/v1" || sorted distinct
+//	                member keys [|| "noaddx/room/seats/v1" || u32be(seats)]) (RoomSafetyNumber)
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -24,6 +28,7 @@ const (
 	infoAura         = "noaddx/aura"
 	infoRoomAura     = "noaddx/room-aura"
 	roomSafetyPrefix = "noaddx/room/safety/v1"
+	roomSeatsLabel   = "noaddx/room/seats/v1"
 
 	auraWords     = 64
 	auraCodeStart = 2
@@ -101,20 +106,34 @@ func RoomAura(roomID uuid.UUID) (Aura, error) {
 	return AuraOf(digest)
 }
 
-// RoomSafetyNumber is what members compare on another channel: equal digits, equal member keys.
-func RoomSafetyNumber(publicKeys [][]byte) ([]string, error) {
-	if len(publicKeys) == 0 || len(publicKeys) > MaxRoomMembers {
+// RoomSafetyNumber is what members compare on another channel: equal digits, equal member keys
+// and, when they differ from the keys, equal seats (room-crypto.js safetyNumber):
+//
+//	digest = SHA-256("noaddx/room/safety/v1" || distinct member keys (ascending bytes)
+//	                 [|| "noaddx/room/seats/v1" || u32be(seats)])
+//
+// seats is every row the server serves in the member list, duplicates and cards that do not open
+// included. The bracketed part is appended only when seats differs from the number of distinct
+// keys, so a room where every card opens to its own key keeps the number it always had, and a room
+// where two seats claim one key (or a card does not open) shows other digits.
+func RoomSafetyNumber(publicKeys [][]byte, seats int) ([]string, error) {
+	if len(publicKeys) == 0 || len(publicKeys) > MaxRoomMembers || seats < 0 || uint64(seats) > math.MaxUint32 {
 		return nil, ErrInvalidInput
 	}
-	raws := make([][]byte, len(publicKeys))
-	for i, key := range publicKeys {
+	raws := make([][]byte, 0, len(publicKeys))
+	for _, key := range publicKeys {
 		if len(key) != keySize {
 			return nil, ErrInvalidInput
 		}
-		raws[i] = key
+		raws = append(raws, key)
 	}
 	sort.Slice(raws, func(i, j int) bool { return bytes.Compare(raws[i], raws[j]) < 0 })
-	digest, err := cryptoengine.SHA256(concat(append([][]byte{[]byte(roomSafetyPrefix)}, raws...)...))
+	raws = slices.CompactFunc(raws, bytes.Equal)
+	parts := append([][]byte{[]byte(roomSafetyPrefix)}, raws...)
+	if seats != len(raws) {
+		parts = append(parts, []byte(roomSeatsLabel), binary.BigEndian.AppendUint32(nil, uint32(seats)))
+	}
+	digest, err := cryptoengine.SHA256(concat(parts...))
 	if err != nil {
 		return nil, err
 	}

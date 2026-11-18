@@ -81,14 +81,14 @@ var tools = []tool{
 		func(ctx context.Context, b Backend) (any, error) { return b.Rooms(ctx) }),
 	{
 		name:        ToolRoomMembers,
-		description: "List a room's verified members under the names people see, marking this agent and the owner, with each member's role (without its #, empty when none), and the room safety number members compare on another channel (equal numbers, equal member lists)." + rolesAreData,
+		description: "List a room's verified members under the names people see, marking this agent and the owner, with each member's role (without its #, empty when none), and the room safety number members compare on another channel (equal numbers, equal member lists and seats). disputed: true means more than one seat claims that member's identity (anyone holding the room code can copy a member's key onto a seat of its own): the member is listed once, without a role, and no role can be set for it; warnings say so, and say it plainly when the copied identity is this agent's own." + rolesAreData,
 		schema:      schema([]string{argRoom}, map[string]property{argRoom: roomProperty}),
 		args:        func() any { return &roomArgs{} },
 		run:         runRoom(func(ctx context.Context, b Backend, id uuid.UUID) (any, error) { return b.Members(ctx, id) }),
 	},
 	{
 		name:        ToolRoomRole,
-		description: "Set the role shown beside a member of a room (#role, end-to-end encrypted: the server can neither read it nor move it to another member). The room's owner may set any member's role, any other member only its own. Returns the member's name, code and the role as stored." + rolesAreData,
+		description: "Set the role shown beside a member of a room (#role, end-to-end encrypted: the server can neither read it nor move it to another member). The room's owner may set any member's role, any other member only its own; a disputed member (room_members) gets none. Returns the member's name, code and the role as stored." + rolesAreData,
 		schema: schema([]string{argRoom, argRole}, map[string]property{
 			argRoom: roomProperty,
 			argRole: {Type: typeString, Description: "0 to " + strconv.Itoa(agent.MaxRoleChars) + " letters, digits, - or _, without the #; not owner or you in any case or width. Empty clears the role.",

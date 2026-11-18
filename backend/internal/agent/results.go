@@ -53,15 +53,26 @@ type MemberInfo struct {
 	Mine  bool   `json:"mine"`
 	Owner bool   `json:"owner"`
 	Role  string `json:"role"`
+	// Disputed: more than one seat claims this member's key, so none of them speaks for it (no
+	// role shown or set); Owner is still true if any of them is the owner's
+	Disputed bool `json:"disputed"`
 }
 
-// MembersResult is a verified roster and the room safety number members compare.
+// Warning is a registered code and its sentence, carried by a result that succeeded.
+type Warning struct {
+	Code    Code   `json:"code"`
+	Message string `json:"message"`
+}
+
+// MembersResult is a verified roster and the room safety number members compare. Warnings say
+// when a seat is disputed, and say it plainly when the disputed key is this agent's own.
 type MembersResult struct {
 	Room            string       `json:"room"`
 	Name            string       `json:"name"`
 	Members         []MemberInfo `json:"members"`
 	UnverifiedCards int          `json:"unverified_cards"`
 	SafetyNumber    string       `json:"safety_number"`
+	Warnings        []Warning    `json:"warnings"`
 }
 
 // RoleSet reports a role stored for a member (Role empty: cleared).

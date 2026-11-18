@@ -90,5 +90,10 @@ func (st *roomState) roleTarget(member string) (*rosterEntry, error) {
 	if found == nil {
 		return nil, fail(CodeRoleMemberUnknown, nil)
 	}
+	if found.disputed() {
+		// Which of its cards is the member's cannot be told: a role sealed for one may land on
+		// the seat of whoever copied the key (rooms.js mayRole)
+		return nil, fail(CodeRoleMemberDisputed, nil)
+	}
 	return found, nil
 }
