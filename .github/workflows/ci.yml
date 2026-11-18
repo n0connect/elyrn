@@ -110,6 +110,7 @@ jobs:
           fuzz ./internal/e2e FuzzAura
           fuzz ./internal/e2e FuzzDecrypt
           fuzz ./internal/e2e FuzzDecryptBindings
+          fuzz ./internal/e2e FuzzExactObject
           fuzz ./internal/e2e FuzzFilePayload
           fuzz ./internal/e2e FuzzMutateRoomMessage
           fuzz ./internal/e2e FuzzOpenRoomCard

@@ -34,6 +34,11 @@ const (
 	// payloadFields and filePayloadFields are the key counts of a payload without and with "f"
 	payloadFields     = 3
 	filePayloadFields = payloadFields + 1
+	// The payload's keys, exactly (the struct tags of payload say the same for the encoder)
+	payloadKeyText    = "t"
+	payloadKeySentAt  = "ts"
+	payloadKeyCounter = "n"
+	payloadKeyFile    = "f"
 )
 
 var (
@@ -212,33 +217,31 @@ func framePayload(p payload) ([]byte, error) {
 }
 
 // decodePayload accepts exactly {"t","ts","n"}, or exactly {"t","ts","n","f"} with a valid "f"
-// (decodeFile), nothing more.
+// (decodeFile), nothing more, read exactly as the browser reads it (exactObject): keys byte for
+// byte, valid UTF-8, no lone surrogate escape, t a string, ts and n safe integers above zero.
 func decodePayload(framed []byte) (*Message, error) {
 	body, err := unframe(framed)
 	if err != nil {
 		return nil, err
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
+	fields, err := exactObject(body)
+	if err != nil {
 		return nil, ErrBadMessage
 	}
-	fileRaw, withFile := fields["f"]
+	fileRaw, withFile := fields[payloadKeyFile]
 	want := payloadFields
 	if withFile {
 		want = filePayloadFields
 	}
-	if len(fields) != want {
+	text, okText := exactString(fields[payloadKeyText])
+	sentAt, okTime := exactSafeInteger(fields[payloadKeySentAt])
+	counter, okCounter := exactSafeInteger(fields[payloadKeyCounter])
+	if len(fields) != want || !okText || !okTime || !okCounter || sentAt <= 0 || counter < 1 {
 		return nil, ErrBadMessage
 	}
-	var p payload
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&p); err != nil || p.TS <= 0 || p.N < 1 {
-		return nil, ErrBadMessage
-	}
-	msg := &Message{Text: p.T, SentAt: p.TS, Counter: p.N}
+	msg := &Message{Text: text, SentAt: sentAt, Counter: counter}
 	if withFile {
-		if msg.File, err = decodeFile(fileRaw, p.F); err != nil {
+		if msg.File, err = decodeFile(fileRaw); err != nil {
 			return nil, err
 		}
 	}

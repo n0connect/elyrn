@@ -74,6 +74,21 @@ This is the design of record. Decisions are dated and final unless the owner rev
   makes the message `broken`. The agent checks `/me`'s `file_max_bytes` against
   `262144..104857600` like the other limits, so it needs a server that reports it.
 
+## Decisions (18 Nov 2026, after the security audit)
+
+- **D12. The Go reader takes exactly what the browser takes** (audit F3). A payload and a file
+  description are read by `backend/internal/e2e/strictjson.go`, never by binding a struct:
+  keys are compared byte for byte after JSON unescaping (`"T"`, `"N"`, a Kelvin sign for `k`
+  no longer pass as `t`, `n`, `k`), the bytes must be valid UTF-8 and hold no lone surrogate
+  escape, `t` must be a string and `ts`, `n`, `s` integer literals within JavaScript's safe
+  integers. This holds whichever `encoding/json` the toolchain builds in (Go 1.27's jsonv2
+  default, or the legacy decoder): nothing the decoder could relax is left to it. A repeated key
+  keeps its last value, as `JSON.parse` does: refusing it would make a payload readable to people
+  and unreadable to the agent. Known limits, Go being the stricter side: a number written with a
+  fraction or an exponent (`1.0`, `1e3`) is refused although `JSON.parse` reads a whole number from
+  it, and a lone surrogate escape in a message's text is refused although the browser would show
+  the text with a broken character.
+
 ## The program
 
 ```text

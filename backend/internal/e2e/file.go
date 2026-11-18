@@ -70,23 +70,41 @@ func fileNameValid(name string) bool {
 		strings.IndexFunc(name, func(r rune) bool { return !fileNameRune(r) }) < 0
 }
 
-// decodeFile validates "f" field by field: exactly the five keys, each of its shape and range.
-func decodeFile(raw json.RawMessage, p *filePayload) (*File, error) {
-	var keys map[string]json.RawMessage
-	if p == nil || json.Unmarshal(raw, &keys) != nil || len(keys) != fileFields {
+// The keys of "f", exactly (filePayload's tags say the same for the test-only writer)
+const (
+	fileFieldID   = "i"
+	fileFieldKey  = "k"
+	fileFieldSize = "s"
+	fileFieldHash = "h"
+	fileFieldName = "n"
+)
+
+// decodeFile validates "f" field by field, read exactly (exactObject): an object of exactly the
+// five keys, each of its shape and range.
+func decodeFile(raw json.RawMessage) (*File, error) {
+	members, err := exactObject(raw)
+	if err != nil || len(members) != fileFields {
 		return nil, ErrBadMessage
 	}
-	id, ok := utils.ParseCanonicalUUIDv4(p.I)
-	if !ok || p.S < fileMinSize || p.S > config.MaxFileBytesBound || !fileNameValid(p.N) {
+	idText, okID := exactString(members[fileFieldID])
+	keyText, okKey := exactString(members[fileFieldKey])
+	hashText, okHash := exactString(members[fileFieldHash])
+	name, okName := exactString(members[fileFieldName])
+	size, okSize := exactSafeInteger(members[fileFieldSize])
+	if !okID || !okKey || !okHash || !okName || !okSize {
 		return nil, ErrBadMessage
 	}
-	key, err := decodeExact(p.K, fileKeySize)
+	id, ok := utils.ParseCanonicalUUIDv4(idText)
+	if !ok || size < fileMinSize || size > config.MaxFileBytesBound || !fileNameValid(name) {
+		return nil, ErrBadMessage
+	}
+	key, err := decodeExact(keyText, fileKeySize)
 	if err != nil {
 		return nil, ErrBadMessage
 	}
-	hash, err := decodeExact(p.H, fileHashSize)
+	hash, err := decodeExact(hashText, fileHashSize)
 	if err != nil {
 		return nil, ErrBadMessage
 	}
-	return &File{ID: id, Key: key, Size: p.S, Hash: hash, Name: p.N}, nil
+	return &File{ID: id, Key: key, Size: size, Hash: hash, Name: name}, nil
 }
