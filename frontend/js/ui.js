@@ -97,6 +97,8 @@ const UI_TEXT = Object.freeze({
     HOURS_OPTION: (hours) => `${hours} hours`,
     ROOM_EXPIRY_UNKNOWN: 'when its time is up',
     ROOM_CODE_HINT: (left) => `anyone holding this code can join while a seat is free · the room vanishes ${left} · share it only over a channel you trust`,
+    // a passive mark beside a name: plain text after the middle dot, never framed
+    MARK: (text) => `· ${text}`,
     YOU_TAG: 'you',
     OWNER_TAG: 'owner',
     BEFRIEND: 'befriend',
@@ -106,6 +108,16 @@ const UI_TEXT = Object.freeze({
     LEFT_WANTS_FRIENDS: 'left · wants to be friends',
     ACCEPT: 'accept',
     IGNORE: 'ignore',
+    // a member's role: the tile that opens its editor, and the editor's cells
+    ROLE: 'role',
+    ROLE_TITLE: 'role: a short label shown beside this member to everyone in the room',
+    ROLE_INPUT: 'role',
+    ROLE_SET: 'set',
+    ROLE_SET_TITLE: 'set this role',
+    ROLE_CLEAR: 'clear',
+    ROLE_CLEAR_TITLE: 'clear this role',
+    ROLE_CANCEL: 'cancel',
+    ROLE_CANCEL_TITLE: 'cancel without changing the role',
     // files: the received card (file-card.js) and the chosen file's chip (file-composer.js)
     FILE_SAVE: 'save',
     FILE_FETCHING: 'fetching',
@@ -158,6 +170,28 @@ function nameIconButton(button, name, caption) {
     } else {
         button.title = name;
     }
+}
+
+// An icon control made in code, named the same way: a tile (iconTile) or a cell of a joined box
+// (boxCell)
+function iconButton(className, holderClass, icon, name, caption) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    const holder = document.createElement('span');
+    holder.className = holderClass;
+    Pixels.setIcons(holder, icon);
+    button.appendChild(holder);
+    nameIconButton(button, name, caption);
+    return button;
+}
+
+function iconTile(icon, name, caption) {
+    return iconButton('icon-btn', 'icon-tile', icon, name, caption);
+}
+
+function boxCell(icon, name, caption) {
+    return iconButton('box-cell', 'icon-bare', icon, name, caption);
 }
 
 Pixels.install(document);
@@ -975,7 +1009,7 @@ function memberRow(entry) {
 function memberTag(text) {
     const tag = document.createElement('span');
     tag.className = 'member-tag';
-    tag.textContent = text;
+    tag.textContent = UI_TEXT.MARK(text);
     return tag;
 }
 

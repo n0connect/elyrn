@@ -16,7 +16,7 @@ const source = read('../js/pixels.js');
 const Pixels = load({}, ['../js/pixels.js']).get('Pixels');
 const UI_TEXT = vm.runInNewContext('(' + ui.match(/const UI_TEXT = (Object\.freeze\(\{[\s\S]*?\n\}\));/)[1] + ')');
 
-const SET = ['bell-on', 'bell-off', 'logout', 'members', 'code', 'burn', 'back', 'send', 'attach', 'copy', 'close', 'chevron', 'verify'];
+const SET = ['bell-on', 'bell-off', 'logout', 'members', 'code', 'burn', 'back', 'send', 'attach', 'copy', 'close', 'chevron', 'verify', 'role', 'clear'];
 
 test('the table: every icon of the set, three frames, each 10x10 of only the two symbols', () => {
     assert.deepEqual(Object.keys(Pixels.ICONS).sort(), [...SET].sort());
@@ -94,9 +94,9 @@ test('a tile shows its caption by one rule from one attribute, and never has a t
     // one rule writes every caption, from data-caption; it shows on hover (never on touch) and focus
     assert.match(ui, /const CAPTION_ATTRIBUTE = 'data-caption';/);
     assert.equal((css.match(/content: attr\(data-caption\);/g) || []).length, 1);
-    assert.match(css, /@media \(hover: hover\) \{\n\s*\.icon-btn\[data-caption\]:hover::after \{\n\s*visibility: visible;/);
-    assert.match(css, /\.icon-btn\[data-caption\]:focus-visible::after \{\n\s*visibility: visible;/);
-    assert.match(css, /\.icon-btn\[data-caption\]:last-child::after \{\n\s*left: auto;\n\s*right: 0;/);
+    assert.match(css, /@media \(hover: hover\) \{\n\s*\[data-caption\]:hover::after \{\n\s*visibility: visible;/);
+    assert.match(css, /\[data-caption\]:focus-visible::after \{\n\s*visibility: visible;/);
+    assert.match(css, /\[data-caption\]:last-child::after \{\n\s*left: auto;\n\s*right: 0;/);
     assert.match(css, /animation: caption-in var\(--caption-steps-ms\) steps\(3, end\) both;/);
     // a caption replaces the title: nameIconButton removes it, and markup never has both
     const fn = ui.slice(ui.indexOf('function nameIconButton'), ui.indexOf('\n}\n', ui.indexOf('function nameIconButton')));
@@ -106,7 +106,7 @@ test('a tile shows its caption by one rule from one attribute, and never has a t
     }
     // the motion goes with reduced motion; the tile is the aura's box
     const reduced = [...css.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join('\n');
-    assert.match(reduced, /\.pixel-frame,\n\s*\.icon-btn\[data-caption\]::after \{\n\s*animation: none !important;/);
+    assert.match(reduced, /\.pixel-frame,\n\s*\[data-caption\]::after \{\n\s*animation: none !important;/);
     assert.match(css, /\.icon-tile,\n\.aura-glyph \{[^}]*width: var\(--glyph-size\);[^}]*height: var\(--glyph-size\);[^}]*padding: var\(--tile-pad\);[^}]*border: 1px solid var\(--border\);/);
     assert.match(css, /animation-timing-function: step-end;/);
 });
@@ -114,7 +114,7 @@ test('a tile shows its caption by one rule from one attribute, and never has a t
 test('a conversation fits the window: dvh with its vh fallback, the list takes the rest', () => {
     const block = css.slice(css.indexOf('body.in-conversation {'));
     assert.match(block, /^body\.in-conversation \{\n\s*height: 100vh;\n\s*height: 100dvh;\n\s*min-height: var\(--conversation-min-height\);/);
-    assert.match(block, /body\.in-conversation #chatView > \.message-list \{\n\s*flex: 1 1 0;\n\s*height: auto;\n\s*min-height: 0;/);
+    assert.match(block, /body\.in-conversation #chatView > \.message-list \{\n\s*flex: 1 1 0;\n\s*height: auto;\n\s*min-height: var\(--list-min-height\);/);
     assert.match(css, /--conversation-min-height: \d+px;/);
     assert.match(ui, /const CONVERSATION_CLASS = 'in-conversation';/);
     assert.match(ui, /setConversationShown\(activeId === 'appContainer' && isShown\('chatView'\)\);/);
@@ -130,5 +130,34 @@ test('no control uses a shadow, and none lifts or moves on hover', () => {
             assert.doesNotMatch(body, /box-shadow:\s*(?!\s|none)/, sel);
         }
         if (/:hover/.test(sel)) assert.doesNotMatch(body, /transform:\s*(?!\s|none)|translate:/, sel);
+    }
+});
+
+test('one frame for value boxes, input rows and the composer: a copy control is a cell of its box', () => {
+    assert.match(css, /\.account-number-box,\n\.join-input-group,\n\.composer \{\n\s*display: flex;\n\s*align-items: stretch;\n\s*gap: 0;\n\s*border: 1px solid var\(--border\);/);
+    const copies = [...html.matchAll(/<button\b[^>]*\bclass="([^"]*\bcopy-btn\b[^"]*)"[^>]*>/g)];
+    assert.equal(copies.length, 5);
+    for (const [tag, cls] of copies) assert.equal(cls, 'box-cell copy-btn', tag);
+    // each sits last in its value box, so its divider is on its left and its caption anchors right
+    assert.equal((html.match(/<div class="account-number-box[^"]*"[^>]*>\s*<code id="\w+"><\/code>\s*<button type="button" id="copy\w*Btn" class="box-cell copy-btn">/g) || []).length, 5);
+    // no rounded corners, heavier border or shadow on a value
+    for (const file of ['../styles.css', '../account-number-animation.css']) {
+        const source = read(file);
+        const code = [...source.matchAll(/\.account-number-box code[^{]*\{([^}]*)\}/g)].map((m) => m[1]).join('\n');
+        assert.doesNotMatch(code, /border-radius|border: 2px|box-shadow/, file);
+    }
+});
+
+test('an aura glyph is data: no frame or inversion rule can reach it', () => {
+    // the glyph's drawing has no frame class; every frame rule needs .icon > .pixel-frame
+    assert.match(source, /return draw\(svg, \[rowsOf\(grid\)\], null\);/);
+    assert.match(source, /if \(frameClass\) group\.setAttribute\('class', frameClass\);/);
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const [, selector] of bare.matchAll(/([^{}]*\.pixel-frame[^{}]*)\{/g)) {
+        for (const part of selector.split(',').filter(p => p.includes('pixel-frame'))) assert.match(part.trim(), /\.icon > \.pixel-frame/, part);
+    }
+    // no inversion rule names a glyph
+    for (const [, selector, body] of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        if (/background: var\(--fg\)/.test(body)) assert.doesNotMatch(selector, /aura-glyph/, selector.trim());
     }
 });

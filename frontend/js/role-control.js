@@ -15,12 +15,11 @@ const RoleControl = (() => {
     'use strict';
 
     const ROLE_MARK = '#';
-    const OPEN_LABEL = 'role';
-    const SET_LABEL = 'set';
-    const CLEAR_LABEL = 'clear';
-    const CANCEL_LABEL = 'cancel';
-    const OPEN_HINT = 'a short label shown beside this member to everyone in the room';
-    const INPUT_LABEL = 'role';
+    // The tile and the editor's cells (pixels.js icons; names and captions are UI_TEXT's)
+    const OPEN_ICON = 'role';
+    const SET_ICON = 'verify';
+    const CLEAR_ICON = 'clear';
+    const CANCEL_ICON = 'close';
     const ACTION = 'role';
 
     // The editor left open: { card, draft } (memory only), so a roster refresh while typing
@@ -32,7 +31,7 @@ const RoleControl = (() => {
         if (typeof role !== 'string' || role === '') return null;
         const span = document.createElement('span');
         span.className = 'member-role';
-        span.textContent = ROLE_MARK + role;
+        span.textContent = UI_TEXT.MARK(ROLE_MARK + role);
         return span;
     }
 
@@ -47,10 +46,8 @@ const RoleControl = (() => {
         });
     }
 
-    function button(text, onClick) {
-        const element = document.createElement('button');
-        element.className = 'menu-opt';
-        element.textContent = text;
+    function cell(icon, name, caption, onClick) {
+        const element = boxCell(icon, name, caption);
         element.addEventListener('click', onClick);
         return element;
     }
@@ -60,33 +57,38 @@ const RoleControl = (() => {
     function control({ room, entry, save, rerender }) {
         if (!Rooms.mayEditRole(room, entry)) return null;
         if (editing && editing.card === entry.card) return editor({ entry, save, rerender });
-        const open = button(OPEN_LABEL, () => {
+        const open = iconTile(OPEN_ICON, UI_TEXT.ROLE_TITLE, UI_TEXT.ROLE);
+        open.classList.add('member-action');
+        open.addEventListener('click', () => {
             editing = { card: entry.card, draft: entry.role || '' };
             rerender();
             const field = document.querySelector('#memberList .role-input');
             if (field) field.focus();
         });
-        open.title = OPEN_HINT;
         return open;
     }
 
     function editor({ entry, save, rerender }) {
+        // One joined box on its own line (the frame of the composer and the value boxes): the '#'
+        // cell, the input, then set, clear (where a role is set) and cancel; the reason under it
+        const editorLine = document.createElement('div');
+        editorLine.className = 'role-editor';
         const box = document.createElement('div');
-        box.className = 'role-editor';
+        box.className = 'join-input-group role-box';
         const mark = document.createElement('span');
-        mark.className = 'member-role';
+        mark.className = 'box-mark';
         mark.textContent = ROLE_MARK;
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'role-input';
-        input.setAttribute('aria-label', INPUT_LABEL);
+        input.setAttribute('aria-label', UI_TEXT.ROLE_INPUT);
         input.autocomplete = 'off';
         input.spellcheck = false;
         input.value = editing.draft;
         const reason = document.createElement('span');
         reason.className = 'role-reason';
         reason.setAttribute('role', 'status');
-        const set = button(SET_LABEL, () => submit(input.value));
+        const set = cell(SET_ICON, UI_TEXT.ROLE_SET_TITLE, UI_TEXT.ROLE_SET, () => submit(input.value));
         const judge = () => {
             editing.draft = input.value;
             const checked = validateRoleText(input.value);
@@ -110,13 +112,14 @@ const RoleControl = (() => {
             if (event.key === 'Enter' && !set.disabled) submit(input.value);
         });
         box.append(mark, input, set);
-        if (entry.role) box.appendChild(button(CLEAR_LABEL, () => submit('')));
-        box.append(button(CANCEL_LABEL, () => {
+        if (entry.role) box.appendChild(cell(CLEAR_ICON, UI_TEXT.ROLE_CLEAR_TITLE, UI_TEXT.ROLE_CLEAR, () => submit('')));
+        box.append(cell(CANCEL_ICON, UI_TEXT.ROLE_CANCEL_TITLE, UI_TEXT.ROLE_CANCEL, () => {
             editing = null;
             rerender();
-        }), reason);
+        }));
+        editorLine.append(box, reason);
         judge();
-        return box;
+        return editorLine;
     }
 
     // Seals and stores text ('' clears) as entry's role; reports any refusal by its own code.

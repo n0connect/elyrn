@@ -114,7 +114,7 @@ test('the bell has two shapes in one place: solid when pressed, hollow and struc
     assert.match(css, /\.bell-btn\[aria-pressed="true"\] \.icon-bell-off,\n\.bell-btn\[aria-pressed="false"\] \.icon-bell-on \{\n\s*display: none;/);
     // the tile is the box; its 40 px hit area reaches round it
     assert.match(css, /\.icon-btn::before,\n\.me-badge::before \{\n\s*content: '';\n\s*position: absolute;\n\s*inset: calc\(\(var\(--tile-box\) - var\(--touch-min\)\) \/ 2\);/);
-    assert.match(css, /\.icon-btn:focus-visible,\n\.me-badge:focus-visible,\n\.add-btn:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
+    assert.match(css, /\.icon-btn:focus-visible,\n\.me-badge:focus-visible,\n\.box-cell:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
     // at the far right, just before logout
     const header = html.match(/<header>([\s\S]*?)<\/header>/)[1];
     const ids = [...header.matchAll(/<button[^>]*\bid="([^"]+)"/g)].map((m) => m[1]);

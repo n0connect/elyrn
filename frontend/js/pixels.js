@@ -180,6 +180,30 @@ const Pixels = (() => {
             '...##.....  ..........  ...##.....',
             '..........  ..........  ..........',
             '..........  ..........  ..........'
+        ],
+        'role': [
+            '...##.##..  ....##.##.  ...##.##..',
+            '...##.##..  ....##.##.  ...##.##..',
+            '.########.  ..########  .########.',
+            '.########.  ..########  .########.',
+            '..##.##...  ...##.##..  ..##.##...',
+            '..##.##...  ...##.##..  ..##.##...',
+            '########..  .########.  ########..',
+            '########..  .########.  ########..',
+            '.##.##....  ..##.##...  .##.##....',
+            '.##.##....  ..##.##...  .##.##....'
+        ],
+        'clear': [
+            '..........  ..........  ..........',
+            '..........  ..........  ..........',
+            '..........  ..........  ..........',
+            '..........  ..........  ..........',
+            '.########.  ..######..  .########.',
+            '.########.  ..######..  .########.',
+            '..........  ..........  ..........',
+            '..........  ..........  ..........',
+            '..........  ..........  ..........',
+            '..........  ..........  ..........'
         ]
     });
 
@@ -213,8 +237,10 @@ const Pixels = (() => {
         });
     }
 
-    // Draws frames (lists of rows of one size) into svg, replacing what it held
-    function draw(svg, frames) {
+    // Draws frames (lists of rows of one size) into svg, replacing what it held. Only an icon's
+    // frames are FRAME_CLASS groups (the ones styles.css steps through on hover); a glyph is data
+    // and its one drawing is a plain group that no frame or inversion rule can reach.
+    function draw(svg, frames, frameClass = FRAME_CLASS) {
         while (svg.firstChild) svg.removeChild(svg.firstChild);
         const height = frames[0].length;
         const width = frames[0][0].length;
@@ -224,7 +250,7 @@ const Pixels = (() => {
         svg.setAttribute('focusable', 'false');
         frames.forEach(rows => {
             const group = svgElement('g');
-            group.setAttribute('class', FRAME_CLASS);
+            if (frameClass) group.setAttribute('class', frameClass);
             appendRows(group, rows);
             svg.appendChild(group);
         });
@@ -238,7 +264,7 @@ const Pixels = (() => {
 
     // The aura glyph: drawn into an existing svg, or a new one
     function drawGlyph(svg, grid) {
-        return draw(svg, [rowsOf(grid)]);
+        return draw(svg, [rowsOf(grid)], null);
     }
 
     function glyph(grid, className) {

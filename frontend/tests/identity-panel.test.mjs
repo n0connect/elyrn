@@ -42,8 +42,9 @@ test('the identity badge is a real button that names and controls its panel', ()
     assert.match(render, /badge\.title = UI_TEXT\.ME_TITLE\(aura\.name, aura\.code\);\n\s*badge\.setAttribute\('aria-label', badge\.title\);/);
     // the panel shows glyph, name and code the one way every aura is shown
     assert.match(render, /clearChildren\(line\);\n\s*appendAura\(line, aura\);/);
-    assert.match(css, /\.me-badge:focus-visible,\n\.add-btn:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
-    assert.match(css, /\.me-badge\[aria-expanded="true"\] \.aura-glyph,/);
+    assert.match(css, /\.me-badge:focus-visible,\n\.box-cell:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
+    // the badge's glyph is data: it never inverts or plays frames
+    assert.doesNotMatch(css, /aura-glyph[^{,]*,?\s*\{[^}]*background: var\(--fg\)/);
 });
 
 test('the identity panel is a pair panel: what it is, then delete set apart by a rule', () => {
