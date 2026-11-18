@@ -769,16 +769,16 @@ async function deletionOutcome(result) {
 }
 
 // Forgets the account number and pending token this page holds and every flag about them.
-// The number was copied for the user to save: it is cleared from the clipboard if the clipboard
-// still holds it (best effort, utils.js clearClipboardIfHolds; never throws). Resolves once that
-// clipboard attempt settled.
+// The number was copied for the user to save: elyrn tries to clear it from the clipboard if the
+// clipboard still holds it, and tells the user when it could not (utils.js clearClipboardOrWarn;
+// never throws). Resolves once that clipboard attempt settled.
 function dropRegistrationSecrets() {
     const accountNumber = pendingRegistrationAccountNumber;
     pendingRegistrationAccountNumber = null;
     pendingRegistrationToken = null;
     registrationAccountMayExist = false;
     registrationLeaveArmed = false;
-    return accountNumber ? clearClipboardIfHolds(accountNumber) : Promise.resolve();
+    return accountNumber ? clearClipboardOrWarn(accountNumber) : Promise.resolve();
 }
 
 // Gives up the registration in progress, whatever it was doing: every run still in flight stops

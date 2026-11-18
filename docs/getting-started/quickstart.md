@@ -97,8 +97,8 @@ To test end-to-end encryption locally between two parties:
 1. **Party A (Normal Window):**
    - Click **new identity**, then **copy**.
    - Your browser solves a Proof-of-Work (PoW) hashcash challenge in a background Web Worker while the account number scrambles; then your **AccountNumber** appears (43 characters) and is copied to the clipboard. **Save it in a password manager:** it is the only way back into this identity.
-   - Click **continue →** to create the account (a second, fresh PoW).
-   - Click **+ invite**. Every invite costs one PoW too: the code scrambles for a few seconds, then appears (`elyrn:` + 43 characters) and is copied; two minutes later the clipboard is cleared if it still holds the invite, as for a room code.
+   - Click **continue →** to create the account (a second, fresh PoW). elyrn. then tries to clear the number from the clipboard, and tells you if the browser did not let it (*"could not clear the clipboard — copy something else to overwrite it"*). Clipboard histories and clipboard sync between devices may keep a copy either way.
+   - Click **+ invite**. Every invite costs one PoW too: the code scrambles for a few seconds, then appears (`elyrn:` + 43 characters) and is copied; two minutes later elyrn. tries to clear the clipboard if it still holds the invite, as for a room code, and tells you when it could not.
 
 2. **Party B (Incognito / Second Browser Window):**
    - Open a private window to `http://localhost` and create a second identity the same way.
@@ -123,7 +123,8 @@ Rooms need no pairing: whoever holds the room code can join until the room is fu
 
 1. **Party A:** click **+ room**, pick how many people it **holds** and how long it **lives**,
    then **open room**. After a proof of work the room code appears (`elyrn#` + 50 characters) and
-   is copied; the clipboard is cleared two minutes later if it still holds it.
+   is copied; two minutes later elyrn. tries to clear the clipboard if it still holds the code,
+   and tells you when it could not (a browser may refuse it while the tab is not in front).
 2. **Party B, C …:** click **join**, paste the room code, press **join**.
 3. **Talk.** Every message names its sender by glyph, name and code. **members** lists who is in
    the room and shows the room safety number: compare it on another channel; equal numbers mean

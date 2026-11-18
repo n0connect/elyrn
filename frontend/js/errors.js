@@ -128,6 +128,9 @@ const Errors = (() => {
         W_IDENTITY_NOT_KEPT: w('this browser cannot keep your identity — you will need your account number after a reload'),
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_COPY_MANUALLY: w('copy it manually'),
+        // A clear of the clipboard (utils.js clearClipboardOrWarn) was refused or did not settle
+        // within CLIPBOARD_WRITE_TIMEOUT_MS: the account number or code may still be in it
+        W_CLIPBOARD_NOT_CLEARED: w('could not clear the clipboard — copy something else to overwrite it'),
         // The robot door's challenge cannot run here (no random source, or no SHA-256 outside
         // https). The door is theatre and gates nothing, so the visitor is let through.
         W_DOOR_CHECK_UNAVAILABLE: w('this browser cannot run the door check — come in anyway'),
@@ -246,7 +249,6 @@ const Errors = (() => {
         // The Clipboard API refused the copy or did not settle within CLIPBOARD_WRITE_TIMEOUT_MS
         // (an unfocused tab can wait forever): the selection fallback is tried next (utils.js)
         W_CLIPBOARD_WRITE_FAILED: 'W_CLIPBOARD_WRITE_FAILED',
-        W_CLIPBOARD_NOT_CLEARED: 'W_CLIPBOARD_NOT_CLEARED',
         E_SCRAMBLE_ELEMENTS_MISSING: 'E_SCRAMBLE_ELEMENTS_MISSING',
         W_KEYSTORE_UNAVAILABLE: 'W_KEYSTORE_UNAVAILABLE',
         // A stored identity record gave no identity at load (an engine that cannot read its key
