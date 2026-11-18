@@ -14,9 +14,24 @@ const CounterRecords = (() => {
     const parked = new Map();
     let evictionWarned = false;       // W_COUNTER_RECORDS_EVICTED is logged once per page load
 
+    // The senders a record never loses to the sender bound (counters.js THE SENDER BOUND): in a
+    // room, this device's own member key and the current roster's; a pair names two senders at most
+    function keptSenders(conv) {
+        if (!conv.room) return [];
+        return [conv.room.member.publicKey, ...(conv.room.roster || []).map(entry => entry.publicKey)];
+    }
+
+    // A record as stored, read within the sender bound; a stored record above it (written by an
+    // older build) keeps this device's own entry and as many others as the bound allows
+    async function readMark(conv) {
+        const read = Counters.parseBounded(await Keystore.loadCounters(conv.id), keptSenders(conv));
+        if (read.evicted > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
+        return read.record;
+    }
+
     // What this device remembers of a conversation; the in-memory copy stands in when storage fails
     async function loadMark(conv) {
-        return Counters.merge(Counters.parse(await Keystore.loadCounters(conv.id)), conv.mark);
+        return Counters.merge(await readMark(conv), conv.mark);
     }
 
     // Records only grow (each field is a high-water mark), so a save merges with the record as
@@ -31,16 +46,20 @@ const CounterRecords = (() => {
     }
 
     // The record as stored right now (Counters.EMPTY when there is none or storage failed)
-    async function storedMark(conv) {
-        return Counters.parse(await Keystore.loadCounters(conv.id));
+    function storedMark(conv) {
+        return readMark(conv);
     }
 
-    // Keeps record as this tab's last one (it stands in when storage fails) and stores it unless
-    // the stored one already says the same
+    // Keeps record, within the sender bound (Counters.bound: off-roster senders first, oldest
+    // first, never this device's own entry or the roster's; logged when any goes), as this tab's
+    // last one (it stands in when storage fails) and stores it unless the stored one already says
+    // the same. Every record this device writes therefore reads back whole.
     async function writeMark(conv, stored, record) {
-        conv.mark = record;
-        if (!Counters.same(record, stored)) {
-            await Keystore.saveCounters(conv.id, record, conv.room ? conv.room.expiresAt : 0);
+        const kept = Counters.bound(record, keptSenders(conv));
+        if (kept.evicted > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
+        conv.mark = kept.record;
+        if (!Counters.same(kept.record, stored)) {
+            await Keystore.saveCounters(conv.id, kept.record, conv.room ? conv.room.expiresAt : 0);
         }
     }
 

@@ -230,3 +230,68 @@ test('bound: past the most records kept, the least recently used go first and th
     delete records.n1;
     assert.deepEqual(dropped(records), { drop: ['n2', 'n3'], evicted: false });
 });
+
+// ---------- the sender bound (fix-spec C2) ----------
+
+// A 43-character key per index, from the base64url alphabet, as a member could mint them (never
+// one of ALICE, BOB or OWN: those start with another letter)
+function mintedKey(i) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let out = 'm';
+    for (let n = i, d = 0; d < 42; d++, n = Math.floor(n / 64)) out += alphabet[n % 64];
+    return out;
+}
+
+test('a stored record past the sender bound is read bounded, never as no record: own counter and seq kept', () => {
+    const OWN = 'O'.repeat(43);
+    const flood = Array.from({ length: Counters.MAX_SENDERS + 1 }, (_, i) => [mintedKey(i), 1]);
+    // What a build before the bound wrote: the device's own entry last, the flood before it
+    const raw = { seq: 9000, mine: 50, senders: [...flood, [OWN, 50]] };
+    const read = Counters.parseBounded(raw, [OWN, ALICE]);
+    assert.notEqual(read.record, Counters.EMPTY);
+    assert.equal(read.record.seq, 9000);
+    assert.equal(read.record.mine, 50);
+    assert.equal(read.record.senders.length, Counters.MAX_SENDERS);
+    assert.equal(new Map(read.record.senders).get(OWN), 50, 'the device\'s own entry is never evicted');
+    assert.equal(read.evicted, 2);
+    // the oldest go first: the first two minted keys
+    const kept = new Map(read.record.senders);
+    assert.equal(kept.has(mintedKey(0)), false);
+    assert.equal(kept.has(mintedKey(1)), false);
+    assert.equal(kept.has(mintedKey(2)), true);
+    // parse() is parseBounded's record
+    assert.ok(Counters.same(Counters.parse(raw, [OWN]), read.record));
+});
+
+test('the write side keeps the bound: what bound() gives back reads back whole', () => {
+    const OWN = 'O'.repeat(43);
+    const roster = [ALICE, BOB];
+    // The roster's and the device's own entries come first (oldest), the minted ones after
+    const state = Counters.ledger(Counters.parse({ seq: 1, mine: 3, senders: [[ALICE, 2], [BOB, 4], [OWN, 3]] }));
+    for (let i = 0; i < Counters.MAX_SENDERS + 10; i++) Counters.admit(state, mintedKey(i), 1);
+    // A snapshot is built unbounded (as a sync builds it); the bound is the write's
+    const record = Counters.snapshot(state, 2, 3);
+    assert.ok(record.senders.length > Counters.MAX_SENDERS);
+    const bounded = Counters.bound(record, [OWN, ...roster]);
+    assert.equal(bounded.record.senders.length, Counters.MAX_SENDERS);
+    assert.equal(bounded.evicted, record.senders.length - Counters.MAX_SENDERS);
+    const kept = new Map(bounded.record.senders);
+    for (const key of [OWN, ...roster]) assert.ok(kept.has(key), 'a kept sender was evicted');
+    assert.equal(bounded.record.mine, 3);
+    // Stored and read back as Keystore does, with nothing more to evict
+    const again = Counters.parseBounded(JSON.parse(JSON.stringify(bounded.record)), [OWN, ...roster]);
+    assert.equal(again.evicted, 0);
+    assert.ok(Counters.same(again.record, bounded.record));
+    // A record within the bound is the same object
+    const small = Counters.parse({ seq: 1, mine: 1, senders: [[ALICE, 1]] });
+    assert.equal(Counters.bound(small, []).record, small);
+});
+
+test('counter-records.js bounds every record it writes and every record it reads (one home: Counters.bound)', () => {
+    const source = readFileSync(new URL('../js/counter-records.js', import.meta.url), 'utf8');
+    const write = source.slice(source.indexOf('async function writeMark'));
+    assert.match(write.slice(0, write.indexOf('\n    }\n')), /Counters\.bound\(record, keptSenders\(conv\)\)[\s\S]*saveCounters\(conv\.id, kept\.record/);
+    assert.match(source, /Counters\.parseBounded\(await Keystore\.loadCounters\(conv\.id\), keptSenders\(conv\)\)/);
+    // No other read of a stored record bypasses the bound
+    assert.equal((source.match(/Keystore\.loadCounters\(/g) || []).length, 1);
+});

@@ -264,7 +264,9 @@ const Errors = (() => {
         // No Web Locks API: counters are still read fresh and written ahead, without the lock
         W_COUNTER_LOCK_UNAVAILABLE: 'W_COUNTER_LOCK_UNAVAILABLE',
         // More counter records than Counters.MAX_RECORDS: the least recently used were dropped,
-        // so those conversations are judged from their visible messages only (once per page load)
+        // so those conversations are judged from their visible messages only (once per page load).
+        // Also: a record held more senders than Counters.MAX_SENDERS, and the oldest senders off
+        // the roster were dropped from it (Counters.bound; once per write or read that dropped any)
         W_COUNTER_RECORDS_EVICTED: 'W_COUNTER_RECORDS_EVICTED',
         // The event stream delivered no event within its silence limit (a proxy buffering or
         // holding it): updates are fetched on an interval until it delivers one again (live-updates.js)

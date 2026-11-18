@@ -40,6 +40,16 @@
 // browser cannot: counter-records.js takes each counter under a lock they share, from the record as stored
 // at that moment, and stores the raised record before the message is posted.
 //
+// THE SENDER BOUND. A record names at most MAX_SENDERS senders. A room member can send under
+// keys of its own making (a message's header card only has to open under the room's code), so the
+// senders a room's record sees are not limited by its seats. The bound is kept where a record is
+// built and written (bound(), called by counter-records.js before every write): past it the
+// senders that are neither this device's own key nor on the current roster are evicted first,
+// oldest first (the order a record lists its senders in is the order they were first recorded,
+// merge() keeps it); this device's own entry and the roster's are never evicted. A record above
+// the bound (an older build wrote it) is read the same way (parse() with the keys to keep): never
+// thrown away whole, which would forget this device's own counter and the remembered seq.
+//
 // KEEPING RECORDS (zero trust; the agent's rule, backend/internal/agent/state.go). The server
 // may omit a conversation from one listing, or answer 404 for it, and list it again later: a
 // record dropped on that word would let its old messages replay undetected. So a record is
@@ -54,8 +64,8 @@ const Counters = (() => {
     'use strict';
 
     const PUBLIC_KEY_SHAPE = /^[A-Za-z0-9_-]{43}$/;
-    // Bounds the cost of reading a stored record; a room has at most 32 seats at a time,
-    // so even heavy churn stays far below this
+    // The most senders one record names (THE SENDER BOUND): a room has at most 32 seats at a time,
+    // so honest churn stays far below it; senders minted past it evict the oldest off-roster ones
     const MAX_SENDERS = 4096;
     // The most counter records one device keeps (the agent keeps as many, maxStateRooms)
     const MAX_RECORDS = 1024;
@@ -83,13 +93,38 @@ const Counters = (() => {
         });
     }
 
-    // A stored record, checked: anything malformed counts as no record (today's behaviour)
-    function parse(raw) {
+    // A stored record, checked: anything malformed counts as no record. One naming more than
+    // MAX_SENDERS senders (an older build wrote it) is bounded as a write is (bound(), keeping the
+    // keys in `keep`: this device's own and the roster's), never discarded whole. Returns the
+    // record; parseBounded also says how many senders were evicted.
+    function parse(raw, keep) {
+        return parseBounded(raw, keep).record;
+    }
+
+    function parseBounded(raw, keep) {
         if (!raw || typeof raw !== 'object' || !isCount(raw.seq) || !isCount(raw.mine) ||
-            !Array.isArray(raw.senders) || raw.senders.length > MAX_SENDERS || !raw.senders.every(isEntry)) {
-            return EMPTY;
+            !Array.isArray(raw.senders) || !raw.senders.every(isEntry)) {
+            return { record: EMPTY, evicted: 0 };
         }
-        return freeze(raw.seq, raw.mine, new Map(raw.senders));
+        return bound(freeze(raw.seq, raw.mine, new Map(raw.senders)), keep);
+    }
+
+    // record with at most MAX_SENDERS senders (THE SENDER BOUND): { record, evicted }. Senders not
+    // in keep (an iterable of public keys) go first, in the order the record lists them (oldest
+    // first); a sender in keep is never evicted, so a record whose kept senders alone pass the
+    // bound keeps them all (keep is this device's own key and a roster of at most 32 members).
+    // seq and mine are never touched. A record within the bound is returned as it is.
+    function bound(record, keep) {
+        const excess = record.senders.length - MAX_SENDERS;
+        if (excess <= 0) return { record: record, evicted: 0 };
+        const kept = new Set(keep || []);
+        let evicted = 0;
+        const senders = record.senders.filter(([key]) => {
+            if (evicted >= excess || kept.has(key)) return true;
+            evicted++;
+            return false;
+        });
+        return { record: freeze(record.seq, record.mine, senders), evicted: evicted };
     }
 
     // Every field is a high-water mark, so two records combine by taking the higher of each:
@@ -102,9 +137,12 @@ const Counters = (() => {
         return freeze(Math.max(a.seq, b.seq), Math.max(a.mine, b.mine), senders);
     }
 
+    // Linear in the senders (a record names each sender once), so a record at MAX_SENDERS is
+    // compared on every save without a quadratic cost
     function same(a, b) {
-        return a.seq === b.seq && a.mine === b.mine && a.senders.length === b.senders.length &&
-            a.senders.every(([key, counter]) => b.senders.some(entry => entry[0] === key && entry[1] === counter));
+        if (a.seq !== b.seq || a.mine !== b.mine || a.senders.length !== b.senders.length) return false;
+        const other = new Map(b.senders);
+        return a.senders.every(([key, counter]) => other.get(key) === counter);
     }
 
     // The state of one loaded sequence: the record it started from and what it has seen since
@@ -187,7 +225,7 @@ const Counters = (() => {
     }
 
     return Object.freeze({
-        EMPTY, MAX_RECORDS, EXPIRED_ROOM_GRACE_MS, parse, merge, same, ledger, history, lowest, judge, admit, snapshot,
-        expiredLongAgo, retentionEntry, retention
+        EMPTY, MAX_RECORDS, MAX_SENDERS, EXPIRED_ROOM_GRACE_MS, parse, parseBounded, bound, merge, same, ledger, history,
+        lowest, judge, admit, snapshot, expiredLongAgo, retentionEntry, retention
     });
 })();

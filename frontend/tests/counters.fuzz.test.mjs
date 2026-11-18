@@ -120,3 +120,65 @@ test('parse / merge / same: never throw on stored values; parse is a fixed point
         for (const [key, counter] of [...a.senders, ...b.senders]) assert.ok(merged.get(key) >= counter);
     });
 });
+
+// THE SENDER BOUND (fix-spec C2), against a model written apart from counters.js: past
+// MAX_SENDERS the first senders not kept go, in the record's order, and nothing else changes
+const BOUND_ITERATIONS = 150;
+const MAX_OVER_BOUND = 64;
+const MAX_KEPT = 48;
+const KEY_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+function boundModel(entries, keep, limit) {
+    const excess = entries.length - limit;
+    if (excess <= 0) return { senders: entries, evicted: 0 };
+    let evicted = 0;
+    const senders = [];
+    for (const entry of entries) {
+        if (evicted < excess && !keep.has(entry[0])) {
+            evicted++;
+            continue;
+        }
+        senders.push(entry);
+    }
+    return { senders, evicted };
+}
+
+test('the sender bound: evicts exactly the model\'s senders, never a kept one, and reads back whole', async () => {
+    const limit = Counters.MAX_SENDERS;
+    await fuzz(SEED + 2, BOUND_ITERATIONS, (r) => {
+        const n = r.int(Math.max(0, limit - 4), limit + MAX_OVER_BOUND);
+        const keys = new Set();
+        while (keys.size < n) keys.add('k' + r.from(KEY_ALPHABET, 42));
+        const entries = [...keys].map((key) => [key, r.int(1, 1000)]);
+        const all = r.bool(0.05);
+        const keep = new Set(all ? keys : Array.from({ length: r.int(0, MAX_KEPT) }, () => (r.bool(0.8) && n > 0 ? r.pick(entries)[0] : 'z' + r.from(KEY_ALPHABET, 42))));
+        const seq = r.int(0, 1e6);
+        const mine = r.int(0, 1e6);
+        // Built unbounded, as a sync's snapshot is
+        const state = Counters.ledger(Counters.EMPTY);
+        for (const [key, counter] of entries) Counters.admit(state, key, counter);
+        const record = Counters.snapshot(state, seq, mine);
+        assert.equal(record.senders.length, n);
+
+        const got = Counters.bound(record, keep);
+        const want = boundModel(entries, keep, limit);
+        assert.equal(got.evicted, want.evicted);
+        assert.deepEqual(plain(got.record.senders), want.senders);
+        assert.equal(got.record.seq, seq);
+        assert.equal(got.record.mine, mine);
+        const kept = new Map(got.record.senders);
+        for (const key of keep) if (keys.has(key)) assert.ok(kept.has(key), 'a kept sender was evicted');
+        assert.ok(got.record.senders.length <= Math.max(limit, [...keys].filter((key) => keep.has(key)).length));
+        // What the write side stores, the read side gives back unchanged
+        // (compared as plain data in order: Counters.same is quadratic, too slow at this size)
+        const read = Counters.parseBounded(plain(got.record), keep);
+        assert.equal(read.evicted, 0);
+        assert.deepEqual(plain(read.record), plain(got.record));
+        // A record an older build stored unbounded is read as the write side would have bounded it
+        const old = Counters.parseBounded(plain(record), keep);
+        assert.deepEqual(plain(old.record), plain(got.record));
+        assert.equal(old.evicted, got.evicted);
+        // Never thrown away whole while it is well formed
+        if (n > 0) assert.notEqual(old.record, Counters.EMPTY);
+    });
+});
