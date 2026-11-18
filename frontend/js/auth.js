@@ -176,18 +176,27 @@ function pageLimit(data) {
 // How an attempt to open the app ended
 const ENTRY = Object.freeze({
     ENTERED: 'entered',
-    // no answer from /me (status 0) or a server error: nothing was wiped, the caller offers a retry
+    // any answer that says nothing about the session or the identity (no answer, a server error,
+    // a 429, a 404 or any other 4xx but 401, settings this app refuses): nothing was wiped, the
+    // caller offers a retry with the code for that answer (meVerdict)
     UNREACHABLE: 'unreachable',
-    // the session is gone or the server's answer was refused: the stored identity was removed
-    REFUSED: 'refused'
+    // the session is gone (401) or the server holds another public key: the stored identity was removed
+    REFUSED: 'refused',
+    // the screen that asked was left meanwhile (alive() false): nothing was saved or opened
+    LEFT: 'left'
 });
+
+// Whether a /me answer body names exactly this device's public key (the one comparison every
+// /me check makes: here, and on a stream reconnect or a return from the back-forward cache)
+function sameIdentity(data, publicKey) {
+    return Boolean(data) && typeof data === 'object' && typeof data.public_key === 'string' && data.public_key === publicKey;
+}
 
 // A /me answer body judged against this device's public key: { code: null, ttlDays, limits }
 // when it is taken, else { code } to report. Another key is an attack on the identity
 // (E_IDENTITY_MISMATCH); settings out of range are only refused (E_SERVER_LIMITS_INVALID).
 function judgeMe(data, publicKey) {
-    const sameKey = Boolean(data) && typeof data.public_key === 'string' && data.public_key === publicKey;
-    if (!sameKey) {
+    if (!sameIdentity(data, publicKey)) {
         return { code: Errors.CODES.E_IDENTITY_MISMATCH };
     }
     const ttlDays = Number.isSafeInteger(data.message_ttl_days) ? data.message_ttl_days : 0;
@@ -198,28 +207,55 @@ function judgeMe(data, publicKey) {
     return { code: null, ttlDays: ttlDays, limits: limits };
 }
 
-// Opens the app once /me confirms the session and the identity. Never changes the view on
-// failure: each caller knows what its user still needs on screen. Returns { entry, result }.
-async function enterApp(identity, persist) {
-    const check = await apiCall('GET', '/me');
-    if (check.status === HTTP_STATUS.NO_ANSWER || check.status >= HTTP_STATUS.SERVER_ERROR) {
-        return { entry: ENTRY.UNREACHABLE, result: check };
+// What a /me answer means for the stored identity (C1: only the server's own word ends a session).
+// { entry, code }: REFUSED for a 401 (the session is gone) or a 2xx naming another public key (an
+// attack on the identity, E_IDENTITY_MISMATCH); UNREACHABLE, keeping the identity, for every
+// other answer that is not taken: no answer, any 5xx, a 429, a 404 or any other 4xx, and a 2xx
+// with this key whose settings this app refuses (E_SERVER_LIMITS_INVALID), each with the
+// registered code for that answer; null code with ENTERED otherwise (judged holds the settings).
+function meVerdict(check, publicKey) {
+    if (check.status === HTTP_STATUS.UNAUTHORIZED) {
+        return { entry: ENTRY.REFUSED, code: null };
     }
-    const judged = judgeMe(check.data, identity.publicKey);
-    if (!check.ok || judged.code) {
+    if (!check.ok) {
+        return { entry: ENTRY.UNREACHABLE, code: Errors.fromResult(check) };
+    }
+    const judged = judgeMe(check.data, publicKey);
+    if (judged.code === Errors.CODES.E_IDENTITY_MISMATCH) {
+        return { entry: ENTRY.REFUSED, code: judged.code };
+    }
+    if (judged.code) {
+        return { entry: ENTRY.UNREACHABLE, code: judged.code };
+    }
+    return { entry: ENTRY.ENTERED, code: null, judged: judged };
+}
+
+// Opens the app once /me confirms the session and the identity. Never changes the view on
+// failure: each caller knows what its user still needs on screen. alive() (optional) is asked
+// after every wait: once it is false (the screen that asked was left) nothing is wiped, saved,
+// shown or opened. Returns { entry, result, code } (code: what to tell for UNREACHABLE).
+async function enterApp(identity, persist, alive = () => true) {
+    const check = await apiCall('GET', '/me');
+    if (!alive()) return { entry: ENTRY.LEFT, result: check, code: null };
+    const verdict = meVerdict(check, identity.publicKey);
+    if (verdict.entry === ENTRY.UNREACHABLE) {
+        return { entry: ENTRY.UNREACHABLE, result: check, code: verdict.code };
+    }
+    if (verdict.entry === ENTRY.REFUSED) {
         // Server-driven: the replay records stay (Keystore.wipeIdentity)
         await Keystore.wipeIdentity();
-        if (check.ok) {
-            Errors.report(judged.code);
+        if (verdict.code) {
+            Errors.report(verdict.code);
             await apiCall('POST', '/logout');
         }
-        return { entry: ENTRY.REFUSED, result: check };
+        return { entry: ENTRY.REFUSED, result: check, code: verdict.code };
     }
     if (persist) {
         await Keystore.save(identity);
+        if (!alive()) return { entry: ENTRY.LEFT, result: check, code: null };
     }
-    await Chat.start(identity, judged.ttlDays, judged.limits);
-    return { entry: ENTRY.ENTERED, result: check };
+    await Chat.start(identity, verdict.judged.ttlDays, verdict.judged.limits);
+    return { entry: ENTRY.ENTERED, result: check, code: null };
 }
 
 // Raised whenever the login screen is left: a login still in flight then shows and opens nothing
@@ -638,7 +674,8 @@ async function finishRegistration(run) {
     const identity = await deriveSession(accountNumber);
     // Left meanwhile (a second press accepted the loss): the app is not opened behind the menu
     if (run !== registrationRun) return;
-    const opened = await enterApp(identity, true);
+    const opened = await enterApp(identity, true, () => run === registrationRun);
+    if (opened.entry === ENTRY.LEFT) return;
     successElement.textContent = '';
     if (opened.entry !== ENTRY.ENTERED) {
         // Continue retries (the server answers 401, recoverRegistration logs in), or log in by hand

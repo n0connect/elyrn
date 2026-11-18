@@ -25,12 +25,17 @@ const LiveUpdates = (() => {
     // A hidden page behind a silent stream polls too, this much less often: it is not being read
     // (nothing is marked read while hidden), it only has to learn that something arrived
     const HIDDEN_POLL_INTERVAL_MS = 30 * SECOND_MS;
+    // A poll answered with a server error (5xx) doubles the wait before the watchdog's next look,
+    // up to this (pollDelayMs); any fetch that succeeds, or a stream event, goes back to
+    // POLL_INTERVAL_MS. A struggling server is not asked five times a second by every open tab.
+    const POLL_BACKOFF_MAX_MS = 60 * SECOND_MS;
     // Every named event the stream sends; any one of them proves it is delivering
     const STREAM_EVENTS = Object.freeze(['ping', 'msg', 'conv']);
 
     // hooks: { api (the chat's, which ends the session on a 401), loggedIn(), catchUp() (fetches
     // what the stream would have poked; resolves once the open conversation's sync settled),
-    // onMessage(conversationId), onConversations() }
+    // onMessage(conversationId), onConversations(), sameIdentity(meBody) (whether a /me answer
+    // names this device's public key), identityLost() (it named another: the session ends) }
     function create(hooks) {
         let events = null;
         let reconnectAttempts = 0;
@@ -41,6 +46,7 @@ const LiveUpdates = (() => {
         let polling = false;              // the watchdog is fetching for a silent stream (logged once per silence)
         let lastPollAt = -Infinity;       // performance.now() of the watchdog's last poll (none yet: due)
         let outageShown = false;          // a fetch failed while polling and was shown: polls stay quiet until one succeeds
+        let serverErrors = 0;             // polls in a row answered with a 5xx (the watchdog backs off)
 
         function start() {
             connectEvents();
@@ -53,11 +59,31 @@ const LiveUpdates = (() => {
             polling = false;
             lastPollAt = -Infinity;
             outageShown = false;
+            serverErrors = 0;
         }
 
-        // A fetch succeeded: the outage reportFetchFailure keeps quiet about, if any, is over
+        // A fetch succeeded: the outage reportFetchFailure keeps quiet about, if any, is over, and
+        // the watchdog looks at its normal pace again
         function endOutage() {
             outageShown = false;
+            serverErrors = 0;
+        }
+
+        // What a /me answered on a reconnect or a return from the back-forward cache means: true when
+        // the stream may (re)connect. A 401 has ended the session already (hooks.api); a 2xx naming
+        // another public key ends it as a refused login does (hooks.identityLost); any other answer
+        // keeps the session and retries later (false).
+        function meConfirms(check) {
+            if (!hooks.loggedIn() || check.status === HTTP_STATUS.UNAUTHORIZED) return false;
+            if (!check.ok) {
+                scheduleReconnect();
+                return false;
+            }
+            if (!hooks.sameIdentity(check.data)) {
+                hooks.identityLost();
+                return false;
+            }
+            return true;
         }
 
         // ---------- realtime ----------
@@ -106,15 +132,12 @@ const LiveUpdates = (() => {
             reconnectTimer = setTimeout(reconnect, delay);
         }
 
-        // Only reconnect while the session is still valid (a 401 ends the session instead)
+        // Only reconnect while the session is still valid and still this device's identity
+        // (meConfirms: a 401 or another public key ends the session instead)
         async function reconnect() {
             if (!hooks.loggedIn()) return;
             const check = await hooks.api('GET', '/me');
-            if (!hooks.loggedIn() || check.status === HTTP_STATUS.UNAUTHORIZED) return;
-            if (!check.ok) {
-                scheduleReconnect();
-                return;
-            }
+            if (!meConfirms(check)) return;
             connectEvents();
         }
 
@@ -149,12 +172,17 @@ const LiveUpdates = (() => {
             streamLimitMs = STREAM_SILENCE_LIMIT_MS;
             polling = false;
             reconnectAttempts = 0;
+            serverErrors = 0;
         }
 
         // A fetch failure the watchdog would repeat on every poll while the server is down: shown once
         // per outage while polling (outageShown, cleared by the next fetch that succeeds or by any
-        // resync not from a poll), logged every time. Outside polling it is shown every time.
+        // resync not from a poll), logged every time. Outside polling it is shown every time. While
+        // polling, a server error (5xx) also slows the watchdog down (serverErrors, pollDelayMs).
         function reportFetchFailure(code, cause) {
+            if (polling && cause && Number.isSafeInteger(cause.status) && cause.status >= HTTP_STATUS.SERVER_ERROR) {
+                serverErrors++;
+            }
             if (polling && outageShown) {
                 Log.warn(code, cause);
                 return;
@@ -167,7 +195,7 @@ const LiveUpdates = (() => {
         function armWatchdog() {
             clearTimeout(pollTimer);
             if (!hooks.loggedIn()) return;
-            pollTimer = setTimeout(watchStream, POLL_INTERVAL_MS);
+            pollTimer = setTimeout(watchStream, pollDelayMs(serverErrors, POLL_INTERVAL_MS, POLL_BACKOFF_MAX_MS));
         }
 
         // One look: a page whose stream proved nothing within its limit fetches what the stream would
@@ -189,17 +217,14 @@ const LiveUpdates = (() => {
         }
 
         // The page came back from the back-forward cache: the session may have ended meanwhile. A 401
-        // ends it here as anywhere (sessionLost); a live one reconnects its event stream.
+        // ends it here as anywhere (sessionLost), as does a /me naming another public key
+        // (meConfirms); a live one reconnects its event stream.
         async function onRestored() {
             if (!hooks.loggedIn()) return;
             // The look pending when the page was frozen is restarted from now
             armWatchdog();
             const check = await hooks.api('GET', '/me');
-            if (!hooks.loggedIn() || check.status === HTTP_STATUS.UNAUTHORIZED) return;
-            if (!check.ok) {
-                scheduleReconnect();
-                return;
-            }
+            if (!meConfirms(check)) return;
             reconnectAttempts = 0;
             connectEvents();
         }

@@ -197,6 +197,15 @@ function streamNeedsPolling({ now, lastEventAt, silenceLimitMs, visible, loggedI
     return visible === true || !provenWithin(now, lastPollAt, hiddenIntervalMs);
 }
 
+// How long the polling watchdog waits before its next look after `serverErrors` polls in a row
+// were answered with a server error (5xx): baseMs, doubled per such answer, never more than maxMs.
+// Anything that is not a count of answers counts as none (the base interval).
+function pollDelayMs(serverErrors, baseMs, maxMs) {
+    const n = Number.isSafeInteger(serverErrors) && serverErrors > 0 ? serverErrors : 0;
+    // 2 ** n overflows to Infinity for a huge n; Math.min then still gives maxMs
+    return Math.min(maxMs, baseMs * 2 ** n);
+}
+
 // True when `at` provably lies less than limitMs before now
 function provenWithin(now, at, limitMs) {
     return Number.isFinite(now) && Number.isFinite(at) && Number.isFinite(limitMs) &&

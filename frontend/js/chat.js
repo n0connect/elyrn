@@ -40,7 +40,8 @@ const Chat = (() => {
     let listGeneration = 0;
     // The event stream and the watchdog behind it (live-updates.js): they say when to catch up
     const live = LiveUpdates.create({
-        api, loggedIn: () => me !== null, catchUp, onMessage: messageArrived, onConversations: scheduleRefresh
+        api, loggedIn: () => me !== null, catchUp, onMessage: messageArrived, onConversations: scheduleRefresh,
+        sameIdentity: data => me !== null && sameIdentity(data, me.publicKey), identityLost
     });
 
     // ---------- plumbing ----------
@@ -54,12 +55,25 @@ const Chat = (() => {
     }
 
     function sessionLost() {
-        if (!me) return;
+        endSession(Errors.CODES.W_SESSION_ENDED);
+    }
+
+    // A /me answered on a reconnect or on return from the back-forward cache named another public
+    // key than this device's (live-updates.js): the identity goes as on a refused login (auth.js
+    // enterApp), and every session of the account is ended at the server
+    function identityLost() {
+        if (endSession(Errors.CODES.E_IDENTITY_MISMATCH)) apiCall('POST', '/logout');
+    }
+
+    // Server-driven: the identity goes, the replay records stay (Keystore.wipeIdentity). Returns
+    // whether a session was ended (false when none was running).
+    function endSession(code) {
+        if (!me) return false;
         stop();
-        // Server-driven: the identity goes, the replay records stay (Keystore.wipeIdentity)
         Keystore.wipeIdentity();
-        Errors.report(Errors.CODES.W_SESSION_ENDED);
+        Errors.report(code);
         showLogin();
+        return true;
     }
 
     function isSeq(value) {
