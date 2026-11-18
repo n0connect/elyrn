@@ -110,7 +110,7 @@ const LiveUpdates = (() => {
         async function reconnect() {
             if (!hooks.loggedIn()) return;
             const check = await hooks.api('GET', '/me');
-            if (!hooks.loggedIn() || check.status === 401) return;
+            if (!hooks.loggedIn() || check.status === HTTP_STATUS.UNAUTHORIZED) return;
             if (!check.ok) {
                 scheduleReconnect();
                 return;
@@ -195,7 +195,7 @@ const LiveUpdates = (() => {
             // The look pending when the page was frozen is restarted from now
             armWatchdog();
             const check = await hooks.api('GET', '/me');
-            if (!hooks.loggedIn() || check.status === 401) return;
+            if (!hooks.loggedIn() || check.status === HTTP_STATUS.UNAUTHORIZED) return;
             if (!check.ok) {
                 scheduleReconnect();
                 return;

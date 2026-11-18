@@ -134,13 +134,13 @@ const RoleControl = (() => {
             return false;
         }
         if (result.ok) return true;
-        if (result.status === 403) {
+        if (result.status === HTTP_STATUS.FORBIDDEN) {
             Errors.report(Errors.CODES.E_ROLE_NOT_ALLOWED, null, result);
-        } else if (result.status === 404) {
+        } else if (result.status === HTTP_STATUS.NOT_FOUND) {
             Errors.report(Errors.CODES.W_ROLE_MEMBER_GONE, null, result);
-        } else if (result.status === 429) {
+        } else if (result.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
             Errors.report(Errors.CODES.W_ROLE_RATE_LIMITED, null, result);
-        } else if (result.status !== 401) {
+        } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
             Errors.report(Errors.CODES.E_ROLE_NOT_SET, null, result);
         }
         return false;

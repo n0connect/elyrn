@@ -28,13 +28,6 @@ const FileTransfer = (() => {
     // at most RATE_PAUSES times per transfer
     const RATE_PAUSE_MS = 3000;
     const RATE_PAUSES = 120;
-    const CREATED = 201;
-    const CONFLICT = 409;
-    const NOT_FOUND = 404;
-    const UNAUTHORIZED = 401;
-    const TOO_MANY = 429;
-    const INSUFFICIENT_STORAGE = 507;
-    const SERVER_ERROR = 500;
     // How an ended transfer is told: { ok: true, ... } or { ok: false, code, next, restart, quiet }
     const CANCELLED = Object.freeze({ ok: false, code: Errors.INTERNAL.W_FILE_TRANSFER_CANCELLED, quiet: true });
 
@@ -48,12 +41,12 @@ const FileTransfer = (() => {
 
     // No answer, or a server error: worth another try
     function transient(result) {
-        return result.status === 0 || result.status >= SERVER_ERROR;
+        return result.status === HTTP_STATUS.NO_ANSWER || result.status >= HTTP_STATUS.SERVER_ERROR;
     }
 
     // A request limit answer the transfer waits out: a 429 that is not the daily file budget
     function paced(result) {
-        return result.status === TOO_MANY && Errors.fromResult(result) !== Errors.CODES.W_FILE_BUDGET_SPENT;
+        return result.status === HTTP_STATUS.TOO_MANY_REQUESTS && Errors.fromResult(result) !== Errors.CODES.W_FILE_BUDGET_SPENT;
     }
 
     // One request with its retries: the last result, or null when cancelled meanwhile. pace:
@@ -81,24 +74,24 @@ const FileTransfer = (() => {
     // What a refused part means: { code, restart (a new upload under a fresh id is needed), quiet }
     function refusal(result) {
         const said = Errors.fromResult(result);
-        if (result.status === UNAUTHORIZED) return { code: null, quiet: true };
-        if (result.status === NOT_FOUND) return { code: Errors.CODES.W_FILE_CONVERSATION_GONE };
-        if (result.status === CONFLICT) return { code: Errors.CODES.E_FILE_UPLOAD_RESTART, restart: true };
-        if (result.status === TOO_MANY) {
+        if (result.status === HTTP_STATUS.UNAUTHORIZED) return { code: null, quiet: true };
+        if (result.status === HTTP_STATUS.NOT_FOUND) return { code: Errors.CODES.W_FILE_CONVERSATION_GONE };
+        if (result.status === HTTP_STATUS.CONFLICT) return { code: Errors.CODES.E_FILE_UPLOAD_RESTART, restart: true };
+        if (result.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
             return { code: said === Errors.CODES.W_FILE_BUDGET_SPENT ? said : Errors.CODES.W_FILE_RATE_LIMITED };
         }
-        if (result.status === INSUFFICIENT_STORAGE) {
+        if (result.status === HTTP_STATUS.INSUFFICIENT_STORAGE) {
             return { code: said === Errors.CODES.E_FILE_QUOTA_REACHED ? said : Errors.CODES.E_FILE_STORE_FULL };
         }
-        if (result.status === 0) return { code: Errors.CODES.W_FILE_UPLOAD_STOPPED };
-        if (result.status >= SERVER_ERROR) return { code: Errors.CODES.W_FILE_SERVER_BUSY };
+        if (result.status === HTTP_STATUS.NO_ANSWER) return { code: Errors.CODES.W_FILE_UPLOAD_STOPPED };
+        if (result.status >= HTTP_STATUS.SERVER_ERROR) return { code: Errors.CODES.W_FILE_SERVER_BUSY };
         return { code: Errors.CODES.E_FILE_UPLOAD_REFUSED };
     }
 
     // A 409 that means "stored": the plain "Conflict" (the uploader's own identical part), told
     // from "Id taken" and "File part out of order" by their registered sentences
     function storedBefore(result) {
-        if (result.status !== CONFLICT) return false;
+        if (result.status !== HTTP_STATUS.CONFLICT) return false;
         const said = Errors.fromResult(result);
         return said !== Errors.CODES.E_MESSAGE_ID_TAKEN && said !== Errors.CODES.E_FILE_UPLOAD_RESTART;
     }
@@ -115,7 +108,7 @@ const FileTransfer = (() => {
             const result = await withRetries(() => api('POST', filesPath(conversationId), { id: file.id, part: index, data }),
                 cancelled, index > 0 ? pace : null);
             if (!result) return { ...CANCELLED, next: index };
-            if (result.status !== CREATED && !storedBefore(result)) {
+            if (result.status !== HTTP_STATUS.CREATED && !storedBefore(result)) {
                 return { ok: false, next: index, restart: false, quiet: false, ...refusal(result) };
             }
             if (onProgress) onProgress({ done: index + 1, total: parts });
@@ -147,8 +140,8 @@ const FileTransfer = (() => {
             if (cancelled()) return fail(CANCELLED.code, true);
             const result = await withRetries(() => api('GET', `${filesPath(conversationId)}/${file.id}?part=${index}`), cancelled, pace);
             if (!result) return fail(CANCELLED.code, true);
-            if (result.status === UNAUTHORIZED) return fail(null, true);
-            if (result.status === NOT_FOUND) return fail(Errors.CODES.W_FILE_GONE);
+            if (result.status === HTTP_STATUS.UNAUTHORIZED) return fail(null, true);
+            if (result.status === HTTP_STATUS.NOT_FOUND) return fail(Errors.CODES.W_FILE_GONE);
             if (!result.ok) return fail(Errors.CODES.E_FILE_DOWNLOAD_STOPPED);
             const data = servedPart(result);
             try {

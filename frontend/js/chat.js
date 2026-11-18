@@ -47,7 +47,7 @@ const Chat = (() => {
 
     async function api(method, path, body) {
         const result = await apiCall(method, path, body);
-        if (result.status === 401) {
+        if (result.status === HTTP_STATUS.UNAUTHORIZED) {
             sessionLost();
         }
         return result;
@@ -197,7 +197,7 @@ const Chat = (() => {
         const result = await api('GET', '/conversations');
         if (generation !== listGeneration) return;
         if (!result.ok || !result.data || !Array.isArray(result.data.conversations)) {
-            if (result.status !== 401) live.reportFetchFailure(Errors.CODES.E_CONVERSATIONS_NOT_LOADED, result);
+            if (result.status !== HTTP_STATUS.UNAUTHORIZED) live.reportFetchFailure(Errors.CODES.E_CONVERSATIONS_NOT_LOADED, result);
             return;
         }
         live.endOutage();
@@ -360,14 +360,14 @@ const Chat = (() => {
             const held = unverified.get(id);
             if (!held) return;
             const result = await api('DELETE', `/conversations/${id}`);
-            if (result.status === 204 || result.status === 404) {
+            if (result.status === HTTP_STATUS.NO_CONTENT || result.status === HTTP_STATUS.NOT_FOUND) {
                 listGeneration++;
                 unverified.delete(id);
-                if (result.status === 204) await CounterRecords.forgetRecord(id);
+                if (result.status === HTTP_STATUS.NO_CONTENT) await CounterRecords.forgetRecord(id);
                 renderList();
                 showSuccess(held.owner ? Errors.NOTICE.BURNED : Errors.NOTICE.ROOM_LEFT);
                 scheduleRefresh();
-            } else if (result.status !== 401) {
+            } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
                 Errors.report(Errors.CODES.E_ROOM_NOT_LEFT, null, result);
             }
         });
@@ -490,7 +490,7 @@ const Chat = (() => {
             : `/conversations/${conv.id}/messages`;
         const result = await api('GET', path);
         if (!me || activeId !== conv.id) return true;
-        if (result.status === 404) {
+        if (result.status === HTTP_STATUS.NOT_FOUND) {
             scheduleRefresh();
             return true;
         }
@@ -594,13 +594,13 @@ const Chat = (() => {
         const before = conv.firstSeq;
         const result = await api('GET', `/conversations/${conv.id}/messages?before=${before}`);
         if (!me || activeId !== conv.id || conv.markLoad !== opened) return;
-        if (result.status === 404) {
+        if (result.status === HTTP_STATUS.NOT_FOUND) {
             scheduleRefresh();
             return;
         }
         if (!result.ok || !result.data || !Array.isArray(result.data.messages)) {
             setEarlierControl(true, false);
-            if (result.status !== 401) Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
+            if (result.status !== HTTP_STATUS.UNAUTHORIZED) Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
             return;
         }
         const ledger = Counters.history(await opened, Counters.lowest(conv.above, conv.ledger));
@@ -754,10 +754,10 @@ const Chat = (() => {
         const taken = Errors.idTaken(result);
 
         const stored = (result.ok && result.data && isSeq(result.data.seq) && result.data.seq > 0) ||
-            (result.status === 409 && attempt.lost && !taken);
+            (result.status === HTTP_STATUS.CONFLICT && attempt.lost && !taken);
         // Only a lost answer leaves the outcome open; any other answer settles it. The counter is
         // spent either way (written ahead): a retry keeps it, and the peer sees a gap at worst.
-        const pending = !stored && (result.status === 0 || result.status >= 500);
+        const pending = !stored && (result.status === HTTP_STATUS.NO_ANSWER || result.status >= HTTP_STATUS.SERVER_ERROR);
         attempt.lost = attempt.lost || pending;
         unsent = pending ? attempt : null;
 
@@ -768,13 +768,13 @@ const Chat = (() => {
             await sync(conv);
         } else if (taken) {
             Errors.report(Errors.CODES.E_MESSAGE_ID_TAKEN, null, result);
-        } else if (result.status === 409) {
+        } else if (result.status === HTTP_STATUS.CONFLICT) {
             Errors.report(Errors.CODES.E_MESSAGE_ID_CONFLICT, null, result);
-        } else if (result.status === 429) {
+        } else if (result.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
             Errors.report(Errors.CODES.W_MESSAGE_RATE_LIMITED);
-        } else if (result.status === 404) {
+        } else if (result.status === HTTP_STATUS.NOT_FOUND) {
             scheduleRefresh();
-        } else if (result.status !== 401) {
+        } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
             Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, result);
         }
     }
@@ -795,7 +795,7 @@ const Chat = (() => {
             if (!attempt.ciphertext) attempt.ciphertext = await sealAttempt(conv, attempt);
             result = await postAttempt(conv, attempt);
             // Someone joined or left since the roster was fetched: encrypt for the new one
-            for (let retry = 0; conv.room && result.status === 412 && retry < MAX_ROSTER_RETRIES; retry++) {
+            for (let retry = 0; conv.room && result.status === HTTP_STATUS.PRECONDITION_FAILED && retry < MAX_ROSTER_RETRIES; retry++) {
                 if (!(await loadRoster(conv))) {
                     rosterLost = true;
                     break;
@@ -817,7 +817,7 @@ const Chat = (() => {
     // A client error stores nothing, except a 409 "Conflict" (a duplicate id: an earlier attempt
     // may be held); a 409 "Id taken" stores nothing either
     function settledUnstored(result) {
-        return result.status >= 400 && result.status < 500 && (result.status !== 409 || Errors.idTaken(result));
+        return result.status >= HTTP_STATUS.BAD_REQUEST && result.status < HTTP_STATUS.SERVER_ERROR && (result.status !== HTTP_STATUS.CONFLICT || Errors.idTaken(result));
     }
 
     function sealAttempt(conv, attempt) {
@@ -839,8 +839,8 @@ const Chat = (() => {
         const issued = await api('GET', '/pow/challenge');
         if (me !== owner) return null;
         if (!issued.ok || !issued.data || !issued.data.challenge) {
-            if (issued.status === 429) Errors.report(Errors.CODES.W_POW_RATE_LIMITED);
-            else if (issued.status !== 401) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, issued);
+            if (issued.status === HTTP_STATUS.TOO_MANY_REQUESTS) Errors.report(Errors.CODES.W_POW_RATE_LIMITED);
+            else if (issued.status !== HTTP_STATUS.UNAUTHORIZED) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, issued);
             return null;
         }
         const pow = await solvePowChallenge(issued.data.challenge);
@@ -848,12 +848,12 @@ const Chat = (() => {
 
         const result = await api('POST', '/invites', { pow: pow });
         if (me !== owner) return null;
-        if (result.status === 429) {
+        if (result.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
             Errors.report(Errors.CODES.W_INVITE_LIMIT);
             return null;
         }
         if (!result.ok || !result.data || typeof result.data.token !== 'string' || !Number.isSafeInteger(result.data.expires_at)) {
-            if (result.status !== 401) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, result);
+            if (result.status !== HTTP_STATUS.UNAUTHORIZED) Errors.report(Errors.CODES.E_INVITE_NOT_CREATED, null, result);
             return null;
         }
         try {
@@ -937,17 +937,17 @@ const Chat = (() => {
             return null;
         }
         const result = await api('POST', '/invites/redeem', { token: invite.token });
-        if (result.status === 404) {
+        if (result.status === HTTP_STATUS.NOT_FOUND) {
             Errors.report(Errors.CODES.E_INVITE_SPENT);
             return null;
         }
-        if (result.status === 429) {
+        if (result.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
             Errors.report(Errors.CODES.W_TOO_MANY_ATTEMPTS);
             return null;
         }
         const conv = result.data && result.data.conversation;
         if (!result.ok || !conv || !validateConversationId(conv.id) || !isPublicKey(conv.peer_public_key)) {
-            if (result.status !== 401) Errors.report(Errors.CODES.E_JOIN_FAILED, null, result);
+            if (result.status !== HTTP_STATUS.UNAUTHORIZED) Errors.report(Errors.CODES.E_JOIN_FAILED, null, result);
             return null;
         }
         // The server chose which key we got; the invite code says which key we should get
@@ -971,9 +971,9 @@ const Chat = (() => {
             if (!me) return false;
             if (!e.result) {
                 Errors.report(Errors.CODES.E_ROSTER_UNVERIFIED, null, e);
-            } else if (e.result.status === 404) {
+            } else if (e.result.status === HTTP_STATUS.NOT_FOUND) {
                 scheduleRefresh();
-            } else if (e.result.status !== 401) {
+            } else if (e.result.status !== HTTP_STATUS.UNAUTHORIZED) {
                 Errors.report(Errors.fromResult(e.result), null, e.result);
             }
             return false;
@@ -1048,16 +1048,16 @@ const Chat = (() => {
         }
         const result = await Rooms.join(api, me.roomsRoot, code);
         if (result.id) {
-            showSuccess(result.status === 201 ? Errors.NOTICE.ROOM_JOINED : Errors.NOTICE.ROOM_ALREADY_JOINED);
+            showSuccess(result.status === HTTP_STATUS.CREATED ? Errors.NOTICE.ROOM_JOINED : Errors.NOTICE.ROOM_ALREADY_JOINED);
             return result.id;
         }
-        if (result.status === 404) {
+        if (result.status === HTTP_STATUS.NOT_FOUND) {
             Errors.report(Errors.CODES.E_ROOM_NOT_FOUND);
-        } else if (result.status === 409) {
+        } else if (result.status === HTTP_STATUS.CONFLICT) {
             Errors.report(Errors.CODES.W_ROOM_FULL);
-        } else if (result.status === 429) {
+        } else if (result.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
             Errors.report(Errors.CODES.W_ROOM_JOIN_RATE_LIMITED);
-        } else if (result.status !== 401) {
+        } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
             Errors.report(Errors.CODES.E_ROOM_JOIN_FAILED, null, result);
         }
         return null;
@@ -1093,7 +1093,7 @@ const Chat = (() => {
         try {
             created = await Rooms.create({ api, root: owner.roomsRoot, maxMembers, ttlHours, solvePow: solve });
         } catch (e) {
-            created = { status: 0, failure: e };
+            created = { status: HTTP_STATUS.NO_ANSWER, failure: e };
         }
         if (me !== owner) return;  // stop() ended this run and put the panel away
         run.stopScramble();
@@ -1101,7 +1101,7 @@ const Chat = (() => {
             roomRun = null;
             resetRoomPanel();
             const failed = clock.refused || created;
-            if (failed.status !== 401) {
+            if (failed.status !== HTTP_STATUS.UNAUTHORIZED) {
                 Errors.report(roomFailureCode(created, clock), null, created.failure || failed);
             }
             return;
@@ -1124,10 +1124,10 @@ const Chat = (() => {
     // disagrees with the server's (as the challenge stated it) by more than the server allows.
     function roomFailureCode(created, clock) {
         if (clock.refused) {
-            return clock.refused.status === 429 ? Errors.CODES.W_ROOM_CREATE_RATE_LIMITED : Errors.fromResult(clock.refused);
+            return clock.refused.status === HTTP_STATUS.TOO_MANY_REQUESTS ? Errors.CODES.W_ROOM_CREATE_RATE_LIMITED : Errors.fromResult(clock.refused);
         }
-        if (created.status === 429) return Errors.CODES.W_ROOM_CREATE_RATE_LIMITED;
-        if (created.status === 400) {
+        if (created.status === HTTP_STATUS.TOO_MANY_REQUESTS) return Errors.CODES.W_ROOM_CREATE_RATE_LIMITED;
+        if (created.status === HTTP_STATUS.BAD_REQUEST) {
             const skewed = Number.isSafeInteger(clock.serverSeconds) &&
                 Math.abs(clock.at - clock.serverSeconds * SECOND_MS) > SERVER_CLOCK_SKEW_MS;
             return skewed ? Errors.CODES.E_ROOM_CLOCK_REFUSED : Errors.CODES.E_ROOM_LIMITS_REFUSED;
@@ -1176,14 +1176,14 @@ const Chat = (() => {
             const invite = await requestInvite(owner);
             if (!invite || me !== owner) return;
             const result = await Rooms.befriend(api, conv, entry, invite.code);
-            if (result.status === 201) {
+            if (result.status === HTTP_STATUS.CREATED) {
                 conv.room.requested.add(entry.publicKey);
                 showSuccess(Errors.notice(Errors.NOTICE.FRIEND_REQUEST_SENT, { name: entry.aura.name }));
-            } else if (result.status === 409) {
+            } else if (result.status === HTTP_STATUS.CONFLICT) {
                 Errors.report(Errors.CODES.W_FRIEND_REQUEST_PENDING);
-            } else if (result.status === 404) {
+            } else if (result.status === HTTP_STATUS.NOT_FOUND) {
                 Errors.report(Errors.CODES.W_FRIEND_GONE);
-            } else if (result.status !== 401) {
+            } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
                 Errors.report(Errors.CODES.E_FRIEND_REQUEST_NOT_SENT, null, result);
             }
         } catch (e) {
@@ -1279,17 +1279,17 @@ const Chat = (() => {
         askBurn(false);
         if (!id) return;
         const result = await api('DELETE', `/conversations/${id}`);
-        if (result.status === 204 || result.status === 404) {
+        if (result.status === HTTP_STATUS.NO_CONTENT || result.status === HTTP_STATUS.NOT_FOUND) {
             listGeneration++;
             forget(id);
             // Only a burn or leave the server confirmed forgets the record; a 404 is its word only
-            if (conv && result.status === 204) CounterRecords.forgetMark(conv);
+            if (conv && result.status === HTTP_STATUS.NO_CONTENT) CounterRecords.forgetMark(conv);
             // Nothing typed for a burned conversation is kept
             setComposer('');
             backToList();
             showSuccess(leaving ? Errors.NOTICE.ROOM_LEFT : Errors.NOTICE.BURNED);
             scheduleRefresh();
-        } else if (result.status !== 401) {
+        } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
             Errors.report(leaving ? Errors.CODES.E_ROOM_NOT_LEFT : Errors.CODES.E_CONVERSATION_NOT_BURNED, null, result);
         }
     }

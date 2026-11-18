@@ -202,7 +202,7 @@ function judgeMe(data, publicKey) {
 // failure: each caller knows what its user still needs on screen. Returns { entry, result }.
 async function enterApp(identity, persist) {
     const check = await apiCall('GET', '/me');
-    if (check.status === 0 || check.status >= 500) {
+    if (check.status === HTTP_STATUS.NO_ANSWER || check.status >= HTTP_STATUS.SERVER_ERROR) {
         return { entry: ENTRY.UNREACHABLE, result: check };
     }
     const judged = judgeMe(check.data, identity.publicKey);
@@ -536,9 +536,9 @@ function animateInputToMask(inputElement, originalValue) {
 // and the server keeps it redeemable until the account exists, so a failure says so and the
 // user presses continue again (with a fresh proof of work).
 function failRegistrationStep(status, cause) {
-    const code = status === 0 ? Errors.CODES.E_REGISTER_CONNECTION_LOST
-        : status === 429 ? Errors.CODES.E_REGISTER_RATE_LIMITED
-        : status >= 500 ? Errors.CODES.E_REGISTER_SERVER_BUSY
+    const code = status === HTTP_STATUS.NO_ANSWER ? Errors.CODES.E_REGISTER_CONNECTION_LOST
+        : status === HTTP_STATUS.TOO_MANY_REQUESTS ? Errors.CODES.E_REGISTER_RATE_LIMITED
+        : status >= HTTP_STATUS.SERVER_ERROR ? Errors.CODES.E_REGISTER_SERVER_BUSY
         : Errors.CODES.E_REGISTER_REFUSED;
     document.getElementById('registerSuccess').textContent = '';
     Errors.inline(document.getElementById('registerError'), code, null, cause || { status: status });
@@ -604,7 +604,7 @@ async function continueWithAccountNumberNow() {
 
         if (result.ok && result.data && result.data.success) {
             await finishRegistration(run);
-        } else if (result.status === 401) {
+        } else if (result.status === HTTP_STATUS.UNAUTHORIZED) {
             await recoverRegistration(run);
         } else {
             failRegistrationStep(result.status);
@@ -661,7 +661,7 @@ async function recoverRegistration(run) {
         await finishRegistration(run);
         return;
     }
-    if (login.status !== 401) {
+    if (login.status !== HTTP_STATUS.UNAUTHORIZED) {
         failRegistrationStep(login.status);
         return;
     }
@@ -719,7 +719,7 @@ async function deleteIdentityNow() {
             return;
         }
         const result = await apiCall('DELETE', '/me', { auth_key: await ElyrnCrypto.deriveAuthKey(accountNumber) });
-        if (result.status === 429) {
+        if (result.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
             Errors.report(Errors.CODES.W_TOO_MANY_ATTEMPTS);
             return;
         }
@@ -745,9 +745,9 @@ const DELETION = Object.freeze({ DELETED: 'deleted', KEPT: 'kept', UNKNOWN: 'unk
 // A lost answer (no answer, or a server error) may hide a delete that happened: the session
 // says which. 401: the identity is gone with it; 200: still there; anything else: unknown.
 async function deletionOutcome(result) {
-    if (result.status !== 0 && result.status < 500) return DELETION.KEPT;
+    if (result.status !== HTTP_STATUS.NO_ANSWER && result.status < HTTP_STATUS.SERVER_ERROR) return DELETION.KEPT;
     const check = await apiCall('GET', '/me');
-    if (check.status === 401) return DELETION.DELETED;
+    if (check.status === HTTP_STATUS.UNAUTHORIZED) return DELETION.DELETED;
     return check.ok ? DELETION.KEPT : DELETION.UNKNOWN;
 }
 

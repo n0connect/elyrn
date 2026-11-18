@@ -239,7 +239,7 @@ const Rooms = (() => {
             const keys = await R.deriveRoom(code.secret);
             const member = await R.member(keys, root);
             const pow = await solvePow();
-            if (!pow) return { status: 0 };
+            if (!pow) return { status: HTTP_STATUS.NO_ANSWER };
             const result = await api('POST', '/rooms', {
                 id: keys.id,
                 lookup: keys.lookup,
@@ -248,13 +248,13 @@ const Rooms = (() => {
                 vault: await R.sealVault(root, keys.id, code),
                 pow: pow
             });
-            if (result.status === 409) continue;
+            if (result.status === HTTP_STATUS.CONFLICT) continue;
             if (!result.ok || !result.data || !result.data.conversation || result.data.conversation.id !== keys.id) {
                 return { status: result.status };
             }
             return { id: keys.id, code: R.buildRoomCode(code) };
         }
-        return { status: 409 };
+        return { status: HTTP_STATUS.CONFLICT };
     }
 
     // Takes a seat. Returns { id, status }.
@@ -270,7 +270,7 @@ const Rooms = (() => {
         });
         const conv = result.data && result.data.conversation;
         if (result.ok && (!conv || conv.id !== keys.id)) {
-            return { id: null, status: 0 };
+            return { id: null, status: HTTP_STATUS.NO_ANSWER };
         }
         return { id: result.ok ? keys.id : null, status: result.status };
     }
@@ -303,7 +303,7 @@ const Rooms = (() => {
     async function notes(api, conv) {
         const result = await api('GET', `/conversations/${conv.id}/notes`);
         if (!result.ok || !result.data || !Array.isArray(result.data.notes)) {
-            if (result.status !== 401) Log.warn(Errors.INTERNAL.W_NOTES_NOT_LOADED, result);
+            if (result.status !== HTTP_STATUS.UNAUTHORIZED) Log.warn(Errors.INTERNAL.W_NOTES_NOT_LOADED, result);
             return [];
         }
         const opened = [];
