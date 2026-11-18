@@ -26,11 +26,11 @@ const ElyrnRoomCrypto = (() => {
     const MIN_MEMBERS = 2;
     const MAX_MEMBERS = 32;
     const KEY_BYTES = C.KEY_BYTES;
-    const KEY_BITS = KEY_BYTES * 8;
+    const KEY_BITS = KEY_BYTES * C.BITS_PER_BYTE;
     const ID_BYTES = C.UUID_BYTES;
     const NONCE_BYTES = C.NONCE_BYTES;
     const TAG_BYTES = C.TAG_BYTES;
-    const TAG_BITS = TAG_BYTES * 8;
+    const TAG_BITS = TAG_BYTES * C.BITS_PER_BYTE;
     const MAGIC_BYTES = 4;
     const CARD_BYTES = NONCE_BYTES + KEY_BYTES + TAG_BYTES;
     const VAULT_BYTES = NONCE_BYTES + CODE_BYTES + TAG_BYTES;
@@ -107,7 +107,7 @@ const ElyrnRoomCrypto = (() => {
 
     async function hkdfBits(ikm, salt, info, length) {
         const base = await subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
-        return new Uint8Array(await subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: salt, info: info }, base, length * 8));
+        return new Uint8Array(await subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: salt, info: info }, base, length * C.BITS_PER_BYTE));
     }
 
     function aesKey(raw, usages) {
@@ -510,7 +510,7 @@ const ElyrnRoomCrypto = (() => {
     }
 
     // Throws unless every check passes: structure, card, both X25519, a wrap, commitment, body
-    async function open(room, me, magic, id, blob) {
+    async function open({ room, me, magic, id, blob }) {
         if (!C.isUuidV4(id)) {
             throw new Error('bad message');
         }
@@ -565,12 +565,12 @@ const ElyrnRoomCrypto = (() => {
     }
 
     function openMessage(room, me, id, blob) {
-        return open(room, me, MAGIC_MESSAGE, id, blob);
+        return open({ room, me, magic: MAGIC_MESSAGE, id, blob });
     }
 
     // A note must also have been addressed to me alone
     async function openNote(room, me, id, blob) {
-        const note = await open(room, me, MAGIC_NOTE, id, blob);
+        const note = await open({ room, me, magic: MAGIC_NOTE, id, blob });
         if (!bytesEqual(note.digest, await rosterDigest([me.card]))) {
             throw new Error('note addressed to someone else');
         }

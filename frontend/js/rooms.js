@@ -233,13 +233,13 @@ const Rooms = (() => {
 
     // Draws a code, pays a proof of work and stores the room. Returns { id, code } or a
     // { status } the caller explains.
-    async function create(api, root, maxMembers, ttlHours, solvePow) {
+    async function create({ api, root, maxMembers, ttlHours, solvePow }) {
         for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt++) {
             const code = R.newRoomCode(maxMembers, R.expiryHourFor(ttlHours, Date.now()));
             const keys = await R.deriveRoom(code.secret);
             const member = await R.member(keys, root);
             const pow = await solvePow();
-            if (!pow) return { status: 0 };
+            if (!pow) return { status: HTTP_STATUS.NO_ANSWER };
             const result = await api('POST', '/rooms', {
                 id: keys.id,
                 lookup: keys.lookup,
@@ -248,13 +248,13 @@ const Rooms = (() => {
                 vault: await R.sealVault(root, keys.id, code),
                 pow: pow
             });
-            if (result.status === 409) continue;
+            if (result.status === HTTP_STATUS.CONFLICT) continue;
             if (!result.ok || !result.data || !result.data.conversation || result.data.conversation.id !== keys.id) {
                 return { status: result.status };
             }
             return { id: keys.id, code: R.buildRoomCode(code) };
         }
-        return { status: 409 };
+        return { status: HTTP_STATUS.CONFLICT };
     }
 
     // Takes a seat. Returns { id, status }.
@@ -270,7 +270,7 @@ const Rooms = (() => {
         });
         const conv = result.data && result.data.conversation;
         if (result.ok && (!conv || conv.id !== keys.id)) {
-            return { id: null, status: 0 };
+            return { id: null, status: HTTP_STATUS.NO_ANSWER };
         }
         return { id: result.ok ? keys.id : null, status: result.status };
     }
@@ -298,28 +298,36 @@ const Rooms = (() => {
     }
 
     // Returns [{ id, from (roster entry or null), invite }] for the notes that open; the server
-    // cannot make a note open, so anything else is dropped.
+    // cannot make a note open, so anything else is dropped. A listing that failed shows no notes
+    // until the next refresh; it is logged (a 401 has already ended the session).
     async function notes(api, conv) {
         const result = await api('GET', `/conversations/${conv.id}/notes`);
         if (!result.ok || !result.data || !Array.isArray(result.data.notes)) {
+            if (result.status !== HTTP_STATUS.UNAUTHORIZED) Log.warn(Errors.INTERNAL.W_NOTES_NOT_LOADED, result);
             return [];
         }
         const opened = [];
         const seen = new Set();
+        let dropped = 0;
         for (const raw of result.data.notes.slice(0, R.MAX_MEMBERS)) {
             // A note listed twice is one request: shown once, answered once
             if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || typeof raw.blob !== 'string' || seen.has(raw.id)) continue;
             seen.add(raw.id);
             try {
                 const note = await R.openNote(conv.room.keys, conv.room.member, raw.id, raw.blob);
-                if (note.text.length > MAX_NOTE_CHARS) continue;
+                if (note.text.length > MAX_NOTE_CHARS) {
+                    dropped++;
+                    continue;
+                }
                 opened.push({ id: raw.id, from: senderOf(conv.room, note.sender) || null, aura: await ElyrnCrypto.aura(note.sender), invite: note.text });
             } catch (e) {
                 // Not for us, or tampered with: a note sealed for another member never opens here
-                // by design, and the server can add notes at will, so each is dropped unlogged
-                // rather than letting the server fill the console
+                // by design, and the server can add notes at will, so each is dropped and counted;
+                // one line per listing is logged below rather than letting the server fill the console
+                dropped++;
             }
         }
+        if (dropped > 0) Log.warn(Errors.INTERNAL.W_NOTES_DROPPED);
         return opened;
     }
 

@@ -2,7 +2,15 @@
 // NOTIFICATION SYSTEM
 // ========================================
 
-function showNotification(message, type = 'info', duration = 4000) {
+// How long a notification stays, how soon after it is added it slides in, and how long its
+// slide-out runs before it is removed (the stylesheet's .notification transition)
+const NOTIFICATION_SHOWN_MS = 4000;
+const NOTIFICATION_ENTER_DELAY_MS = 10;
+const NOTIFICATION_EXIT_MS = 300;
+const NOTIFICATION_CLOSE_LABEL = '×';
+const NOTIFICATION_CLOSE_ARIA_LABEL = 'Close notification';
+
+function showNotification(message, type = 'info', duration = NOTIFICATION_SHOWN_MS) {
     const container = document.getElementById('notificationContainer');
     
     // Create notification element
@@ -11,8 +19,8 @@ function showNotification(message, type = 'info', duration = 4000) {
     
     const closeBtn = document.createElement('button');
     closeBtn.className = 'close-btn';
-    closeBtn.textContent = '×';
-    closeBtn.setAttribute('aria-label', 'Close notification');
+    closeBtn.textContent = NOTIFICATION_CLOSE_LABEL;
+    closeBtn.setAttribute('aria-label', NOTIFICATION_CLOSE_ARIA_LABEL);
     closeBtn.addEventListener('click', function() {
         closeNotification(this);
     });
@@ -29,7 +37,7 @@ function showNotification(message, type = 'info', duration = 4000) {
     // Show animation
     setTimeout(() => {
         notification.classList.add('show');
-    }, 10);
+    }, NOTIFICATION_ENTER_DELAY_MS);
     
     // Auto remove after duration
     if (duration > 0) {
@@ -48,7 +56,7 @@ function closeNotification(closeBtn) {
         if (notification.parentElement) {
             notification.parentElement.removeChild(notification);
         }
-    }, 300);
+    }, NOTIFICATION_EXIT_MS);
 }
 
 function showSuccess(message) {

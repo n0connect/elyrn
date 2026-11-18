@@ -19,10 +19,11 @@ const ElyrnCrypto = (() => {
     const INFO_AURA = 'noaddx/aura';
     const INFO_INVITE_FP = 'noaddx/invite-fp';
     const KEY_BYTES = 32;
-    const KEY_BITS = KEY_BYTES * 8;
+    const BITS_PER_BYTE = 8;
+    const KEY_BITS = KEY_BYTES * BITS_PER_BYTE;
     const NONCE_BYTES = 12;
     const TAG_BYTES = 16;
-    const TAG_BITS = TAG_BYTES * 8;
+    const TAG_BITS = TAG_BYTES * BITS_PER_BYTE;
     const UUID_BYTES = 16;
     const INVITE_TOKEN_BYTES = 16;
     const INVITE_FP_BYTES = 16;
@@ -152,7 +153,7 @@ const ElyrnCrypto = (() => {
         const bits = await subtle.deriveBits(
             { name: 'HKDF', hash: 'SHA-256', salt: salt, info: encoder.encode(info) },
             base,
-            length * 8  // bytes to bits
+            length * BITS_PER_BYTE
         );
         return new Uint8Array(bits);
     }
@@ -423,7 +424,7 @@ const ElyrnCrypto = (() => {
     }
 
     // Throws on any tampering (wrong conversation, message id, sender, or modified bytes)
-    async function decryptMessage(key, conversationId, messageId, senderPublicKey, ciphertext) {
+    async function decryptMessage({ key, conversationId, messageId, senderPublicKey, ciphertext }) {
         const data = b64urlDecode(ciphertext);
         if (data.length < NONCE_BYTES + TAG_BYTES + PAD_BLOCK) {
             throw new Error('ciphertext too short');
@@ -585,6 +586,7 @@ const ElyrnCrypto = (() => {
     }
 
     return Object.freeze({
+        BITS_PER_BYTE,
         KEY_BYTES,
         NONCE_BYTES,
         TAG_BYTES,

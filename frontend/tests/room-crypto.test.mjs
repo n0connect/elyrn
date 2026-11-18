@@ -53,6 +53,12 @@ async function joinAs(room, account) {
     return { root, member: await R.member(room, root) };
 }
 
+// A room with three members, A, B and C, as most message tests use
+async function roomOfThree() {
+    const { room } = await fixture();
+    return { room, a: await joinAs(room, ACCOUNT_A), b: await joinAs(room, ACCOUNT_B), c: await joinAs(room, ACCOUNT_C) };
+}
+
 function flip(blob, index) {
     const raw = C.b64urlDecode(blob);
     raw[index] ^= 1;
@@ -134,10 +140,7 @@ test('cards open only in their room; vaults only for their account and room', as
 });
 
 test('roster digest ignores order, not membership', async () => {
-    const { room } = await fixture();
-    const a = await joinAs(room, ACCOUNT_A);
-    const b = await joinAs(room, ACCOUNT_B);
-    const c = await joinAs(room, ACCOUNT_C);
+    const { room, a, b, c } = await roomOfThree();
     const d1 = await R.rosterDigest([a.member.card, b.member.card, c.member.card]);
     const d2 = await R.rosterDigest([c.member.card, a.member.card, b.member.card]);
     const d3 = await R.rosterDigest([a.member.card, b.member.card]);
@@ -147,10 +150,7 @@ test('roster digest ignores order, not membership', async () => {
 });
 
 test('every recipient opens a room message and sees who sent it', async () => {
-    const { room } = await fixture();
-    const a = await joinAs(room, ACCOUNT_A);
-    const b = await joinAs(room, ACCOUNT_B);
-    const c = await joinAs(room, ACCOUNT_C);
+    const { room, a, b, c } = await roomOfThree();
     const id = C.newMessageId();
     const blob = await sealFor(room, a, [a.member.card, b.member.card, c.member.card], id, 5);
     for (const p of [a, b, c]) {
@@ -161,10 +161,7 @@ test('every recipient opens a room message and sees who sent it', async () => {
 });
 
 test('a member outside the roster cannot open; a member cannot impersonate another', async () => {
-    const { room } = await fixture();
-    const a = await joinAs(room, ACCOUNT_A);
-    const b = await joinAs(room, ACCOUNT_B);
-    const c = await joinAs(room, ACCOUNT_C);
+    const { room, a, b, c } = await roomOfThree();
     const id = C.newMessageId();
     const blob = await sealFor(room, a, [a.member.card, b.member.card], id);
     await assert.rejects(R.openMessage(room, c.member, id, blob));
@@ -230,10 +227,7 @@ test('message size is header, wraps and one padded class', async () => {
 });
 
 test('a note opens only for its addressee', async () => {
-    const { room } = await fixture();
-    const a = await joinAs(room, ACCOUNT_A);
-    const b = await joinAs(room, ACCOUNT_B);
-    const c = await joinAs(room, ACCOUNT_C);
+    const { room, a, b, c } = await roomOfThree();
     const id = C.newMessageId();
     const note = await R.sealNote({ room, me: a.member, id, toCard: b.member.card, text: 'noaddx:invite', sentAt: SENT_AT });
     const opened = await R.openNote(room, b.member, id, note);

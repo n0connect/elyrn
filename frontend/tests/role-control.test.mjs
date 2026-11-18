@@ -34,8 +34,10 @@ test('a role never looks like a built-in badge: unframed italic text against a f
     assert.match(role, /font-style: italic;/);
     assert.doesNotMatch(badge, /italic/);
     // The badges keep their own words, set by ui.js, never by a role
-    assert.match(ui, /memberTag\('you'\)/);
-    assert.match(ui, /memberTag\('owner'\)/);
+    assert.match(ui, /memberTag\(UI_TEXT\.YOU_TAG\)/);
+    assert.match(ui, /memberTag\(UI_TEXT\.OWNER_TAG\)/);
+    assert.match(ui, /    YOU_TAG: 'you',\n/);
+    assert.match(ui, /    OWNER_TAG: 'owner',\n/);
 });
 
 test('the control is offered only where it can be used, and every refusal has its code', () => {

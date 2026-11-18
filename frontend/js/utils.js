@@ -11,12 +11,29 @@ const STATUS_PAGES = Object.freeze({
 });
 // The longest any API request may take, answer body included: past it the request is aborted
 // and reported as no answer (status 0), so no button, lock or queued sync waits forever. The live
-// event stream (EventSource, chat.js) is not an apiCall and is never cut by it.
+// event stream (EventSource, live-updates.js) is not an apiCall and is never cut by it.
 const REQUEST_TIMEOUT_MS = 30000;
 // The largest answer apiCall reads. A full page of messages at this client's own maxima (1000
 // messages of at most 11000 characters, auth.js and chat.js) stays well below it; a larger
 // answer is a hostile or broken server, refused unread past this point.
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+// The answers the page tells apart, by name. NO_ANSWER is apiCall's own: no answer at all (the
+// request timed out, or never reached the server); errors.js, loaded before this file, keys its
+// status table by the numbers themselves
+const HTTP_STATUS = Object.freeze({
+    NO_ANSWER: 0,
+    CREATED: 201,
+    NO_CONTENT: 204,
+    BAD_REQUEST: 400,
+    UNAUTHORIZED: 401,
+    FORBIDDEN: 403,
+    NOT_FOUND: 404,
+    CONFLICT: 409,
+    PRECONDITION_FAILED: 412,
+    TOO_MANY_REQUESTS: 429,
+    SERVER_ERROR: 500,
+    INSUFFICIENT_STORAGE: 507
+});
 // A send (a message or a friend request) answered 409 "Id taken" (Errors.idTaken: the id is held
 // by something else, nothing stored) goes again under a fresh id this many times at most; the
 // agent's maxIDRedraws (backend/internal/agent/limits.go) is the same bound
@@ -135,7 +152,12 @@ function singleFlight(task) {
     };
 }
 
-// Whether a page must fetch its updates instead of waiting for its live event stream (chat.js
+// Whether the page is shown: the chat marks nothing read while it is not, and alerts are raised only then
+function isPageVisible() {
+    return document.visibilityState === 'visible';
+}
+
+// Whether a page must fetch its updates instead of waiting for its live event stream (live-updates.js
 // watchdog). Only a logged-in page polls, and only once the stream has delivered no event of any
 // kind for silenceLimitMs. A visible page then polls at every look; a hidden one only once
 // hiddenIntervalMs has passed since its last poll (lastPollAt), so a tab left in the background
@@ -216,7 +238,7 @@ async function apiCall(method, path, body) {
 // larger than MAX_RESPONSE_BYTES.
 async function readBody(response) {
     const contentType = response.headers.get('content-type') || '';
-    const json = response.status !== 204 && contentType.includes('application/json');
+    const json = response.status !== HTTP_STATUS.NO_CONTENT && contentType.includes('application/json');
     let text;
     try {
         text = await readCapped(response);
@@ -288,5 +310,5 @@ function noAnswer(error) {
     } else if (refused) {
         Log.warn(Errors.INTERNAL.W_RESPONSE_TOO_LARGE);
     }
-    return { ok: false, status: 0, data: null, timedOut: timedOut, tooLarge: refused };
+    return { ok: false, status: HTTP_STATUS.NO_ANSWER, data: null, timedOut: timedOut, tooLarge: refused };
 }

@@ -37,6 +37,29 @@ const ImageClean = (() => {
     const WEBP_CHUNK_OFFSET = 12;
     // PNG: the IHDR chunk's width and height (big-endian u32) follow the signature and chunk head
     const PNG_WIDTH_OFFSET = 16;
+    const PNG_HEIGHT_OFFSET = PNG_WIDTH_OFFSET + 4;
+    const PNG_SIZE_END = PNG_HEIGHT_OFFSET + 4;
+    // JPEG: every segment starts with a two-byte marker; a start-of-frame segment holds its
+    // height and width (u16be) this far after its marker
+    const JPEG_MARKER_BYTES = 2;
+    // A segment's head: its marker and its u16be length (which counts itself, not the marker)
+    const JPEG_SEGMENT_HEAD_BYTES = JPEG_MARKER_BYTES + 2;
+    const JPEG_SOF_HEIGHT = 5;
+    const JPEG_SOF_WIDTH = 7;
+    // WebP: the four-character tag of the first chunk at WEBP_CHUNK_OFFSET says which bitstream
+    // follows, and where it keeps the canvas size (RFC 9649): VP8 as two u16le under a 14-bit
+    // mask, VP8L as two 14-bit values less one packed from VP8L_SIZE_OFFSET, VP8X as two u24le
+    // values less one. *_END: the bytes a header needs for its size to be read
+    const FOURCC_BYTES = 4;
+    const VP8_WIDTH_OFFSET = 26;
+    const VP8_HEIGHT_OFFSET = 28;
+    const VP8_SIZE_MASK = 0x3fff;
+    const VP8_SIZE_END = 30;
+    const VP8L_SIZE_OFFSET = 21;
+    const VP8L_SIZE_END = VP8L_SIZE_OFFSET + 4;
+    const VP8X_WIDTH_OFFSET = 24;
+    const VP8X_HEIGHT_OFFSET = 27;
+    const VP8X_SIZE_END = 30;
     // JPEG: start-of-frame markers carry height and width (big-endian u16) after length and precision
     const JPEG_SOF = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
     const JPEG_SOS = 0xda;
@@ -50,6 +73,8 @@ const ImageClean = (() => {
     const JPEG_COM = 0xfe;
     const PNG_DROPPED = new Set(['tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME']);
     const PNG_CHUNK_OVERHEAD = 12;
+    // A chunk starts with its u32be data length, then its four-character type
+    const PNG_LENGTH_BYTES = 4;
 
     function startsWith(bytes, magic, offset = 0) {
         if (bytes.length < offset + magic.length) return false;
@@ -70,8 +95,8 @@ const ImageClean = (() => {
     const u32be = (b, i) => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
 
     function jpegSize(b) {
-        let i = 2;
-        while (i + 3 < b.length) {
+        let i = JPEG_MARKER_BYTES;
+        while (i + JPEG_SEGMENT_HEAD_BYTES <= b.length) {
             if (b[i] !== 0xff) return null;
             const marker = b[i + 1];
             if (marker === 0xff) {
@@ -79,28 +104,29 @@ const ImageClean = (() => {
                 continue;
             }
             if (JPEG_STANDALONE.has(marker)) {
-                i += 2;
+                i += JPEG_MARKER_BYTES;
                 continue;
             }
             if (marker === JPEG_SOS || marker === JPEG_EOI) return null;
             if (JPEG_SOF.has(marker)) {
-                return i + 8 < b.length ? { height: u16be(b, i + 5), width: u16be(b, i + 7) } : null;
+                return i + JPEG_SOF_WIDTH + 1 < b.length ? { height: u16be(b, i + JPEG_SOF_HEIGHT), width: u16be(b, i + JPEG_SOF_WIDTH) } : null;
             }
-            i += 2 + u16be(b, i + 2);
+            i += JPEG_MARKER_BYTES + u16be(b, i + JPEG_MARKER_BYTES);
         }
         return null;
     }
 
     function webpSize(b) {
-        const chunk = String.fromCharCode(b[12], b[13], b[14], b[15]);
-        if (chunk === 'VP8 ' && b.length >= 30) {
-            return { width: u16le(b, 26) & 0x3fff, height: u16le(b, 28) & 0x3fff };
+        const chunk = String.fromCharCode(...b.subarray(WEBP_CHUNK_OFFSET, WEBP_CHUNK_OFFSET + FOURCC_BYTES));
+        if (chunk === 'VP8 ' && b.length >= VP8_SIZE_END) {
+            return { width: u16le(b, VP8_WIDTH_OFFSET) & VP8_SIZE_MASK, height: u16le(b, VP8_HEIGHT_OFFSET) & VP8_SIZE_MASK };
         }
-        if (chunk === 'VP8L' && b.length >= 25) {
-            return { width: 1 + (b[21] | ((b[22] & 0x3f) << 8)), height: 1 + ((b[22] >> 6) | (b[23] << 2) | ((b[24] & 0x0f) << 10)) };
+        if (chunk === 'VP8L' && b.length >= VP8L_SIZE_END) {
+            const s = VP8L_SIZE_OFFSET;
+            return { width: 1 + (b[s] | ((b[s + 1] & 0x3f) << 8)), height: 1 + ((b[s + 1] >> 6) | (b[s + 2] << 2) | ((b[s + 3] & 0x0f) << 10)) };
         }
-        if (chunk === 'VP8X' && b.length >= 30) {
-            return { width: 1 + u24le(b, 24), height: 1 + u24le(b, 27) };
+        if (chunk === 'VP8X' && b.length >= VP8X_SIZE_END) {
+            return { width: 1 + u24le(b, VP8X_WIDTH_OFFSET), height: 1 + u24le(b, VP8X_HEIGHT_OFFSET) };
         }
         return null;
     }
@@ -108,19 +134,19 @@ const ImageClean = (() => {
     // The width and height an image's header declares, or null when it cannot be read
     function declaredSize(bytes, kind) {
         if (kind === KIND.PNG) {
-            return bytes.length >= PNG_WIDTH_OFFSET + 8 ? { width: u32be(bytes, PNG_WIDTH_OFFSET), height: u32be(bytes, PNG_WIDTH_OFFSET + 4) } : null;
+            return bytes.length >= PNG_SIZE_END ? { width: u32be(bytes, PNG_WIDTH_OFFSET), height: u32be(bytes, PNG_HEIGHT_OFFSET) } : null;
         }
         if (kind === KIND.JPEG) return jpegSize(bytes);
-        if (kind === KIND.WEBP) return bytes.length > WEBP_CHUNK_OFFSET + 4 ? webpSize(bytes) : null;
+        if (kind === KIND.WEBP) return bytes.length > WEBP_CHUNK_OFFSET + FOURCC_BYTES ? webpSize(bytes) : null;
         return null;
     }
 
     // A JPEG without its APP1..APP15 and COM segments (everything up to the first scan is walked;
     // the scan and what follows it are kept as they are), or null when the segments do not parse
     function stripJpeg(b) {
-        const kept = [b.subarray(0, 2)];
-        let i = 2;
-        while (i + 3 < b.length) {
+        const kept = [b.subarray(0, JPEG_MARKER_BYTES)];
+        let i = JPEG_MARKER_BYTES;
+        while (i + JPEG_SEGMENT_HEAD_BYTES <= b.length) {
             if (b[i] !== 0xff) return null;
             const marker = b[i + 1];
             if (marker === JPEG_SOS) {
@@ -128,7 +154,7 @@ const ImageClean = (() => {
                 return ElyrnCrypto.concat(...kept);
             }
             if (JPEG_STANDALONE.has(marker) || marker === 0xff) return null;
-            const end = i + 2 + u16be(b, i + 2);
+            const end = i + JPEG_MARKER_BYTES + u16be(b, i + JPEG_MARKER_BYTES);
             if (end > b.length) return null;
             const dropped = (marker >= JPEG_APP1 && marker <= JPEG_APP15) || marker === JPEG_COM;
             if (!dropped) kept.push(b.subarray(i, end));
@@ -144,7 +170,7 @@ const ImageClean = (() => {
         while (i + PNG_CHUNK_OVERHEAD <= b.length) {
             const end = i + PNG_CHUNK_OVERHEAD + u32be(b, i);
             if (end > b.length) return null;
-            const type = String.fromCharCode(b[i + 4], b[i + 5], b[i + 6], b[i + 7]);
+            const type = String.fromCharCode(...b.subarray(i + PNG_LENGTH_BYTES, i + PNG_LENGTH_BYTES + FOURCC_BYTES));
             if (!PNG_DROPPED.has(type)) kept.push(b.subarray(i, end));
             i = end;
             if (type === 'IEND') return i === b.length ? ElyrnCrypto.concat(...kept) : null;

@@ -3,6 +3,11 @@
    Zone-based reveal triggered by login button proximity
    ======================================== */
 
+// The reveal's pace, and the hide's: a step every so many ms, each hidden character noise this often
+const SECURE_REVEAL_STEP_MS = 50;
+const SECURE_HIDE_STEP_MS = 40;
+const SECURE_HIDE_NOISE_CHANCE = 0.4;
+
 class SecureTextAnimation {
     constructor() {
         this.elements = [];
@@ -105,7 +110,7 @@ class SecureTextAnimation {
                 element.scrambleInterval = null;
                 // Keep animating state true to prevent re-trigger while in zone
             }
-        }, 50);
+        }, SECURE_REVEAL_STEP_MS);
     }
 
     stopScramble(element) {
@@ -134,7 +139,7 @@ class SecureTextAnimation {
             
             let display = '';
             for (let i = 0; i < originalText.length; i++) {
-                if (Math.random() < 0.4) {
+                if (Math.random() < SECURE_HIDE_NOISE_CHANCE) {
                     display += this.characters[Math.floor(Math.random() * this.characters.length)];
                 } else {
                     display += originalText[i];
@@ -142,7 +147,7 @@ class SecureTextAnimation {
             }
             element.textContent = display;
             iteration++;
-        }, 40);
+        }, SECURE_HIDE_STEP_MS);
     }
 }
 
