@@ -2,20 +2,23 @@
 // BURN FIRE (the burned view goes up in flames, for the person who burned, once the server confirmed it)
 // ========================================
 // Decoration only: it starts after the burn request has answered and never delays or decides
-// anything. On a coarse grid of big square cells, in four steps of the app's frame clock
-// (--frame-ms in styles.css, read at start):
-// 1. the burned view fades to black in three ordered-dither steps (a pixel fade, no opacity);
-// 2. a few very large tongues of flame rise from the bottom edge in three layers, back to front:
-//    the destructive red (tallest), "orange" (a one-cell checker of red and yellow, no new colour)
-//    and the warning yellow (the short hot core); each tongue is a pointed arch around its centre
-//    that narrows with height, its tip leaning and swaying a cell from frame to frame;
-// 3. the whole window is flame: at the first such frame the app switches to the home view
-//    underneath (play's onCovered) and the black is dropped;
-// 4. the flames leave upward, their lower edge lifting off the bottom as inverted tongues, until
-//    nothing is painted and the canvas is removed.
-// The geometry is pure (tongues from a seed, a cell's layer from the frame); colours are custom
-// properties of the stylesheet. Drawn on one canvas made for the length of the animation and
-// removed afterwards: no markup string, no inline style, nothing the CSP or Trusted Types refuse.
+// anything. Many separate flames move as one body and die as pieces. A flame is a sprite on a
+// grid of big square cells: a teardrop (a rounded belly at a third of its height, narrowing to a
+// single pointed tip that leans to one side in a slight S) with a smaller teardrop inside, the
+// core, sitting low in the belly. On the app's frame clock (--frame-ms in styles.css, read at
+// start):
+// the burned view fades to black in an ordered dither (half, then solid) while a stream of flames
+// passes through the window: each enters from below the bottom edge, big ones first, and rises on
+// every frame, faster on each (travel: it starts slowly and leaves the top fastest), swaying with
+// all the others by the same cell, until it is out through the top. They overlap into one mass while
+// they cross; the slower and later ones trail behind as lone flames. On the frame with the most
+// flame (the cover) the app switches to the home view underneath (play's onCovered), unseen under
+// the solid black; two frames later the black lifts in dither steps, so the stragglers burn over
+// a dimmed home view and the last frame is the clean home view. Nothing stands still.
+// The geometry is pure (flames from a seed, a flame's cells at a frame, a cell's paint at a
+// frame); colours are custom properties of the stylesheet. Drawn on one canvas made for the
+// length of the animation and removed afterwards: no markup string, no inline style, nothing
+// the CSP or Trusted Types refuse.
 
 const BurnFire = (() => {
     'use strict';
@@ -28,47 +31,55 @@ const BurnFire = (() => {
     const MAX_ROWS = 135;
     // The app's frame clock (styles.css): every stepped animation steps at it
     const FRAME_PROPERTY = '--frame-ms';
-    // The frame plan: fade, rise, cover, exit; the hard stop comes one frame after the last
-    const FADE_FRAMES = 3;
-    const RISE_FRAMES = 5;
-    const COVER_FRAMES = 2;
-    const EXIT_FRAMES = 4;
-    const RISE_START = FADE_FRAMES;
-    const COVER_START = RISE_START + RISE_FRAMES;
-    const EXIT_START = COVER_START + COVER_FRAMES;
-    const TOTAL_FRAMES = EXIT_START + EXIT_FRAMES;
-    // Tongues: TONGUES_MIN..TONGUES_MAX a layer, evenly spread with a little jitter; a layer's
-    // tongues are its half share of the window's width either side of their centre at the base
-    // (the red about a third wide, overlapping; the front layers narrower, so the colours stand
-    // as flames inside flames, not bands) and min..max window heights tall when grown
-    const TONGUES_MIN = 5;
-    const TONGUES_MAX = 7;
-    const JITTER_SHARE = 0.25;
-    const LAYERS = Object.freeze([
-        { name: 'red', half: 0.18, min: 1.5, max: 2.1 },
-        { name: 'orange', half: 0.13, min: 0.8, max: 1.2 },
-        { name: 'yellow', half: 0.08, min: 0.35, max: 0.65 }
+    // The stream: flames start up to STARTS_MAX frames apart (big ones first) and each crosses in
+    // its own N_MIN..N_MAX frames, accelerating (travel); the frame plan is every flame's crossing
+    // and one clean last frame; the hard stop one frame after
+    const STARTS_MAX = 3;
+    const N_MIN = 4;
+    const N_MAX = 6;
+    // the STRAGGLERS smallest start one frame apart from STRAGGLER_START and cross slowest
+    const STRAGGLERS = 2;
+    const STRAGGLER_START = STARTS_MAX - 1;
+    const TOTAL_FRAMES = STRAGGLER_START + STRAGGLERS - 1 + N_MAX + 1;
+    // Rear flames that make the cover frame whole: REAR_HEIGHT of the window tall, at least
+    // REAR_WIDTH of it wide; past REAR_MAX of them each next one is wider
+    const REAR_HEIGHT = 1.1;
+    const REAR_LOW = 0.45;
+    const REAR_STEP = 0.05;
+    const REAR_REACH = 0.6;
+    const REAR_WIDTH = 0.3;
+    const REAR_MAX = 8;
+    const LAST_FRAME = TOTAL_FRAMES - 1;
+    // The black's dither level (quarters of the cells): half on the first frame, solid from the
+    // second until SOLID_AFTER frame past the cover, then half, a quarter and none (the last frame)
+    const SOLID_AFTER = 1;
+    const LIFT_LEVELS = Object.freeze([2, 1, 0]);
+    // Flames: FLAMES_MIN..FLAMES_MAX in two kinds, as shares of the window's height and width: tall
+    // and wide ones behind, shorter and narrower ones in front
+    const FLAMES_MIN = 12;
+    const FLAMES_MAX = 16;
+    const KINDS = Object.freeze([
+        { height: [0.9, 1.1], width: [0.27, 0.3] },
+        { height: [0.5, 0.85], width: [0.22, 0.3] }
     ]);
-    const LEAN_MAX = 3;
-    // A pointed arch: the half width at height h of a tongue of height H is half * (1 - h/H)^ARCH
-    const ARCH = 0.7;
-    // The sway of a tip, by frame: a cell left, none, a cell right, none
+    // The silhouette: belly at BELLY of the height; the tip leans LEAN widths over, with an S of
+    // S_CURVE widths the other way low down; the core is CORE_SCALE of the flame, same base
+    const BELLY = 1 / 3;
+    const TAPER = 0.8;
+    const LEAN = 0.3;
+    const S_CURVE = 0.08;
+    const CORE_SCALE = 0.5;
+    // All flames sway together by the same cell on the same frame
     const SWAY = Object.freeze([0, 1, 0, -1]);
-    // Leaving: the lower edge lifts a quarter of the window a frame, highest between the tongues
-    // and up to GAP_REACH window heights lower under them (inverted tongues), less so as it goes
-    const GAP_REACH = 0.5;
-    // What covers a cell
-    const NONE = 0;
-    const BLACK = 1;
-    const RED = 2;
-    const ORANGE = 3;
-    const YELLOW = 4;
-    // Paint: the palette's index for each layer (orange is a checker of red and yellow)
-    const PALETTE = Object.freeze(['--fire-fringe', '--fire-flame', '--fire-glow']);
+    // Paint: the palette's index of the black, the two bodies and the core
+    const PALETTE = Object.freeze(['--fire-fringe', '--fire-flame', '--fire-orange', '--fire-glow']);
+    const BLACK = 0;
+    const RED = 1;
+    const ORANGE = 2;
+    const CORE = 3;
     const NOT_PAINTED = -1;
-    // Ordered 2x2 dither: a cell is black at fade level n (1..3) when its rank is below RANKS[n]
+    // Ordered 2x2 dither ranks
     const BAYER = Object.freeze([0, 2, 3, 1]);
-    const FADE_RANKS = Object.freeze([0, 1, 2, 4]);
     const CANVAS_CLASS = 'burn-fire';
     const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
     const SEED_RANGE = 0x100000000;
@@ -88,80 +99,222 @@ const BurnFire = (() => {
     const between = (random, min, max) => min + random() * (max - min);
     const whole = (random, min, max) => min + Math.floor(random() * (max - min + 1));
 
-    // The tongues of every layer for a grid cols wide: [[{ x, half, height, lean, phase }]], back
-    // to front; height in window heights. Pure: the same arguments give the same tongues.
-    function tongues(cols, seed) {
+    // The flames for a cols x rows grid, back to front (taller and redder behind): [{ x, height,
+    // width, lean, body, start, frames }] in cells and frames. Pure.
+    function flames(cols, rows, seed) {
         const random = seeded(seed);
-        return LAYERS.map(layer => {
-            const count = whole(random, TONGUES_MIN, TONGUES_MAX);
-            const spacing = cols / count;
-            return Array.from({ length: count }, (_, i) => ({
-                x: (i + 0.5) * spacing + between(random, -JITTER_SHARE, JITTER_SHARE) * spacing,
-                half: cols * layer.half,
-                height: between(random, layer.min, layer.max),
-                lean: between(random, -LEAN_MAX, LEAN_MAX),
-                phase: whole(random, 0, SWAY.length - 1)
-            }));
-        });
-    }
-
-    // Whether a tongue grown to share of its height covers the cell at col, h cells above the
-    // bottom row, at frame (its tip sways)
-    function covers(tongue, share, rows, frame, col, h) {
-        const height = tongue.height * share * rows;
-        if (h >= height) return false;
-        const rise = h / height;
-        const centre = tongue.x + (tongue.lean + SWAY[(frame + tongue.phase) % SWAY.length]) * rise;
-        return Math.abs(col + 0.5 - centre) <= tongue.half * Math.pow(1 - rise, ARCH);
-    }
-
-    // The fade's dither level at frame: 1, 2, 3 while fading, 3 (solid) while rising, else 0
-    function fadeLevel(frame) {
-        if (frame < FADE_FRAMES) return frame + 1;
-        return frame < COVER_START ? FADE_FRAMES : 0;
-    }
-
-    // How far the flames have grown at frame: 0 before the rise, 1 from the cover on
-    function riseShare(frame) {
-        if (frame < RISE_START) return 0;
-        return Math.min(1, (frame - RISE_START + 1) / RISE_FRAMES);
-    }
-
-    // What covers the cell at col, row (from the top) at frame: NONE, BLACK, RED, ORANGE or YELLOW
-    function layerAt(plan, frame, col, row) {
-        const { layers, rows, cols } = plan;
-        if (frame >= TOTAL_FRAMES) return NONE;
-        const h = rows - 1 - row;
-        if (frame >= EXIT_START) {
-            // the lower edge lifts, highest between the tongues (inverted tongues)
-            const lift = (frame - EXIT_START + 1) / EXIT_FRAMES;
-            const red = layers[0];
-            let gap = 0;
-            for (let i = 0; i + 1 < red.length; i++) {
-                const mid = (red[i].x + red[i + 1].x) / 2;
-                const width = (red[i + 1].x - red[i].x) / 2;
-                gap = Math.max(gap, 1 - Math.abs(col + 0.5 - mid) / width);
+        const count = whole(random, FLAMES_MIN, FLAMES_MAX);
+        const list = [];
+        KINDS.forEach((kind, k) => {
+            const n = k === 0 ? Math.ceil(count / 2) : Math.floor(count / 2);
+            const spacing = cols / n;
+            for (let i = 0; i < n; i++) {
+                const height = between(random, ...kind.height);
+                list.push({
+                    x: (i + 0.5 * (k + 1)) * spacing + between(random, -0.3, 0.3) * spacing,
+                    share: height,
+                    height: height * rows,
+                    width: between(random, ...kind.width) * cols,
+                    lean: random() < 0.5 ? -1 : 1
+                });
             }
-            const cut = rows * (lift - (1 - gap) * GAP_REACH * (1 - lift));
-            if (h < cut || lift >= 1) return NONE;
-        }
-        const share = riseShare(frame);
-        for (let layer = layers.length - 1; layer >= 0; layer--) {
-            if (share > 0 && layers[layer].some(t => covers(t, share, rows, frame, col, h))) return RED + layer;
-        }
-        // from the cover on, the window is flame: the back layer fills what its tongues leave
-        if (frame >= COVER_START) return RED;
-        const level = fadeLevel(frame);
-        return level && BAYER[(row % 2) * 2 + (col % 2)] < FADE_RANKS[level] ? BLACK : NONE;
+        });
+        list.sort((a, b) => b.share - a.share);
+        const middle = list[Math.floor(list.length / 2)].share;
+        // big ones first: the start follows the order; the big ones cross slowest, so the stream
+        // meets in one mass; the last few are stragglers, after it and slow
+        list.forEach((f, k) => {
+            f.body = f.share > middle ? RED : ORANGE;
+            const planned = Math.round(k * STARTS_MAX / (list.length - 1));
+            const straggler = k - (list.length - STRAGGLERS);
+            f.start = straggler >= 0 ? STRAGGLER_START + straggler : planned;
+            f.frames = straggler >= 0 ? N_MAX : N_MAX - Math.round(k * (N_MAX - N_MIN) / (list.length - 1));
+        });
+        return fillCover({ cols, rows, list }).list;
     }
 
-    // A layer's paint at col, row: the palette's index, or NOT_PAINTED
-    function paint(layer, col, row) {
-        if (layer === NONE) return NOT_PAINTED;
-        if (layer === BLACK) return 0;
-        if (layer === RED) return 1;
-        if (layer === YELLOW) return 2;
-        return (col + row) % 2 === 0 ? 1 : 2;
+    // The cover frame must be all flame, and only it: while a cell is uncovered on it, a large red
+    // rear flame is added behind the others, timed so that on that frame its belly stands on the
+    // middle of the largest uncovered region; past REAR_MAX of them the rear flames widen
+    function fillCover(plan) {
+        const cover = coverFrame(plan);
+        for (let added = 0; flameShare(plan, cover) < 1; added++) {
+            const region = largestGap(plan, cover);
+            const width = Math.min(plan.cols, Math.max(region.width + 2, REAR_WIDTH * plan.cols) * (added < REAR_MAX ? 1 : 1 + (added - REAR_MAX + 1) / 2));
+            // the crossing (n frames, k of them gone on the cover frame) and the height that put the
+            // flame's wide part over the region's middle row then
+            let best = null;
+            for (let n = N_MIN; n <= N_MAX; n++) {
+                for (let k = 1; k < n; k++) {
+                    const start = cover - k;
+                    if (start < 0 || start + n - 1 >= LAST_FRAME) continue;
+                    // for each height, how far the region's middle row is from the flame's wide
+                    // part (from its belly up to REAR_REACH of its height): the nearest, the
+                    // tallest of equals
+                    const p = travel(k, n);
+                    for (let share = REAR_HEIGHT; share >= REAR_LOW; share -= REAR_STEP) {
+                        const height = share * plan.rows;
+                        const base = (plan.rows + height) * (1 - p);
+                        const miss = Math.max(0, (base - height * REAR_REACH) - region.row, region.row - (base - height * BELLY));
+                        if (!best || miss < best.miss - 0.5) best = { miss, height, start, n };
+                    }
+                }
+            }
+            plan.list.unshift({
+                x: region.col - SWAY[cover % SWAY.length], share: best.height / plan.rows, height: best.height, width, lean: 0,
+                body: RED, start: best.start, frames: best.n, rear: true
+            });
+            if (added > REAR_MAX * 4) throw new Error('fire cover not reached');
+        }
+        return plan;
+    }
+
+    // The largest connected region of cells with no flame at frame: its middle { col, row } and width
+    function largestGap(plan, frame) {
+        const { cols, rows, list } = plan;
+        const lit = new Uint8Array(cols * rows);
+        for (const flame of list) for (const { col, row } of flameCells(flame, frame, cols, rows)) lit[row * cols + col] = 1;
+        let best = null;
+        const seen = new Uint8Array(cols * rows);
+        for (let i = 0; i < lit.length; i++) {
+            if (lit[i] || seen[i]) continue;
+            const stack = [i];
+            seen[i] = 1;
+            let count = 0;
+            let sumX = 0;
+            let sumY = 0;
+            let minX = cols;
+            let maxX = 0;
+            while (stack.length) {
+                const at = stack.pop();
+                const x = at % cols;
+                const y = Math.floor(at / cols);
+                count++;
+                sumX += x;
+                sumY += y;
+                minX = Math.min(minX, x);
+                maxX = Math.max(maxX, x);
+                for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+                    const next = ny * cols + nx;
+                    if (nx < 0 || ny < 0 || nx >= cols || ny >= rows || lit[next] || seen[next]) continue;
+                    seen[next] = 1;
+                    stack.push(next);
+                }
+            }
+            if (!best || count > best.count) best = { count, col: sumX / count + 0.5, row: sumY / count + 0.5, width: maxX - minX + 1 };
+        }
+        return best;
+    }
+
+    // The teardrop's half width at t (0 at the base, 1 at the tip), as a share of its width / 2
+    function profile(t) {
+        if (t < BELLY) return Math.sqrt(1 - ((BELLY - t) / BELLY) ** 2);
+        return Math.pow((1 - t) / (1 - BELLY), TAPER);
+    }
+
+    // The centre's offset at t, in widths: an S low down, the lean high up
+    function bend(t, lean) {
+        return lean * (LEAN * t * t - S_CURVE * Math.sin(Math.PI * t));
+    }
+
+    // The cells of one teardrop: base row (from the top, may be past the grid), height and width
+    // in cells, centre x and lean; one cell at least in every row, so the tip is a single point
+    function teardrop(cols, rows, x, base, height, width, lean, out, core) {
+        const top = Math.ceil(base - height);
+        let tip = true;
+        for (let row = Math.max(0, top); row <= Math.min(rows - 1, Math.floor(base)); row++) {
+            const t = (base - row - 0.5) / height;
+            if (t < 0 || t >= 1) continue;
+            const centre = x + bend(t, lean) * width;
+            const half = profile(t) * width / 2;
+            // the tip, and where the teardrop is narrower than two cells, is the one centre cell
+            const point = tip && top >= 0;
+            tip = false;
+            if (point || half < 1) {
+                const col = Math.floor(centre);
+                if (col >= 0 && col < cols) out.push({ col, row, core });
+                continue;
+            }
+            for (let col = Math.max(0, Math.floor(centre - half)); col <= Math.min(cols - 1, Math.ceil(centre + half)); col++) {
+                if (Math.abs(col + 0.5 - centre) < half || col === Math.floor(centre)) out.push({ col, row, core });
+            }
+        }
+    }
+
+    // The motion law, its one home: how far along its whole path a flame is on the k-th frame of a
+    // crossing of n frames: k(k+1) / (n(n+1)), so each step is larger than the one before (with
+    // n = 4: 0, 0.1, 0.3, 0.6, 1); it starts slowly at the bottom and leaves the top fastest
+    function travel(k, n) {
+        return (k * (k + 1)) / (n * (n + 1));
+    }
+
+    // A flame's place and size at frame: { x, base, height, width } in cells, or null when it is
+    // not on screen. Its path runs from just below the bottom edge (its tip at the edge) to just
+    // out through the top (its base at the edge); it is on its path from its start, frames frames.
+    function pose(flame, frame, rows) {
+        const k = frame - flame.start;
+        if (k < 1 || k >= flame.frames) return null;
+        const base = (rows + flame.height) * (1 - travel(k, flame.frames));
+        return { x: flame.x + SWAY[frame % SWAY.length], base, height: flame.height, width: flame.width };
+    }
+
+    // A flame's cells at frame: [{ col, row, core }] (core cells after the body's)
+    function flameCells(flame, frame, cols, rows) {
+        const at = pose(flame, frame, rows);
+        const out = [];
+        if (!at) return out;
+        teardrop(cols, rows, at.x, at.base, at.height, at.width, flame.lean, out, false);
+        teardrop(cols, rows, at.x, at.base, at.height * CORE_SCALE, at.width * CORE_SCALE, flame.lean, out, true);
+        return out;
+    }
+
+    // The share of the window that is flame at frame
+    function flameShare(plan, frame) {
+        const { cols, rows, list } = plan;
+        const lit = new Uint8Array(cols * rows);
+        for (const flame of list) for (const { col, row } of flameCells(flame, frame, cols, rows)) lit[row * cols + col] = 1;
+        return lit.reduce((sum, v) => sum + v, 0) / lit.length;
+    }
+
+    // The cover frame: the one with the most flame (the first of equals)
+    function coverFrame(plan) {
+        let best = 0;
+        let most = -1;
+        for (let frame = 0; frame < TOTAL_FRAMES; frame++) {
+            const share = flameShare(plan, frame);
+            if (share > most) {
+                most = share;
+                best = frame;
+            }
+        }
+        return best;
+    }
+
+    // The black's dither level at frame (quarters of the cells), given the cover frame
+    function blackLevel(frame, cover) {
+        if (frame === 0) return 2;
+        const past = frame - cover - SOLID_AFTER;
+        if (past <= 0) return 4;
+        return past <= LIFT_LEVELS.length ? LIFT_LEVELS[past - 1] : 0;
+    }
+
+    // Whether the black covers the cell at col, row at frame (an ordered dither)
+    function blackAt(frame, cover, col, row) {
+        return BAYER[(row % 2) * 2 + (col % 2)] < blackLevel(frame, cover);
+    }
+
+    // Every cell's paint at frame, row by row: NOT_PAINTED, BLACK, RED, ORANGE or CORE
+    function paintGrid(plan, frame) {
+        const { cols, rows, list } = plan;
+        const grid = new Int8Array(cols * rows).fill(NOT_PAINTED);
+        if (frame > LAST_FRAME) return grid;
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) if (blackAt(frame, plan.cover, col, row)) grid[row * cols + col] = BLACK;
+        }
+        for (const flame of list) {
+            for (const { col, row, core } of flameCells(flame, frame, cols, rows)) grid[row * cols + col] = core ? CORE : flame.body;
+        }
+        return grid;
     }
 
     // Whether the fire plays at all: never under reduced motion, never on a hidden page, never
@@ -171,8 +324,8 @@ const BurnFire = (() => {
     }
 
     // Whether frame is the one at which the app switches to the home view underneath
-    function coversAt(frame) {
-        return frame === COVER_START;
+    function coversAt(frame, cover) {
+        return frame === cover;
     }
 
     // The grid for a window of width x height css pixels
@@ -198,10 +351,7 @@ const BurnFire = (() => {
     function draw(context, plan, frame, cell, colours) {
         const { cols, rows } = plan;
         context.clearRect(0, 0, cols * cell, rows * cell);
-        const paints = new Int8Array(cols * rows);
-        for (let row = 0; row < rows; row++) {
-            for (let col = 0; col < cols; col++) paints[row * cols + col] = paint(layerAt(plan, frame, col, row), col, row);
-        }
+        const paints = paintGrid(plan, frame);
         colours.forEach((colour, index) => {
             context.fillStyle = colour;
             for (let i = 0; i < paints.length; i++) {
@@ -211,9 +361,9 @@ const BurnFire = (() => {
     }
 
     // Burns the window: onCovered (the switch to the home view) runs exactly once, at the first
-    // fully covered frame, or at once when the fire does not play, or when anything ends it early
-    // (the last frame, a key or a press, the hard stop, an error). The promise always resolves,
-    // once the canvas is gone.
+    // hold frame, or at once when the fire does not play, or when anything ends it early (the
+    // last frame, a key or a press, the hard stop, an error). The promise always resolves, once
+    // the canvas is gone.
     function play(onCovered) {
         let covered = false;
         const cover = () => {
@@ -255,13 +405,14 @@ const BurnFire = (() => {
                 if (!context) return end();
                 canvas = context.canvas;
                 const size = gridSize(window.innerWidth, window.innerHeight);
-                const plan = { cols: size.cols, rows: size.rows, layers: tongues(size.cols, Math.floor(Math.random() * SEED_RANGE)) };
+                const plan = { cols: size.cols, rows: size.rows, list: flames(size.cols, size.rows, Math.floor(Math.random() * SEED_RANGE)) };
+                plan.cover = coverFrame(plan);
                 let frame = 0;
                 const tick = () => {
                     try {
                         if (frame >= TOTAL_FRAMES) return end();
                         draw(context, plan, frame, size.cell, look.colours);
-                        if (coversAt(frame)) cover();
+                        if (coversAt(frame, plan.cover)) cover();
                         frame++;
                         timer = setTimeout(tick, look.frameMs);
                     } catch (err) {
@@ -295,8 +446,7 @@ const BurnFire = (() => {
     }
 
     return Object.freeze({
-        play, tongues, layerAt, paint, fadeLevel, riseShare, shouldPlay, coversAt, gridSize, hardStopMs,
-        PALETTE, NOT_PAINTED, NONE, BLACK, RED, ORANGE, YELLOW, FRAME_PROPERTY,
-        RISE_START, COVER_START, EXIT_START, TOTAL_FRAMES
+        play, flames, travel, pose, flameCells, flameShare, coverFrame, paintGrid, blackLevel, blackAt, shouldPlay, coversAt,
+        gridSize, hardStopMs, PALETTE, NOT_PAINTED, BLACK, RED, ORANGE, CORE, FRAME_PROPERTY, LAST_FRAME, TOTAL_FRAMES
     });
 })();

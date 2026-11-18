@@ -17,115 +17,176 @@ const BurnFire = load({}, ['../js/burn-fire.js']).get('BurnFire');
 const SEEDS = [1, 7, 0xdecade, 0xf1e, 0x5eed];
 // The desktop window's grid (1280 x 800 at 16 px) and a phone's (375 x 812 at 12 px)
 const GRIDS = [{ cols: 80, rows: 50 }, { cols: 32, rows: 68 }];
-const plans = () => SEEDS.flatMap(seed => GRIDS.map(({ cols, rows }) => ({ seed, cols, rows, layers: BurnFire.tongues(cols, seed) })));
-const cells = (plan, frame) => {
-    const out = [];
-    for (let row = 0; row < plan.rows; row++) for (let col = 0; col < plan.cols; col++) out.push(BurnFire.layerAt(plan, frame, col, row));
-    return out;
-};
-const painted = (plan, frame) => cells(plan, frame).filter(layer => layer !== BurnFire.NONE).length;
-const flame = (plan, frame) => cells(plan, frame).filter(layer => layer >= BurnFire.RED).length;
+const plans = () => SEEDS.flatMap(seed => GRIDS.map(({ cols, rows }) => {
+    const plan = { seed, cols, rows, list: BurnFire.flames(cols, rows, seed) };
+    plan.cover = BurnFire.coverFrame(plan);
+    return plan;
+}));
+const isFlame = (paint) => paint >= BurnFire.RED;
 
-test('the tongues: pure, three layers of 5 to 7 big tongues, the red about a third of the window wide at its base', () => {
-    for (const plan of plans()) {
-        assert.deepEqual(plain(BurnFire.tongues(plan.cols, plan.seed)), plain(plan.layers));
-        assert.equal(plan.layers.length, 3);
-        for (const layer of plan.layers) assert.ok(layer.length >= 5 && layer.length <= 7);
-        for (const t of plan.layers[0]) assert.ok(t.half * 2 >= plan.cols / 3, `${t.half} of ${plan.cols}`);
-        // the front layers are narrower and shorter: flames inside flames
-        assert.ok(plan.layers[2][0].half < plan.layers[1][0].half && plan.layers[1][0].half < plan.layers[0][0].half);
-        for (const t of plan.layers[2]) assert.ok(t.half * 2 >= plan.cols / 8, 'still big');
-    }
-});
-
-test('the frame plan: fade 3, rise 5, cover 2, leave 4, about 1.8 s on the shared clock', () => {
-    assert.equal(BurnFire.RISE_START, 3);
-    assert.equal(BurnFire.COVER_START, 8);
-    assert.equal(BurnFire.EXIT_START, 10);
-    assert.equal(BurnFire.TOTAL_FRAMES, 14);
-    assert.deepEqual([0, 1, 2, 3, 7, 8].map(BurnFire.fadeLevel), [1, 2, 3, 3, 3, 0]);
-    assert.equal(BurnFire.hardStopMs(120), 1800);
-});
-
-test('the fade is an ordered dither: a quarter, a half, then all black, nothing else painted', () => {
-    for (const plan of plans()) {
-        const total = plan.cols * plan.rows;
-        [0.25, 0.5, 1].forEach((share, frame) => {
-            const layers = cells(plan, frame);
-            assert.ok(layers.every(layer => layer === BurnFire.NONE || layer === BurnFire.BLACK));
-            assert.ok(Math.abs(layers.filter(layer => layer === BurnFire.BLACK).length / total - share) < 0.03, `frame ${frame}`);
-        });
-    }
-});
-
-test('covered: every cell is flame at the cover frames, nothing at the last; the cover never grows back', () => {
-    for (const plan of plans()) {
-        const total = plan.cols * plan.rows;
-        for (let frame = BurnFire.COVER_START; frame < BurnFire.EXIT_START; frame++) assert.equal(flame(plan, frame), total, `seed ${plan.seed} frame ${frame}`);
-        assert.equal(painted(plan, BurnFire.TOTAL_FRAMES - 1), 0);
-        // the flames only grow while rising, only shrink while leaving
-        for (let frame = BurnFire.RISE_START + 1; frame <= BurnFire.COVER_START; frame++) assert.ok(flame(plan, frame) >= flame(plan, frame - 1), `rise ${frame}`);
-        for (let frame = BurnFire.EXIT_START; frame < BurnFire.TOTAL_FRAMES; frame++) assert.ok(painted(plan, frame) <= painted(plan, frame - 1), `exit ${frame}`);
-        // the leaving uncovers from below: the top row burns longer than the bottom row
-        const exit = BurnFire.EXIT_START + 1;
-        const row = (r) => Array.from({ length: plan.cols }, (_, col) => BurnFire.layerAt(plan, exit, col, r) !== BurnFire.NONE).filter(Boolean).length;
-        assert.ok(row(0) > row(plan.rows - 1));
-    }
-});
-
-test('mid-rise: big tongues over black, red tallest, orange in the middle, yellow the short core', () => {
-    const mid = BurnFire.RISE_START + 2;
-    for (const plan of plans()) {
-        let ordered = 0;
-        for (let col = 0; col < plan.cols; col++) {
-            const top = (layer) => {
-                for (let row = 0; row < plan.rows; row++) {
-                    const at = BurnFire.layerAt(plan, mid, col, row);
-                    if (at >= layer) return row;
-                }
-                return plan.rows;
-            };
-            if (top(BurnFire.RED) <= top(BurnFire.ORANGE) && top(BurnFire.ORANGE) <= top(BurnFire.YELLOW)) ordered++;
-        }
-        assert.ok(ordered > plan.cols * 0.8, `seed ${plan.seed}: ${ordered} of ${plan.cols}`);
-        // black still shows: the flames have not covered the window yet
-        assert.ok(cells(plan, mid).includes(BurnFire.BLACK));
-    }
-});
-
-// Shapes, not speckle: outside the checker-dithered orange, fewer than SPECKLE_MAX of the painted
-// cells differ from all four neighbours
-const SPECKLE_MAX = 0.03;
-
-test('shapes, not speckle: few painted cells stand alone in their layer', () => {
-    for (const plan of plans()) {
-        for (let frame = BurnFire.RISE_START; frame < BurnFire.TOTAL_FRAMES; frame++) {
-            const layers = cells(plan, frame);
-            const at = (col, row) => (col < 0 || row < 0 || col >= plan.cols || row >= plan.rows ? -1 : layers[row * plan.cols + col]);
-            let count = 0;
-            let alone = 0;
-            for (let row = 0; row < plan.rows; row++) {
-                for (let col = 0; col < plan.cols; col++) {
-                    const own = at(col, row);
-                    if (own === BurnFire.NONE || own === BurnFire.ORANGE) continue;
-                    count++;
-                    if (![[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => at(col + dx, row + dy) === own)) alone++;
-                }
+// Connected groups (side by side, or corner to corner when diagonal is true) of the cells keep()
+function groups(cols, rows, keep, diagonal = false) {
+    const seen = new Uint8Array(cols * rows);
+    const steps = diagonal ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] : [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    let count = 0;
+    for (let i = 0; i < cols * rows; i++) {
+        if (seen[i] || !keep(i)) continue;
+        count++;
+        const stack = [i];
+        seen[i] = 1;
+        while (stack.length) {
+            const at = stack.pop();
+            const x = at % cols;
+            const y = Math.floor(at / cols);
+            for (const [dx, dy] of steps) {
+                const nx = x + dx;
+                const ny = y + dy;
+                const next = ny * cols + nx;
+                if (nx < 0 || ny < 0 || nx >= cols || ny >= rows || seen[next] || !keep(next)) continue;
+                seen[next] = 1;
+                stack.push(next);
             }
-            assert.ok(count === 0 || alone / count < SPECKLE_MAX, `seed ${plan.seed} frame ${frame}: ${alone} of ${count}`);
+        }
+    }
+    return count;
+}
+const flameGroups = (plan, frame) => {
+    const grid = BurnFire.paintGrid(plan, frame);
+    return groups(plan.cols, plan.rows, i => isFlame(grid[i]), true);
+};
+
+test('the flames: pure, 12 to 16, big, taller and redder behind, big ones starting first', () => {
+    for (const plan of plans()) {
+        assert.deepEqual(plain(BurnFire.flames(plan.cols, plan.rows, plan.seed)), plain(plan.list));
+        const rear = plan.list.filter(f => f.rear);
+        const stream = plan.list.filter(f => !f.rear);
+        assert.ok(stream.length >= 12 && stream.length <= 16);
+        // the rear flames (red, behind all others) are only what makes the cover frame whole
+        assert.deepEqual(plain(plan.list.slice(0, rear.length)), plain(rear));
+        assert.ok(rear.every(f => f.body === BurnFire.RED && f.height <= 1.1 * plan.rows));
+        for (const f of stream) {
+            assert.ok(f.height >= 0.45 * plan.rows && f.height <= 1.1 * plan.rows);
+            assert.ok(f.width >= 0.14 * plan.cols && f.width <= 0.3 * plan.cols);
+            assert.ok(f.start >= 0 && f.start <= 3);
+            assert.ok(f.body === BurnFire.RED || f.body === BurnFire.ORANGE);
+        }
+        for (let k = 1; k < stream.length; k++) assert.ok(stream[k].share <= stream[k - 1].share, 'drawn back to front');
+        assert.equal(stream[0].body, BurnFire.RED);
+        assert.equal(stream[stream.length - 1].body, BurnFire.ORANGE);
+        assert.ok(stream[0].start === 0 && stream[stream.length - 1].start >= 2, 'big ones first');
+    }
+});
+
+test('the motion law: travel(k, n) = k(k+1) / (n(n+1)), from 0 to 1, every step larger than the last', () => {
+    assert.deepEqual([0, 1, 2, 3, 4].map(k => Math.round(BurnFire.travel(k, 4) * 1000) / 1000), [0, 0.1, 0.3, 0.6, 1]);
+    for (let n = 2; n <= 12; n++) {
+        assert.equal(BurnFire.travel(0, n), 0);
+        assert.equal(BurnFire.travel(n, n), 1);
+        for (let k = 2; k <= n; k++) {
+            const step = BurnFire.travel(k, n) - BurnFire.travel(k - 1, n);
+            assert.ok(step > BurnFire.travel(k - 1, n) - BurnFire.travel(k - 2, n), `n ${n} k ${k}`);
+        }
+    }
+    assert.match(source, /function travel\(k, n\) \{\n\s*return \(k \* \(k \+ 1\)\) \/ \(n \* \(n \+ 1\)\);/);
+    // one home: the law is written once, and the flames and the planner both go through it
+    assert.equal((source.match(/k \* \(k \+ 1\)/g) || []).length, 1);
+    assert.equal((source.match(/function travel\(/g) || []).length, 1);
+});
+
+test('nothing stands still: every flame rises on every frame it is there, each step larger than the last', () => {
+    for (const plan of plans()) {
+        for (const f of plan.list) {
+            assert.ok(f.frames >= 4 && f.frames <= 6);
+            const bases = [];
+            for (let frame = 0; frame < BurnFire.TOTAL_FRAMES; frame++) {
+                const at = BurnFire.pose(f, frame, plan.rows);
+                if (at) bases.push(at.base);
+            }
+            assert.ok(bases.length >= 3, 'it crosses the window');
+            for (let k = 1; k < bases.length; k++) {
+                assert.ok(bases[k] < bases[k - 1], `seed ${plan.seed}: ${bases[k]} after ${bases[k - 1]}`);
+                if (k >= 2) assert.ok(bases[k - 1] - bases[k] > bases[k - 2] - bases[k - 1], 'it accelerates');
+            }
+            assert.equal(BurnFire.pose(f, BurnFire.LAST_FRAME, plan.rows), null);
         }
     }
 });
 
-test('the paint: black, red, yellow and the orange checker of the two; nothing for no layer', () => {
-    assert.deepEqual(plain(BurnFire.PALETTE), ['--fire-fringe', '--fire-flame', '--fire-glow']);
-    assert.equal(BurnFire.paint(BurnFire.NONE, 0, 0), BurnFire.NOT_PAINTED);
-    assert.equal(BurnFire.paint(BurnFire.BLACK, 0, 0), 0);
-    assert.equal(BurnFire.paint(BurnFire.RED, 0, 0), 1);
-    assert.equal(BurnFire.paint(BurnFire.YELLOW, 0, 0), 2);
-    assert.deepEqual([[0, 0], [1, 0], [0, 1], [1, 1]].map(([c, r]) => BurnFire.paint(BurnFire.ORANGE, c, r)), [1, 2, 2, 1]);
+test('a pass: the flame rises to one peak, the cover, near the middle, and falls; nothing after the last flame', () => {
+    for (const plan of plans()) {
+        const shares = Array.from({ length: BurnFire.TOTAL_FRAMES }, (_, f) => BurnFire.flameShare(plan, f));
+        const peak = shares.indexOf(Math.max(...shares));
+        assert.equal(plan.cover, peak);
+        assert.ok(peak >= 4 && peak <= 6, `seed ${plan.seed}: peak at ${peak}`);
+        // one instant covers everything: the cover frame, and only it, is all flame
+        assert.equal(shares[peak], 1, `seed ${plan.seed}: ${shares[peak]} at the peak`);
+        assert.equal(shares.filter(share => share === 1).length, 1);
+        assert.ok(shares[peak - 1] < 1 && shares[peak + 1] < 1);
+        // up to the peak it only grows, after it it only falls: never a frame alike
+        for (let f = 1; f <= peak; f++) assert.ok(shares[f] > shares[f - 1], `seed ${plan.seed} rise ${f}`);
+        for (let f = peak + 1; f < shares.length; f++) {
+            if (shares[f - 1] === 0) break;
+            assert.ok(shares[f] < shares[f - 1], `seed ${plan.seed} fall ${f}: ${shares[f]} after ${shares[f - 1]}`);
+        }
+        assert.equal(shares[BurnFire.LAST_FRAME], 0);
+    }
+});
+
+test('the black: half, then solid until a frame past the cover, then half, a quarter and none', () => {
+    assert.equal(BurnFire.TOTAL_FRAMES, 10);
+    assert.equal(BurnFire.hardStopMs(120), 1320);
+    const cover = 5;
+    assert.deepEqual(Array.from({ length: 10 }, (_, f) => BurnFire.blackLevel(f, cover)), [2, 4, 4, 4, 4, 4, 4, 2, 1, 0]);
+    let black = 0;
+    for (let row = 0; row < 4; row++) for (let col = 0; col < 4; col++) if (BurnFire.blackAt(0, cover, col, row)) black++;
+    assert.equal(black, 8);
+});
+
+test('one body: every flame on screen sways by the same cell on the same frame', () => {
+    for (const plan of plans()) {
+        for (let frame = 0; frame < BurnFire.TOTAL_FRAMES; frame++) {
+            const shifts = new Set(plan.list.map(f => BurnFire.pose(f, frame, plan.rows)).map((at, k) => (at ? Math.round(at.x - plan.list[k].x) : null)).filter(v => v !== null));
+            assert.ok(shifts.size <= 1, `frame ${frame}: ${[...shifts]}`);
+        }
+    }
+});
+
+test('dies as pieces: the last three painted frames hold at most three separate flames each', () => {
+    for (const plan of plans()) {
+        const painted = Array.from({ length: BurnFire.TOTAL_FRAMES }, (_, f) => f).filter(f => BurnFire.flameShare(plan, f) > 0);
+        for (const frame of painted.slice(-3)) {
+            const count = flameGroups(plan, frame);
+            assert.ok(count >= 1 && count <= 3, `seed ${plan.seed} ${plan.cols}x${plan.rows} frame ${frame}: ${count}`);
+        }
+        assert.ok([...BurnFire.paintGrid(plan, BurnFire.LAST_FRAME)].every(p => p === BurnFire.NOT_PAINTED));
+    }
+});
+
+test('a flame is a teardrop: one connected shape whose topmost row is a single cell, a point', () => {
+    for (const plan of plans()) {
+        for (const f of plan.list) {
+            const tallFlame = Object.assign({}, f, { start: 0, frames: 4, x: f.x + plan.cols });
+            const cells = BurnFire.flameCells(tallFlame, 2, plan.cols * 3, 400).filter(c => !c.core);
+            const tall = { cols: plan.cols * 3, rows: 400 };
+            const set = new Set(cells.map(c => c.row * tall.cols + c.col));
+            assert.equal(groups(tall.cols, tall.rows, i => set.has(i), true), 1);
+            const top = Math.min(...cells.map(c => c.row));
+            assert.equal(cells.filter(c => c.row === top).length, 1, `a point, seed ${plan.seed}`);
+            // a belly: the widest row stands in the lower half
+            const widths = new Map();
+            for (const c of cells) widths.set(c.row, (widths.get(c.row) || 0) + 1);
+            const bottom = Math.max(...cells.map(c => c.row));
+            const widest = [...widths.entries()].sort((a, b) => b[1] - a[1])[0][0];
+            assert.ok(widest > (top + bottom) / 2, 'the belly is low');
+        }
+    }
+});
+
+test('the paint: black, red, the fire orange and the yellow core, from the stylesheet', () => {
+    assert.deepEqual(plain(BurnFire.PALETTE), ['--fire-fringe', '--fire-flame', '--fire-orange', '--fire-glow']);
+    assert.match(css, /--fire-fringe: #000000;\n\s*--fire-flame: var\(--danger\);\n\s*--fire-orange: #e65100;\n\s*--fire-glow: var\(--warning\);/);
+    assert.equal((css.match(/--fire-orange/g) || []).length, 1, 'used by the fire only');
     assert.doesNotMatch(source, /#[0-9a-fA-F]{3,6}\b|rgba?\(/);
-    for (const name of BurnFire.PALETTE) assert.match(css, new RegExp(`^\\s*${name}:`, 'm'));
 });
 
 test('the grid: 16 px cells on a desktop, 12 px under 480 px, capped', () => {
@@ -147,9 +208,9 @@ test('one frame clock: the fire steps at the stylesheet\'s --frame-ms, the hover
     assert.equal(BurnFire.shouldPlay(false, false, 0), false);
 });
 
-test('the cover callback runs exactly once: at the cover frame, or at once without the fire, or on any early end', async () => {
-    assert.equal(BurnFire.coversAt(BurnFire.COVER_START), true);
-    assert.equal(Array.from({ length: BurnFire.TOTAL_FRAMES }, (_, f) => BurnFire.coversAt(f)).filter(Boolean).length, 1);
+test('the cover callback runs exactly once: at the frame with the most flame, or at once without the fire, or on any early end', async () => {
+    assert.equal(BurnFire.coversAt(6, 6), true);
+    assert.equal(Array.from({ length: BurnFire.TOTAL_FRAMES }, (_, f) => BurnFire.coversAt(f, 6)).filter(Boolean).length, 1);
     // without the fire (reduced motion, a hidden page) it runs at once, once
     for (const [reduced, visibility] of [[true, 'visible'], [false, 'hidden']]) {
         const page = { window: { matchMedia: () => ({ matches: reduced }) }, document: { visibilityState: visibility } };
@@ -161,7 +222,8 @@ test('the cover callback runs exactly once: at the cover frame, or at once witho
     // in the module: guarded once, called at the cover frame and by every end
     const body = source.match(/function play\(onCovered\) \{[\s\S]*?\n {4}\}/)[0];
     assert.match(body, /const cover = \(\) => \{\n\s*if \(covered\) return;\n\s*covered = true;/);
-    assert.match(body, /if \(coversAt\(frame\)\) cover\(\);/);
+    assert.match(body, /if \(coversAt\(frame, plan\.cover\)\) cover\(\);/);
+    assert.match(body, /plan\.cover = coverFrame\(plan\);/);
     assert.match(body, /if \(canvas\) canvas\.remove\(\);\n\s*cover\(\);\n\s*resolve\(\);/);
     assert.match(body, /if \(frame >= TOTAL_FRAMES\) return end\(\);/);
     assert.match(body, /addEventListener\('keydown', end, true\)/);
