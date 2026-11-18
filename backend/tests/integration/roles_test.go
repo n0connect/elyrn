@@ -130,8 +130,10 @@ func TestRoles_GoWithTheMembership(t *testing.T) {
 	if _, listed := roleOf(a.members(t), b.member.Card); listed {
 		t.Fatal("bob is still on the roster")
 	}
-	joinRoom(t, bob, a.code)
-	expectRole(t, a, b.member.Card, "", "bob's role after leaving and rejoining")
+	// A card is sealed under a fresh nonce, so the rejoin stores a new card for bob's same key:
+	// he is listed under that one
+	rejoined := joinRoom(t, bob, a.code)
+	expectRole(t, a, rejoined.member.Card, "", "bob's role after leaving and rejoining")
 
 	expectStatus(t, carol.do(http.MethodDelete, "/api/v2/me", models.DeleteAccountRequest{AuthKey: carol.authKey}), http.StatusOK, "carol deletes her account")
 	if _, listed := roleOf(a.members(t), c.member.Card); listed {
