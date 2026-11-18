@@ -138,7 +138,9 @@ func deleteAccount(w http.ResponseWriter, r *http.Request, svc *chat.Service, me
 		return
 	}
 	realtime.Default.Publish(streams, realtime.Event{Kind: realtime.KindConversation})
-	realtime.Default.Kick(me.StreamTag) // this account's other devices
+	if !kickStreams(w, "deleteAccount: Kick", me.StreamTag) { // this account's other devices
+		return
+	}
 	auth.ClearAuthCookie(w)
 	clearSiteData(w)
 	utils.EncodeJSONResponse(w, models.LoginResponse{Success: true, Message: "Account deleted"}, http.StatusOK)

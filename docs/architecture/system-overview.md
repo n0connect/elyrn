@@ -257,6 +257,7 @@ data: {}
 - The client receives the poke and refetches the message list via authorized `GET /api/v2/conversations/{id}/messages`.
 - **Advantage:** Exactly one authorized code path evaluates access control and message decryption.
 - `ping` is the heartbeat: once right after the `: ready` preamble, then every 10 seconds. It is a named event so the browser can observe it: a new stream that shows nothing within 5 seconds, or a proven one silent for 25 seconds (a proxy buffering or holding it), makes the visible tab poll the same refetch path about every 5 seconds until an event arrives again.
+- **A stream ends with its session.** Logout and account deletion close the account's streams in the in-memory hub (`Kick`) and bump the account's revocation generation there. A stream reads that generation before its session check and subscribes only if it is unchanged, so a revocation that lands between the check and the subscription is not missed. Every heartbeat re-checks the session (signature, expiry, epoch) and ends a revoked one, so a stream a kick could not reach (the hub was busy; logout then answers `503`) lives at most one heartbeat longer. The generations are kept for at most 4,096 kicked accounts; at the bound they are reset under a raised floor, which refuses at worst one stream that was mid-check (it retries) and never forgets a revocation.
 
 ---
 

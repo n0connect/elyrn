@@ -39,9 +39,12 @@ func protected(h http.HandlerFunc) http.HandlerFunc {
 // stream: it lives for minutes and bounds each write itself (handlers.EventsHandler), so a
 // request deadline would cut it. Its session and member lookups run under the same detached,
 // bounded database context as any request (middleware.StreamDeadline), so a client hanging up
-// mid-lookup is never an internal error.
+// mid-lookup is never an internal error. The stream tag's revocation generation is read right
+// before the session check (middleware.StreamRevocationMark), so a logout that lands between the
+// check and the subscription is not missed (realtime.Hub.Subscribe refuses).
 func stream(h http.HandlerFunc) http.HandlerFunc {
-	return middleware.Recover(middleware.StreamDeadline(guarded(middleware.JWTMiddleware(h))))
+	return middleware.Recover(middleware.StreamDeadline(guarded(
+		middleware.StreamRevocationMark(middleware.JWTMiddleware(h)))))
 }
 
 // NewMux builds the complete HTTP surface with its middleware chains.

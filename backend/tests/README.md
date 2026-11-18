@@ -13,21 +13,21 @@ backend/tests/
 |-- database/            # Migration, schema version, instance lock, startup validation, connection bounds (25 tests, 1 fuzz)
 |-- encryption/          # Stored-record encryption, key ids, AAD (12 tests, 2 fuzz)
 |-- identity/            # HKDF / X25519 RFC vectors, derivations, tag separation (5 tests, 2 fuzz)
-|-- integration/         # End-to-end flows over the real route table (138 tests)
+|-- integration/         # End-to-end flows over the real route table (143 tests)
 |-- middleware/          # JWT, rate limits, trusted proxy, CORS, security headers, recover (32 tests, 3 fuzz)
 |-- testutil/            # Shared helpers (below)
 `-- utils/               # Validation, SafeMutex, supervised goroutines, logger (12 tests, 3 fuzz)
 ```
 
 Counts are test functions (`^func Test`, `TestMain` excluded) and fuzz targets, as of 18 Nov 2026.
-Across the whole backend there are 389 test functions and 86 fuzz targets; the fuzz list, the
+Across the whole backend there are 397 test functions and 86 fuzz targets; the fuzz list, the
 frontend tests and how to run everything are in
 [docs/development/testing-and-contributing.md](../../docs/development/testing-and-contributing.md).
 
 Inside `internal/` (no database): `agent` 15, `apperr` 13, `chat` 1, `contract` 12, `cryptoengine` 9
 (known answers on the compiled engine), `cryptoengine/equivalence` 8 (both engines in one binary,
 `-tags 'test openssl'`), `database` 2, `e2e` 38, `handlers` 1, `mcp` 12, `middleware` 3, `pow` 24,
-`realtime` 6, `utils` 2.
+`realtime` 9, `utils` 2.
 
 ### Integration (`tests/integration/`)
 
@@ -40,6 +40,7 @@ Inside `internal/` (no database): `agent` 15, `apperr` 13, `chat` 1, `contract` 
 | `negative_*_test.go` (32) | negative use generated from the route table: refusals without a session, "not yours" and "never existed" byte-equal, order and repetition, limits, cross-protocol confusion, the agent |
 | `keys_test.go` (5) | startup key check, pepper commitment, master key re-wrapping |
 | `session_test.go` (4), `account_test.go` (2), `lifecycle_test.go` (2), `paging_test.go` (2) | the token only in the cookie, revocation, CSRF, identity deletion, the loopback-only health endpoint, closed keys refuse instead of sealing, `?before=` paging |
+| `revocation_test.go` (5) | a logout or account deletion whose streams cannot be closed (hub lock held, no stream-tag key) answers `503` after revoking; a stream the kick missed ends at its next heartbeat; a kick between a stream's generation read and its subscription refuses it (stalled database) |
 | `restore_test.go` (1) | `TestRestoreDrill`, driven by `make test-restore` (seed, then verify) |
 
 `TestMain` (`helpers_test.go`) fails the package when PostgreSQL is unreachable, so nothing is

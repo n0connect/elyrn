@@ -85,7 +85,8 @@ peers only (`200` or `503 E_HEALTH_UNAVAILABLE`, no body; any other peer gets `4
 - **Same-Origin Writes:** `POST`/`PUT`/`PATCH`/`DELETE` requests are refused with `403` unless the browser marks them `Sec-Fetch-Site: same-origin` (or, without that header, sends an `Origin` listed exactly in `ALLOWED_ORIGINS`). Clients that send neither header are not browsers and hold no ambient cookies.
 - **Sliding Expiration:** Sessions expire after `JWT_EXPIRATION_MINUTES` (default 43200 minutes, 30 days; accepted range 1 to 525600 minutes, 365 days). A session used after half its lifetime has passed is re-issued as a fresh cookie, so one used at least once every half-lifetime (15 days by default) does not expire; logout and account deletion end it at once.
 - **Saturation and outages:** `POST /api/v2/login` answers `503` while the database is unreachable, so an outage is never reported as an unknown account. When the server cannot compute the account lookup from a well-formed key (a missing or short pepper, or a crypto engine failure), login answers `500 Internal server error` (`E_LOGIN_LOOKUP_FAILED`), never `401`: the lookup is computed from the key alone before any account is read, so it fails alike for every key, and `401` always means the key matches no usable account. The `503` and `500` answers do not depend on whether the account exists; retry with backoff. Every other route answers a database outage (unreachable, restarting, out of connections, or a statement past its timeout) the same way, `503 Service Unavailable`, the session check included, so an outage never logs a client out.
-- **Global Invalidation:** `POST /api/v2/logout` with a live session increments the user's `session_epoch`, instantly invalidating every JWT issued for that account on every device. A token revoked earlier cannot trigger this (it no longer authenticates); if revocation fails the endpoint answers `500` instead of reporting success. The cookie is cleared in every case.
+- **Global Invalidation:** `POST /api/v2/logout` with a live session increments the user's `session_epoch`, instantly invalidating every JWT issued for that account on every device. A token revoked earlier cannot trigger this (it no longer authenticates); if revocation fails the endpoint answers an error instead of reporting success. The cookie is cleared in every case.
+- **Live streams end with the session:** logout and account deletion close the account's event streams (and refuse a stream that checked its session just before the revocation and subscribes after it). When the streams cannot be closed at that moment, the sessions are already revoked and the answer is `503` (`E_STORE_UNAVAILABLE`, see `POST /api/v2/logout`); every open stream also re-checks its session at each heartbeat (10 s) and ends once it is revoked.
 
 ---
 
@@ -226,7 +227,9 @@ The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_ke
 ---
 
 ### `POST /api/v2/logout`
-Revokes all active sessions for this account across all devices by bumping `session_epoch`.
+Revokes all active sessions for this account across all devices by bumping `session_epoch`, then closes the account's live event streams.
+
+- **Errors:** `503` (`E_STORE_UNAVAILABLE`) when the database fails, and also when the sessions were revoked but the streams could not be closed (the server could not name them or its stream hub was busy): a partial revocation. Every session is refused from then on and a stream left open ends at its next heartbeat (within 10 s); the answer carries no `Clear-Site-Data`. A retry finds no live session and answers `200`.
 
 - **Response (200 OK):** Clears session cookie and carries `Clear-Site-Data: "cookies", "storage"`, so the browser drops this origin's cookies and stored data (the identity and its records in IndexedDB) even if the page's own wipe failed.
 ```json
@@ -267,7 +270,7 @@ A live session is not enough: the request re-proves the account number with its 
   "auth_key": "HKDF(AccountNumber, \"noaddx/auth\") base64url"
 }
 ```
-- **Errors:** `400` malformed body or key, `403` the key belongs to another account (`E_FORBIDDEN`), `415` body not declared as JSON, `429` too many attempts.
+- **Errors:** `400` malformed body or key, `403` the key belongs to another account (`E_FORBIDDEN`), `415` body not declared as JSON, `429` too many attempts, `503` (`E_STORE_UNAVAILABLE`) when the database fails, and also when the account was erased but its other devices' event streams could not be closed (a stream left open ends at its next heartbeat, within 10 s). After that `503` the account is gone: a retry answers `401`.
 - **Response (200 OK):** carries `Clear-Site-Data: "cookies", "storage"`, as a successful logout does. No other answer, a refused deletion included, carries it.
 ```json
 {
@@ -601,8 +604,8 @@ Opens an unbuffered, content-free SSE stream.
   - `event: msg` with `data: {"c": "<conversation_id>"}` (signals a new message arrived).
   - `event: conv` with `data: {}` (signals the conversation list, a room's members, or the caller's notes changed).
   - `event: ping` with `data: {}` (heartbeat: sent once right after the `retry: 3000` / `: ready` preamble, which always comes first, then every 10 seconds). It is a named event, not an SSE comment, so the browser can see that the stream is being delivered. The web client treats a stream as held by a proxy when a new connection shows no event within 5 seconds, or a stream that already delivered one then goes 25 seconds without any; it then fetches its updates about every 5 seconds while the tab is visible and every 30 seconds while it is hidden (nothing is marked read while hidden), until an event arrives again (`frontend/js/live-updates.js`: `STREAM_FIRST_PROOF_MS`, `STREAM_SILENCE_LIMIT_MS`, `POLL_INTERVAL_MS`, `HIDDEN_POLL_INTERVAL_MS`). Clients must ignore event names they do not know.
-- **Authentication:** Validated via session cookie. If session is revoked, the stream closes with `401 Unauthorized`.
-- **Limits:** `429` when the account already holds 4 streams, the caller's network (IPv4 address, IPv6 /64 or Tor circuit) holds 16, or the server holds 4,096.
+- **Authentication:** Validated via session cookie when the stream opens, and again at every heartbeat. A logout or account deletion closes the account's streams at once; a stream it could not reach ends at its next heartbeat, whose session check fails. A stream ends silently (the connection closes); the reconnect is refused with `401 Unauthorized`.
+- **Limits:** `429` when the account already holds 4 streams, the caller's network (IPv4 address, IPv6 /64 or Tor circuit) holds 16, or the server holds 4,096; also when the account's streams were closed (a logout or deletion) between the stream's session check and its subscription, or the stream hub is busy (retry: a revoked session's retry is refused with `401`).
 
 ---
 

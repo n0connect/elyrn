@@ -18,7 +18,9 @@ var logoutLogger = utils.NewLogger("LOGOUT")
 // LogoutHandler revokes every session of the caller and clears the cookie.
 // SECURITY: Bumping the session epoch invalidates all outstanding JWTs (all devices) and
 // closes live event streams. Only a live session may do that: a token revoked earlier
-// cannot end the sessions created after it. A failed revocation is reported, never hidden.
+// cannot end the sessions created after it. A failed revocation is reported, never hidden: a
+// revocation whose streams could not be closed (the stream tag not derived, or the hub lock not
+// taken) answers 503 E_STORE_UNAVAILABLE after the epoch bump (kickStreams).
 func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	if _, ok := admitted(w, r, "LogoutHandler"); !ok {
 		return
@@ -39,8 +41,14 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 			apperr.WriteError(w, "LogoutHandler: BumpSessionEpoch", err)
 			return
 		}
-		if stream, err := identity.StreamTag(user.UUID); err == nil {
-			realtime.Default.Kick(stream)
+		stream, err := identity.StreamTag(user.UUID)
+		if err != nil {
+			// The epoch is bumped, but the account's streams cannot be named to close them
+			apperr.WriteCause(w, "LogoutHandler: StreamTag", apperr.StoreUnavailable, err)
+			return
+		}
+		if !kickStreams(w, "LogoutHandler: Kick", stream) {
+			return
 		}
 		logoutLogger.Debug("LogoutHandler: sessions revoked")
 	}
@@ -50,6 +58,19 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: "Logged out successfully",
 	}, http.StatusOK)
+}
+
+// kickStreams closes the live event streams of stream (and bumps its revocation generation), or
+// answers the registered "temporarily unavailable" (503 E_STORE_UNAVAILABLE) when the hub lock
+// could not be taken in time. It runs after the sessions were revoked in the database, so the
+// 503 reports a partial revocation: every session is already refused, and a stream the kick
+// did not reach ends at its next heartbeat's session check (handlers.sessionHolds).
+func kickStreams(w http.ResponseWriter, op, stream string) bool {
+	if err := realtime.Default.Kick(stream); err != nil {
+		apperr.WriteCause(w, op, apperr.StoreUnavailable, err)
+		return false
+	}
+	return true
 }
 
 // clearSiteData asks the browser to drop this origin's cookies and stored data (the identity,

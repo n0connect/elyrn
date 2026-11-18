@@ -20,7 +20,7 @@ const (
 	// more is sent right after the preamble, for STREAM_FIRST_PROOF_MS). Short, so a page behind a
 	// proxy that holds the stream notices within seconds and fetches its updates instead.
 	sseKeepAlive = 10 * time.Second
-	// sseMaxLifetime forces periodic reconnects, which re-run JWT + session-epoch checks
+	// sseMaxLifetime forces periodic reconnects; the session itself is checked on every heartbeat
 	sseMaxLifetime = 10 * time.Minute
 	// sseMaxIterations bounds the event loop (RULES.md §8.1); lifetime normally ends it first
 	sseMaxIterations = 100000
@@ -44,13 +44,52 @@ func formatEvent(ev realtime.Event) string {
 	}
 }
 
+var eventsLogger = utils.NewLogger("EVENTS")
+
+// sessionHolds re-checks the stream's session (signature, expiry and epoch) under a fresh
+// database deadline, on every heartbeat: a revoked session's stream ends within one heartbeat
+// even when no kick reached it (a kick that timed out on the hub lock). A store failure ends the
+// stream too (fail closed): the browser reconnects and gets the registered answer there.
+func sessionHolds(r *http.Request) bool {
+	err := middleware.Reauthenticate(r)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, middleware.ErrNoSession) {
+		eventsLogger.Debug("EventsHandler: session no longer live, stream ended")
+		return false
+	}
+	code, ok := apperr.CodeOf(err)
+	if !ok {
+		code = apperr.Internal
+	}
+	id, _ := apperr.Describe(code)
+	eventsLogger.LogError("EventsHandler: Reauthenticate ("+id+")", err)
+	return false
+}
+
 // EventsHandler streams content-free change notifications (GET /api/v2/events).
+//
+// http.Server.ReadTimeout does not end the stream, so nothing here clears the read deadline
+// (settled from the pinned Go 1.27.4 source, src/net/http/server.go): conn.readRequest sets the
+// whole-request read deadline from ReadTimeout (lines 1035-1036, 1099), but for a request
+// without a body conn.serve then calls connReader.startBackgroundRead (line 2150) before the
+// handler runs, and startBackgroundRead clears the connection's read deadline
+// (SetReadDeadline(time.Time{}), line 737) before its background read. The stream is a GET
+// without a body. WriteTimeout does not end it either: every write sets its own deadline
+// (sseWriteTimeout).
 func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, ok := admitted(w, r, "EventsHandler"); !ok {
 		return
 	}
 	_, me, ok := resolveMe(w, r)
 	if !ok {
+		return
+	}
+	// The generation read before the session check (server.stream): a kick since refuses below
+	generation, ok := middleware.StreamGeneration(r, me.StreamTag)
+	if !ok {
+		apperr.Write(w, "EventsHandler: StreamGeneration", apperr.SessionContextMissing)
 		return
 	}
 
@@ -60,10 +99,12 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 		apperr.WriteError(w, "EventsHandler: ClientKey", err)
 		return
 	}
-	events, cancel, err := realtime.Default.Subscribe(me.StreamTag, client)
+	events, cancel, err := realtime.Default.Subscribe(me.StreamTag, client, generation)
 	if err != nil {
 		// Every Subscribe failure answers 429, as it always has: a subscriber cap (account,
-		// network or hub), or a hub lock timeout under contention (all mean "retry later")
+		// network or hub), a hub lock timeout under contention, or a kick since the generation
+		// was read (all mean "retry later"; a revoked session's retry is refused with 401 by the
+		// session check itself)
 		apperr.Write(w, "EventsHandler", apperr.SubscriberLimit)
 		return
 	}
@@ -101,7 +142,7 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 		case <-lifetime.C:
 			return
 		case <-keepAlive.C:
-			if !write(ssePing) {
+			if !sessionHolds(r) || !write(ssePing) {
 				return
 			}
 		case ev, open := <-events:

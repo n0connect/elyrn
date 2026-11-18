@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"errors"
 	"strconv"
 	"testing"
 )
@@ -14,6 +15,7 @@ const (
 	opPublish
 	opKick
 	opDrain
+	opMark // read a tag's generation now; that tag's next subscribe uses it
 	hubOps
 
 	hubOpBytes = 2
@@ -53,28 +55,55 @@ func closedAfterDrain(ch <-chan Event) bool {
 	return false
 }
 
-// FuzzHubOperations runs arbitrary sequences of subscribe, cancel (repeated too), publish, kick
-// and drain against a model: the hub grants exactly what the per-member, per-client and total
-// caps allow, a poke reaches exactly the live subscribers of its tags (dropped only on a full
-// buffer), a cancelled or kicked stream is closed and never sent on again, and the hub's counts
-// always equal the live streams.
+// mark is the model of a generation read for a tag (opMark) that its next subscribe uses.
+type mark struct {
+	generation uint64
+	kicked     bool // the tag was kicked since the read: the subscribe must be refused
+}
+
+// FuzzHubOperations runs arbitrary sequences of subscribe, cancel (repeated too), publish, kick,
+// drain and generation reads against a model: the hub grants exactly what the per-member,
+// per-client and total caps allow, and refuses a subscribe whose generation was read before a
+// kick of its tag (and only that one), a poke reaches exactly the live subscribers of its tags
+// (dropped only on a full buffer), a cancelled or kicked stream is closed and never sent on
+// again, and the hub's counts always equal the live streams.
 func FuzzHubOperations(f *testing.F) {
 	f.Add([]byte{opSubscribe, 1, opPublish, 1, opDrain, 0})
 	f.Add([]byte{opSubscribe, 1, opSubscribe, 1, opSubscribe, 1, opSubscribe, 1, opSubscribe, 1, opKick, 1, opPublish, 1})
 	f.Add([]byte{opSubscribe, 0, opCancel, 0, opCancel, 0, opPublish, 0})
+	f.Add([]byte{opMark, 1, opKick, 1, opSubscribe, 1, opMark, 1, opKick, 2, opSubscribe, 1})
 	f.Fuzz(func(t *testing.T, program []byte) {
 		h := NewHub()
 		var subs []*subscription
 		perTag, perClient, total := map[string]int{}, map[string]int{}, 0
+		marks := map[string]*mark{}
 		for op := 0; op+hubOpBytes <= len(program); op += hubOpBytes {
 			arg := program[op+1]
 			switch program[op] % hubOps {
+			case opMark:
+				generation, err := h.Generation(fuzzTag(arg))
+				if err != nil {
+					t.Fatalf("op %d: Generation: %v", op, err)
+				}
+				marks[fuzzTag(arg)] = &mark{generation: generation}
 			case opSubscribe:
 				tag, client := fuzzTag(arg), fuzzClient(arg/fuzzTags)
-				want := client != "" && total < MaxSubscribersTotal && perTag[tag] < MaxSubscribersPerMember && perClient[client] < MaxSubscribersPerClient
-				ch, cancel, err := h.Subscribe(tag, client)
+				generation, err := h.Generation(tag)
+				if err != nil {
+					t.Fatalf("op %d: Generation: %v", op, err)
+				}
+				revoked := false
+				if m, ok := marks[tag]; ok {
+					generation, revoked = m.generation, m.kicked
+					delete(marks, tag)
+				}
+				want := client != "" && !revoked && total < MaxSubscribersTotal && perTag[tag] < MaxSubscribersPerMember && perClient[client] < MaxSubscribersPerClient
+				ch, cancel, err := h.Subscribe(tag, client, generation)
 				if (err == nil) != want {
-					t.Fatalf("op %d: Subscribe(%s, %q) = %v, model %v", op, tag, client, err, want)
+					t.Fatalf("op %d: Subscribe(%s, %q, stale %v) = %v, model %v", op, tag, client, revoked, err, want)
+				}
+				if client != "" && revoked && !errors.Is(err, ErrRevokedSinceMark) {
+					t.Fatalf("op %d: a subscribe after a kick of %s answered %v, want ErrRevokedSinceMark", op, tag, err)
 				}
 				if err == nil {
 					subs = append(subs, &subscription{tag: tag, client: client, ch: ch, cancel: cancel, live: true})
@@ -92,7 +121,12 @@ func FuzzHubOperations(f *testing.F) {
 					s.cancel()
 					picked = append(picked, s)
 				} else {
-					h.Kick(fuzzTag(arg))
+					if err := h.Kick(fuzzTag(arg)); err != nil {
+						t.Fatalf("op %d: Kick: %v", op, err)
+					}
+					if m, ok := marks[fuzzTag(arg)]; ok {
+						m.kicked = true
+					}
 					for _, s := range subs {
 						if s.tag == fuzzTag(arg) {
 							picked = append(picked, s)

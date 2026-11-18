@@ -22,8 +22,12 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
   (Priority Level 2), taken the same way
 - `spentMutex` - PoW spent (solved, unexpired) challenges map; leaf lock. Issued challenges are
   no longer stored (S-03)
-- `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map and the per-client (network) stream
-  counts (S-04); leaf lock, channel sends under it never block
+- `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map, the per-client (network) stream
+  counts (S-04) and the revocation generation per kicked stream tag (`kicked`, its floor and
+  sequence: read by `Generation`, compared by `Subscribe`, bumped by `Kick`, at most 4,096
+  entries); leaf lock, channel sends under it never block. `middleware.StreamRevocationMark`
+  takes it for one read before the session check and holds nothing else meanwhile; a `Kick` that
+  cannot take it in time is reported (logout and account deletion answer 503)
 - `pendingStore.mu` - Pending registration map (leaf lock)
 
 ### Priority Level 2 - Per-Resource Locks
@@ -142,5 +146,5 @@ rl.mu.Lock()
 
 ---
 
-**Last Updated**: 2026-11-17
+**Last Updated**: 2026-11-18
 **Next Review**: Every sprint or when adding new locks
