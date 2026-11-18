@@ -741,9 +741,9 @@ const Chat = (() => {
         if (attached && !attached.ready) return;
         const validation = attached ? validateCaption(typed, attached.name) : validateMessageText(typed);
         if (!validation.valid) {
+            // Every refusal is said and leaves the text in the composer, unsent: an account number
+            // too (E_MESSAGE_IS_ACCOUNT_NUMBER), so the user sees what was refused and removes it
             if (validation.error !== Errors.CODES.E_MESSAGE_EMPTY) Errors.report(validation.error, validation.params);
-            // An account number pasted here is not kept: not in the composer, not as a draft
-            if (validation.error === Errors.CODES.E_MESSAGE_IS_ACCOUNT_NUMBER) clearSent(conv.id, typed);
             return;
         }
 

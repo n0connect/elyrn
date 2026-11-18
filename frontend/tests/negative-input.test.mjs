@@ -219,6 +219,28 @@ test('composer: an account number anywhere in the message is E_MESSAGE_IS_ACCOUN
     }
 });
 
+test('composer: every form the login field accepts is refused with the same message, and the composer keeps the text', () => {
+    // The forms login accepts (padded, fullwidth, any whitespace around), alone and among words
+    const accepted = [...PADDING.map(pad => pad + ACCOUNT_A + pad), fullwidth(ACCOUNT_A), ' ' + fullwidth(ACCOUNT_B) + '\n'];
+    for (const form of accepted) {
+        assert.equal(parseAccountNumber(form).valid, true, JSON.stringify(form));
+        for (const text of [form, 'mine: ' + form + ' ok']) {
+            assert.equal(validateMessageText(text).error, CODES.E_MESSAGE_IS_ACCOUNT_NUMBER, JSON.stringify(text));
+        }
+    }
+    // One home for "is this an account number": login and the composer both ask looksLikeAccountNumber
+    const validation = readFileSync(new URL('../validation.js', import.meta.url), 'utf8');
+    assert.match(validation, /if \(!looksLikeAccountNumber\(value\)\) \{\n\s*return refused\(Errors\.CODES\.E_LOGIN_FORMAT\);/);
+    assert.match(validation, /\.split\(MESSAGE_WORD_SEPARATOR\)\.some\(looksLikeAccountNumber\);/);
+    assert.equal((validation.match(/ACCOUNT_NUMBER_REGEX\.test\(/g) || []).length, 1);
+    // The refusal is said and the composer is not emptied: the user sees what was refused
+    const chat = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
+    const send = chat.slice(chat.indexOf('    async function sendNow('));
+    const refusal = send.slice(send.indexOf('if (!validation.valid) {'), send.indexOf('if (conv.room && Rooms.expired('));
+    assert.match(refusal, /Errors\.report\(validation\.error, validation\.params\);\n\s*return;/);
+    assert.doesNotMatch(refusal, /clearSent|setComposer/);
+});
+
 // One table pins both sides: the agent's ValidateMessageText (backend/internal/agent/fuzz_test.go
 // accountNumberSamples, read from the Go source) refuses exactly the rows the browser refuses
 test('composer: the agent\'s account-number samples are refused or sent here exactly as there', () => {

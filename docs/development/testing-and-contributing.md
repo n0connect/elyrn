@@ -231,7 +231,7 @@ Pre-login screens:
 - New identity · double-click copy, double-click continue · one challenge request and one `POST /register` each.
 
 Inside the app:
-- Composer · paste your account number (alone, in a sentence, fullwidth) and send · `E_MESSAGE_IS_ACCOUNT_NUMBER`; nothing is posted; the composer is emptied and no draft keeps it (switch conversation and back).
+- Composer · paste your account number (alone, in a sentence, fullwidth) and send · `E_MESSAGE_IS_ACCOUNT_NUMBER`; nothing is posted; the text stays in the composer so you see what was refused. The composer refuses exactly the forms the login field accepts (`validation.js looksLikeAccountNumber`): a number split by spaces is refused by login (`E_LOGIN_FORMAT`) and sent by the composer as text.
 - Composer · hold Enter down on a message · one message posted.
 - Composer · type while a send is in flight (throttle) · the new text stays in the composer after the send settles.
 - Join · paste your own invite · `W_OWN_INVITE`; nothing posted.

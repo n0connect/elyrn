@@ -76,7 +76,8 @@ function checkMessageText(input, withFile) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_CONTROL_CHARS };
     }
 
-    // A secret pasted into the composer by mistake is never sent (chat.js also empties the composer)
+    // A secret pasted into the composer by mistake is never sent; the composer keeps the text so
+    // the user sees what was refused and removes the number
     if (containsAccountNumber(normalized)) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_IS_ACCOUNT_NUMBER };
     }
@@ -115,7 +116,8 @@ function normalizeAccountNumber(input) {
 
 /**
  * True when a string, read as normalizeAccountNumber reads it, has the exact shape of a secret
- * AccountNumber. Used to stop users from pasting their account number where it does not belong.
+ * AccountNumber: the one home of "is this an account number". The login field accepts exactly
+ * what passes here, and every other field (the composer, the join field) refuses it.
  * @param {any} input
  * @returns {boolean}
  */
@@ -139,7 +141,7 @@ function parseAccountNumber(input) {
         ElyrnCrypto.codeBody(value, ElyrnRoomCrypto.CODE_PREFIXES) !== null) {
         return refused(Errors.CODES.E_LOGIN_INVITE_PASTED);
     }
-    if (!ACCOUNT_NUMBER_REGEX.test(value)) {
+    if (!looksLikeAccountNumber(value)) {
         return refused(Errors.CODES.E_LOGIN_FORMAT);
     }
     return { valid: true, value: value, error: '' };
@@ -149,13 +151,14 @@ function parseAccountNumber(input) {
 const MESSAGE_WORD_SEPARATOR = /\s+/u;
 
 /**
- * True when any whitespace-separated word of text is an account number (looksLikeAccountNumber).
- * An invite or room code carries its prefix, so sharing one in a message is not refused.
+ * True when any whitespace-separated word of text is an account number (looksLikeAccountNumber,
+ * so every form the login field accepts, alone or among words). An invite or room code carries
+ * its prefix, so sharing one in a message is not refused.
  * @param {string} text
  * @returns {boolean}
  */
 function containsAccountNumber(text) {
-    return text.normalize('NFKC').split(MESSAGE_WORD_SEPARATOR).some(word => ACCOUNT_NUMBER_REGEX.test(word));
+    return text.normalize('NFKC').split(MESSAGE_WORD_SEPARATOR).some(looksLikeAccountNumber);
 }
 
 /**
