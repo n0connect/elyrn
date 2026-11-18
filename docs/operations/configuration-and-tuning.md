@@ -139,7 +139,8 @@ to 300 stays valid: below 14 s the deadlines stay at the floor and the backend l
 start, because there a stalled request can still outlive the write deadline. From 18 s (statement)
 and 38 s (transaction) the deadlines reach their constants and stop growing. Background work
 (the startup key check, re-wrapping, retention) keeps 15 s and 35 s whatever this setting is, and
-retention's bulk deletes and the migration keep their own longer limits (1 and 5 minutes). The
+retention's batches and the migration keep their own longer limits (1 and 5 minutes; a batch is
+1000 messages or 64 file parts, so it normally takes far less). The
 event stream has no request deadline (it lives for minutes and sets its own write deadline for
 every event); its session and member lookups run under the same one database deadline as any
 request. No request's database work is cancelled by the client hanging up or by shutdown

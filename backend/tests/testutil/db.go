@@ -57,7 +57,7 @@ func resetGlobalStateForTesting(t *testing.T) {
 // allModels lists every table, children before parents
 func allModels() []interface{} {
 	return []interface{}{&models.FilePart{}, &models.RoomNote{}, &models.Message{}, &models.ConversationMember{}, &models.Room{}, &models.Conversation{},
-		&models.Invite{}, &models.User{}, &models.KeyCheck{}}
+		&models.Invite{}, &models.User{}, &models.KeyCheck{}, &models.BurnedRoom{}, &models.OrphanedConversation{}}
 }
 
 // CleanupTestData removes all test data created during tests

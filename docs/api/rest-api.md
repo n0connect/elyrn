@@ -37,7 +37,7 @@ an expired session from none). Three shapes reach the wire:
 | 404 | `Not Found` | `E_ROUTE_NOT_FOUND` | no such route (a malformed id answers the same) |
 | 404 | `Not found` | `E_NOT_FOUND` | no such conversation, room, invite, note, member card or file part *for the caller*: unknown, expired, burned, a wrong room code, or one the caller is not a member of |
 | 405 | `Method not allowed` | `E_METHOD_NOT_ALLOWED`, `E_HEAD_NOT_ALLOWED` (empty) | another method |
-| 409 | `Conflict` | `E_CONFLICT` | the id holds the caller's own identical earlier attempt (stored); a room id that exists |
+| 409 | `Conflict` | `E_CONFLICT` | the id holds the caller's own identical earlier attempt (stored); a room id that exists, or that a burned room or a deleted conversation still holds |
 | 409 | `Id taken` (JSON) | `E_ID_TAKEN` | a message or note id, or a file part, held by anything else: nothing stored, send again under a fresh id |
 | 409 | `File part out of order` (JSON) | `E_FILE_PART_OUT_OF_ORDER` | a later part of a file whose live part 0 the caller has not stored |
 | 409 | `Room full` | `E_ROOM_FULL` | no free seat |
@@ -374,7 +374,7 @@ Lists the caller's conversations, newest first (the server keeps no recency acro
 ---
 
 ### `DELETE /api/v2/conversations/{id}`
-**Burn:** Bilaterally deletes the conversation, all memberships, and all stored ciphertexts from the database. In a room only the owner burns (for everyone); any other member **leaves**: their seat goes, their messages stay readable to the others, notes to and from them go. Members get a `conv` event either way. Every request takes a token
+**Burn:** Ends the conversation for both sides: the conversation, all memberships and notes are deleted in the request, so nothing of it answers any route again; the stored ciphertexts (messages and file parts) leave the database within the next retention cycles, in bounded batches. A room burned before its expiry leaves a tombstone (its id and expiry only), so its code never opens a room again. In a room only the owner burns (for everyone); any other member **leaves**: their seat goes, their messages stay readable to the others, notes to and from them go. Members get a `conv` event either way. Every request takes a token
 from the caller's rate bucket `burn` before the conversation is looked up (a `404` spends one
 too): `429` (`E_RATE_LIMITED`) once it is empty.
 
@@ -466,7 +466,7 @@ Stores a new room. Costs a fresh proof of work, like an invite.
 }
 ```
 - `max_members` is 2 to `ROOM_MAX_MEMBERS`. `expires_at` is on the hour, at least 50 minutes and at most `ROOM_MAX_TTL_HOURS` + 1 hours (plus 10 minutes of clock skew) ahead.
-- **Errors:** `400` any field out of shape or range, `412` / `403` proof of work missing or invalid, `409` the id exists (`E_CONFLICT`: draw a new secret), `429` too many conversations or requests.
+- **Errors:** `400` any field out of shape or range, `412` / `403` proof of work missing or invalid, `409` the id exists, or belonged to a room burned before its expiry or to a conversation whose rows retention has not removed yet (`E_CONFLICT`, the same answer: draw a new secret), `429` too many conversations or requests.
 - **Response (201 Created):** `{"conversation": { … "room": { … "owner": true, "members": 1 } }}`
 
 ---
@@ -554,7 +554,8 @@ only in whole parts and never its name, type or bytes. The file's key travels in
 message, so exactly the members who can read that message can open the file. Works in one-to-one
 conversations and rooms. Parts expire by the messages' day rule (`MESSAGE_TTL_DAYS`, day-granular,
 capped like messages) and go with their conversation (burn, room expiry, the owner's or a pair
-member's account deletion); leaving a room keeps the leaver's parts, like their messages.
+member's account deletion: unreachable at once, deleted by the next retention cycles and counted
+against `FILE_STORE_MAX_BYTES` until then); leaving a room keeps the leaver's parts, like their messages.
 
 ### `POST /api/v2/conversations/{id}/files`
 Stores one part. Part 0 opens the file for its uploader (and takes one token of the caller's `file`

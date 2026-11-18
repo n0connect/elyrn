@@ -557,6 +557,9 @@ func TestBurn_RacingSendsLeaveNoCiphertext(t *testing.T) {
 			t.Fatalf("round %d: unexpected error %v", round, err)
 		}
 
+		// A send that committed before the burn left an orphan row; one after it stored nothing.
+		// Either way nothing is left once retention ran: no message escapes the orphan queue.
+		purgeAt(t, time.Now())
 		var left int64
 		database.DB.Model(&models.Message{}).Where("conversation_id = ?", convID).Count(&left)
 		if left != 0 {

@@ -244,6 +244,7 @@ func expectIdentical(t *testing.T, got, want *httptest.ResponseRecorder, what st
 var negativeTables = []any{
 	&models.User{}, &models.Invite{}, &models.Conversation{}, &models.ConversationMember{},
 	&models.Message{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{},
+	&models.BurnedRoom{}, &models.OrphanedConversation{},
 }
 
 // rowCounts is the number of rows of every table in negativeTables, by table type.

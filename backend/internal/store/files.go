@@ -89,19 +89,3 @@ func (r *chatRepository) CountAllFileParts() (int64, error) {
 	}
 	return count, nil
 }
-
-// capFileParts keeps no part past latest, as the cap step does for messages (a lowered
-// MESSAGE_TTL_DAYS shortens what is already stored).
-func (r *chatRepository) capFileParts(latest time.Time) error {
-	_, err := r.bulk("file parts cap", func(tx *gorm.DB) *gorm.DB {
-		return tx.Model(&models.FilePart{}).Where(colExpiresOn+" > ?", latest).UpdateColumn(colExpiresOn, latest)
-	})
-	return err
-}
-
-// purgeFileParts deletes the parts past their deletion day, by the messages' own rule.
-func (r *chatRepository) purgeFileParts(today time.Time) (int64, error) {
-	return r.bulk("file parts", func(tx *gorm.DB) *gorm.DB {
-		return tx.Where(whereMessageExpired, today).Delete(&models.FilePart{})
-	})
-}

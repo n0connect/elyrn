@@ -35,8 +35,9 @@ type ChatRepository interface {
 	FindMembershipsByTags(memberTags []string) (map[uuid.UUID]models.ConversationMember, error)
 	ListMembers(conversationID uuid.UUID) ([]models.ConversationMember, error)
 	LastSeqs(conversationIDs []uuid.UUID) (map[uuid.UUID]int64, error)
-	// DeleteConversation burns a conversation and returns how many file parts went with it
-	DeleteConversation(conversationID uuid.UUID) (int64, error)
+	// DeleteConversation ends a conversation for every member; its messages and file parts stay
+	// as an orphan until retention deletes them (see the function)
+	DeleteConversation(conversationID uuid.UUID, now time.Time) error
 
 	NextSeq(conversationID uuid.UUID) (int64, error)
 	CreateMessage(message *models.Message) error

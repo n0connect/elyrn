@@ -54,9 +54,10 @@ const (
 // from the database at start and again by every retention cycle, and adjusted in between:
 //   - an upload reserves its part before inserting (refused when stored + reserved would pass the
 //     bound) and settles the reservation once its transaction ended, counting it when it committed;
-//   - a burn or an account deletion subtracts the parts it removed once it committed, unless a
+//   - a retention pass subtracts the parts it removed once its batches committed, unless a
 //     recount ran meanwhile (it may already have seen the delete: subtracting again would count
-//     too few).
+//     too few). A burn or an account deletion removes no part: the parts of a deleted
+//     conversation (an orphan) stay stored and counted until retention deletes them.
 //
 // Every uncertainty resolves towards "full": before the first count it refuses every insert, and
 // an insert that commits during a recount may be counted twice until the next one.
@@ -147,8 +148,9 @@ func (s *Service) RecountFileParts() error {
 	return storedParts.set(n)
 }
 
-// partsRemoved accounts for the parts a committed deletion removed (logged, never failing the
-// deletion: the next recount corrects the counter either way).
+// partsRemoved accounts for the parts a retention pass removed (logged, never failing the
+// pass: the next recount corrects the counter either way). Burns and account deletions remove
+// no part themselves: their parts stay stored, and counted, until retention deletes them.
 func (s *Service) partsRemoved(n int64, since uint64) {
 	if n == 0 {
 		return
@@ -158,8 +160,8 @@ func (s *Service) partsRemoved(n int64, since uint64) {
 	}
 }
 
-// partsMark is the counter generation a deletion starts in; a failure reads as "a recount ran"
-// (the deletion is then not subtracted: the counter errs towards full).
+// partsMark is the counter generation a retention pass starts in; a failure reads as "a recount
+// ran" (the pass is then not subtracted: the counter errs towards full).
 func (s *Service) partsMark() uint64 {
 	generation, err := storedParts.mark()
 	if err != nil {

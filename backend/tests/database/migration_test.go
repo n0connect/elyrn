@@ -38,7 +38,7 @@ func TestDatabaseMigration(t *testing.T) {
 	}
 
 	for _, table := range []interface{}{&models.Invite{}, &models.Conversation{}, &models.ConversationMember{}, &models.Message{},
-		&models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}} {
+		&models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}, &models.BurnedRoom{}, &models.OrphanedConversation{}} {
 		if !database.DB.Migrator().HasTable(table) {
 			t.Errorf("%T table should exist after migration", table)
 		}

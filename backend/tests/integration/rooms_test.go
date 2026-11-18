@@ -555,13 +555,15 @@ func TestRooms_LeaveKeepsTheRoomAndBurnEndsIt(t *testing.T) {
 			t.Fatalf("%T row survived the burn", model)
 		}
 	}
-	for _, model := range []interface{}{&models.ConversationMember{}, &models.Message{}, &models.RoomNote{}} {
+	for _, model := range []interface{}{&models.ConversationMember{}, &models.RoomNote{}} {
 		var n int64
 		database.DB.Model(model).Where("conversation_id = ?", a.room.ID).Count(&n)
 		if n != 0 {
 			t.Fatalf("%T rows survived the burn", model)
 		}
 	}
+	purgeAt(t, time.Now()) // the messages, unreachable since the burn, go with retention
+	expectRows(t, &models.Message{}, 0, "a burned room's messages after a retention pass")
 }
 
 func TestRooms_ExpiredRoomStopsAnsweringAndIsPurged(t *testing.T) {

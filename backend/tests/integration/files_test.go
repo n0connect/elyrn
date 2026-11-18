@@ -278,9 +278,11 @@ func TestFiles_QuotaStoreAndTheCounter(t *testing.T) {
 		t.Fatal("a part was stored past the store's bound")
 	}
 
-	// A burn gives its parts back at once
+	// A burn's parts stay stored, and counted, until retention deletes them; then they are given back
 	expectStatus(t, alice.do(http.MethodDelete, models.PathConversations+"/"+first, nil), http.StatusNoContent, "burn the first conversation")
-	expectStatus(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "an upload after the burn")
+	expectAnswer(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), apperr.FileStoreFull, "an upload while the burned parts wait for retention")
+	purgeAt(t, time.Now())
+	expectStatus(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "an upload after retention removed the burned parts")
 
 	// Expired parts are purged by retention, which counts the store again
 	expectStatus(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "the store full again")
@@ -318,8 +320,9 @@ func TestFiles_ExpiredPartsAreNotServed(t *testing.T) {
 	expectAnswer(t, alice.uploadPart(conv, file, 1, newFilePart(t)), apperr.FilePartOutOfOrder, "continuing a file whose part 0 expired")
 }
 
-// Parts go with their conversation: a burn, a room's expiry and an account deletion remove them;
-// leaving a room keeps the leaver's parts, readable like their messages.
+// Parts go with their conversation: a burn, a room's expiry and an account deletion end access to
+// them at once and retention removes them; leaving a room keeps the leaver's parts, readable like
+// their messages.
 func TestFiles_PartsGoWithTheirConversation(t *testing.T) {
 	mux := filesSetup(t)
 	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
@@ -327,8 +330,9 @@ func TestFiles_PartsGoWithTheirConversation(t *testing.T) {
 	burned := pair(t, alice, bob)
 	expectStatus(t, alice.uploadPart(burned, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "a part to burn")
 	expectStatus(t, bob.do(http.MethodDelete, models.PathConversations+"/"+burned, nil), http.StatusNoContent, "bob burns")
+	purgeAt(t, time.Now())
 	if storedParts(t, uuid.MustParse(burned)) != 0 {
-		t.Fatal("parts survived the burn")
+		t.Fatal("parts survived the burn and a retention pass")
 	}
 
 	room := createRoom(t, alice, 4, 24)
@@ -349,6 +353,7 @@ func TestFiles_PartsGoWithTheirConversation(t *testing.T) {
 	deleted := pair(t, carol, alice)
 	expectStatus(t, carol.uploadPart(deleted, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "carol's part")
 	expectStatus(t, carol.do(http.MethodDelete, models.PathMe, models.DeleteAccountRequest{AuthKey: carol.authKey}), http.StatusOK, "carol deletes her account")
+	purgeAt(t, time.Now())
 	if storedParts(t, uuid.MustParse(deleted)) != 0 {
 		t.Fatal("parts survived the account deletion")
 	}

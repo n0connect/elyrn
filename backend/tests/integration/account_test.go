@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"elyrn/internal/database"
 	"elyrn/internal/models"
@@ -77,6 +78,7 @@ func TestDeleteAccount_ErasesEverything(t *testing.T) {
 		t.Fatalf("bob's unrelated conversation was affected: %+v", list.Conversations)
 	}
 
+	purgeAt(t, time.Now()) // the deleted conversations' messages go with retention
 	var users, invites, members, messages int64
 	database.DB.Model(&models.User{}).Count(&users)
 	database.DB.Model(&models.Invite{}).Count(&invites)

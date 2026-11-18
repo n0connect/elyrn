@@ -149,7 +149,7 @@ the bound 413; each as JSON, `{"success":false,"message":"<sentence>","code":"E_
 shape as the backend's JSON answers plus the code. The backend's gate still checks everything
 again, and its own answers reach the client unchanged. `/internal/health` lies outside `/api/`,
 so nginx never forwards it; the backend also answers it to loopback peers only, with a status
-line and no body (any other peer gets `404`, like an unknown path): `200` when the database answers `SELECT 1` within 3 s and a retention cycle began
+line and no body (any other peer gets `404`, like an unknown path): `200` when the database answers `SELECT 1` within 3 s and a retention cycle finished
 within 15 minutes, otherwise `503` (`E_HEALTH_UNAVAILABLE` in the backend log).
 
 ## Images

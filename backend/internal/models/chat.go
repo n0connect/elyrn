@@ -67,6 +67,33 @@ func (Room) TableName() string {
 	return "rooms"
 }
 
+// BurnedRoom is the tombstone of a room burned before its expiry (by its owner, or by the owner's
+// account deletion): its id and the room's original expiry, nothing else. Room ids derive from
+// the code alone, so without it any code holder could create the room again and own it. Retention
+// drops a tombstone once its expiry passed (an expired code no longer passes the create checks).
+type BurnedRoom struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+	ExpiresAt time.Time `gorm:"index;not null"` // the burned room's own expires_at
+}
+
+func (BurnedRoom) TableName() string {
+	return "burned_rooms"
+}
+
+// OrphanedConversation names a deleted conversation whose messages and file parts are still on
+// disk: a burn, a room purge or an account deletion ends access at once (the conversation,
+// memberships and notes go in the request) and retention deletes the rest in bounded batches,
+// oldest orphan first. OrphanedOn is the UTC day of the deletion, nothing finer. While a row is
+// here, no conversation is created again under its id.
+type OrphanedConversation struct {
+	ID         uuid.UUID `gorm:"type:uuid;primaryKey"`
+	OrphanedOn time.Time `gorm:"type:date;index;not null"`
+}
+
+func (OrphanedConversation) TableName() string {
+	return "orphaned_conversations"
+}
+
 // RoomNote is a sealed note from one room member to another (a friend request). Only the
 // addressee can open it; the server sees two per-room pseudonyms and ciphertext.
 type RoomNote struct {

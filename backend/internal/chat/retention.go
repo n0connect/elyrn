@@ -62,10 +62,12 @@ func (s *Service) PurgeExpired(now time.Time) error {
 
 // retentionCycle purges what is expired at now, unless the clock cannot be trusted (then it
 // deletes nothing and logs E_CLOCK_JUMP): ciphertext past its deletion day, expired invites and
-// notes, and expired rooms with everything in them, and keeps no ciphertext past the deletion
-// day of a message sent now (MESSAGE_TTL_DAYS may have shrunk). The mark moves to now once
-// the pass has run, also when a step failed: the clock was trusted either way. Every cycle, paused
-// or not, then counts the stored file parts afresh (RecountFileParts).
+// notes, expired rooms, the messages and file parts of deleted conversations, and tombstones
+// past their room's expiry, and keeps no ciphertext past the deletion day of a message sent now
+// (MESSAGE_TTL_DAYS may have shrunk). Every step deletes in bounded batches (store.PurgeExpired),
+// so a backlog is worked off over cycles. The mark moves to now once the pass has run, also when
+// a step failed: the clock was trusted either way. Every cycle, paused or not, then counts the
+// stored file parts afresh (RecountFileParts).
 func (s *Service) retentionCycle(now, prev time.Time) error {
 	return errors.Join(s.purgeCycle(now, prev), s.RecountFileParts())
 }
@@ -82,7 +84,10 @@ func (s *Service) purgeCycle(now, prev time.Time) error {
 		s.logger.Error("RunRetention: %s", opcode.ClockJump)
 		return nil
 	}
+	since := s.partsMark()
 	counts, purgeErr := s.chats.PurgeExpired(deletionCutoff(now), expiryDay(now), now.UTC())
+	// Subtracted now, so the counter is right even when the recount that follows fails
+	s.partsRemoved(counts.FileParts, since)
 	s.logger.Debug("PurgeExpired: removed %d messages, %d file parts, %d invites, %d notes, %d rooms",
 		counts.Messages, counts.FileParts, counts.Invites, counts.Notes, counts.Rooms)
 	return errors.Join(purgeErr, s.keys.SaveRetentionMark(now))
@@ -96,18 +101,21 @@ const (
 	maxRetentionCycles = 1 << 22
 )
 
-// Retention liveness, for the healthcheck: each cycle records when it began, on the monotonic
-// clock (time since processStart), so a clock jump never makes retention look dead or alive.
+// Retention liveness, for the healthcheck: each cycle that finished (every step and the recount
+// succeeded, or the cycle was paused for the clock) records when, on the monotonic clock (time
+// since processStart), so a clock jump never makes retention look dead or alive. A step that
+// fails every cycle (a retention mark that cannot be parsed, a statement that never fits its
+// timeout) therefore turns the healthcheck red instead of failing silently.
 var (
 	processStart  = time.Now()
 	retentionBeat atomic.Int64
 )
 
-// retentionSilence: no cycle began for this long means retention is stuck (three missed cycles)
+// retentionSilence: no cycle finished for this long means retention is stuck (three missed cycles)
 const retentionSilence = 3 * retentionInterval
 
-// RetentionAlive reports whether a retention cycle began within retentionSilence (or the process
-// is younger than that).
+// RetentionAlive reports whether a retention cycle finished within retentionSilence (or the
+// process is younger than that).
 func RetentionAlive() bool {
 	return time.Since(processStart)-time.Duration(retentionBeat.Load()) <= retentionSilence
 }
@@ -119,10 +127,11 @@ func (s *Service) RunRetention(ctx context.Context) {
 	defer ticker.Stop()
 	var prev time.Time
 	for cycle := 0; cycle < maxRetentionCycles; cycle++ {
-		retentionBeat.Store(int64(time.Since(processStart)))
 		now := time.Now()
 		if err := s.retentionCycle(now, prev); err != nil {
 			s.logger.LogError("RunRetention", err)
+		} else {
+			retentionBeat.Store(int64(time.Since(processStart)))
 		}
 		prev = now
 		select {

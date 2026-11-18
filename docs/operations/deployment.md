@@ -239,7 +239,8 @@ every conversation and the onion key.
 
 **Container health.** `make ps` (or `docker ps`): every service has a healthcheck and the restart
 policy `unless-stopped`. The backend's (`/internal/health`) fails when the database does not
-answer `SELECT 1` within 3 s or retention has not begun a cycle in 15 minutes; its log then
+answer `SELECT 1` within 3 s or no retention cycle has finished in 15 minutes (a cycle whose step
+failed does not count: see `RunRetention` in the backend log); its log then
 carries `E_HEALTH_UNAVAILABLE`. A database outage answers `503` (`E_STORE_UNAVAILABLE`) on every
 route.
 
