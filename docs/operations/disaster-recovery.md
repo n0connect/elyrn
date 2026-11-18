@@ -121,11 +121,21 @@ restored pepper commitment instead of pinning a new one:
 
 ```bash
 cp /safe/place/.env .env                     # the .env of the instance that wrote the backup
+# A new JWT_SECRET, always (the same command make setup uses; prints nothing)
+sed -i.bak "s|^JWT_SECRET=.*|JWT_SECRET=$(openssl rand -hex 32)|" .env && rm .env.bak
 make certs                                   # database TLS material (new certificates are fine)
 docker compose up -d postgres                # database only, no backend yet
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < backups/accounts-<time>.sql
 make up
 ```
+
+Replace `JWT_SECRET` before the backend first starts on the restored accounts, as above. The
+restored `users.session_epoch` values are those of the backup, older than the lost database's:
+every logout after the backup bumped an epoch that the restore rewinds, so a session token that
+logout revoked would be valid again under the old secret until it expires
+(`JWT_EXPIRATION_MINUTES`, 30 days by default). A new secret ends every session at once; users
+log in again, and nothing else is affected (the table above). Keep `ACCOUNT_LOOKUP_PEPPER` and
+the master keys exactly as they were: the restored accounts need them.
 
 Users log in with their account numbers as before. Their conversations are gone; the stale
 entries in their encrypted conversation lists are dropped at their first listing.
