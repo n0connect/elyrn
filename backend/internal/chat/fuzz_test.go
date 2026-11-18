@@ -168,6 +168,40 @@ func FuzzClockTrusted(f *testing.F) {
 	})
 }
 
+// FuzzFileShareParts: for every quota, seat bound and largest file the settings allow, a member's
+// share is at least one largest file and never more than the whole quota in whole parts (or that
+// one file, where a quota that is not a whole number of parts holds fewer); above that floor it is
+// exactly the quota split evenly over the seats, rounded down to whole parts (share × seats fits
+// the quota, one part more per seat would not); more seats never give a larger share; and a seat
+// bound below one (a corrupted record) neither panics nor drops below the floor.
+func FuzzFileShareParts(f *testing.F) {
+	f.Add(config.GetFileConversationQuotaBytes(), pairSeats, config.GetMaxFileBytes())
+	f.Add(config.MaxFileConversationQuotaBound, config.MaxRoomMembersBound, config.MaxFileBytesBound)
+	f.Add(int64(7*utils.FilePartBytes), 4, int64(2*utils.FilePartBytes))
+	f.Add(int64(utils.FilePartBytes), config.MinRoomMembers, int64(utils.FilePartBytes))
+	f.Add(int64(3*utils.FilePartBytes-1), 0, int64(1))
+	f.Fuzz(func(t *testing.T, quota int64, seats int, maxFile int64) {
+		if quota < utils.FilePartBytes || quota > config.MaxFileConversationQuotaBound ||
+			maxFile < 1 || maxFile > min(quota, config.MaxFileBytesBound) || seats > config.MaxRoomMembersBound {
+			return
+		}
+		share, floor, quotaParts := fileShareParts(quota, seats, maxFile), utils.FilePartCount(maxFile), quota/utils.FilePartBytes
+		if share < floor || share > max(quotaParts, floor) {
+			t.Fatalf("quota %d seats %d file %d: share %d outside [%d, %d]", quota, seats, maxFile, share, floor, max(quotaParts, floor))
+		}
+		if seats < 1 {
+			return
+		}
+		perSeat := int64(seats)
+		if share > floor && (share*perSeat > quotaParts || (share+1)*perSeat <= quotaParts) {
+			t.Fatalf("quota %d seats %d: share %d is not the even split rounded down", quota, seats, share)
+		}
+		if seats < config.MaxRoomMembersBound && fileShareParts(quota, seats+1, maxFile) > share {
+			t.Fatalf("quota %d: %d seats give a larger share than %d", quota, seats+1, seats)
+		}
+	})
+}
+
 // Operations FuzzPartCounter drives the stored-parts counter with, one per script byte
 const (
 	counterSet = iota

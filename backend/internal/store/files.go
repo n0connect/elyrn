@@ -22,6 +22,9 @@ type FileRepository interface {
 	LiveFilePart(conversationID, fileID uuid.UUID, part int, today time.Time) (*models.FilePart, error)
 	// CountFileParts counts the parts stored in one conversation, live or not
 	CountFileParts(conversationID uuid.UUID) (int64, error)
+	// CountUploaderLiveFileParts counts one uploader's parts in one conversation live on today
+	// (served by idx_file_parts_uploader)
+	CountUploaderLiveFileParts(conversationID uuid.UUID, uploaderTag string, today time.Time) (int64, error)
 	// CountAllFileParts counts every part stored on the server
 	CountAllFileParts() (int64, error)
 }
@@ -30,6 +33,7 @@ type FileRepository interface {
 const (
 	whereFilePart       = "conversation_id = ? AND file_id = ? AND part = ?"
 	whereFilePartLive   = whereFilePart + " AND " + whereMessageLive // the messages' own day rule
+	whereUploaderLive   = "conversation_id = ? AND uploader_tag = ? AND " + whereMessageLive
 	colExpiresOn        = "expires_on"
 	firstFilePart       = 0
 	selectFilePartsMeta = "conversation_id, file_id, part, uploader_tag, expires_on" // every column but data
@@ -63,6 +67,15 @@ func (r *chatRepository) CountFileParts(conversationID uuid.UUID) (int64, error)
 	var count int64
 	if err := r.db().Model(&models.FilePart{}).Where(whereConversation, conversationID).Count(&count).Error; err != nil {
 		chatRepoLogger.LogError("ChatRepository.CountFileParts", err)
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *chatRepository) CountUploaderLiveFileParts(conversationID uuid.UUID, uploaderTag string, today time.Time) (int64, error) {
+	var count int64
+	if err := r.db().Model(&models.FilePart{}).Where(whereUploaderLive, conversationID, uploaderTag, today).Count(&count).Error; err != nil {
+		chatRepoLogger.LogError("ChatRepository.CountUploaderLiveFileParts", err)
 		return 0, err
 	}
 	return count, nil

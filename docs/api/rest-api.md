@@ -49,6 +49,7 @@ an expired session from none). Three shapes reach the wire:
 | 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED`, `E_LOGIN_LOOKUP_FAILED` (JSON) | a server fault; on login, a lookup the server could not compute |
 | 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED`, `E_FILE_REQUESTS_BUSY` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full (for files: 32 file part requests handled at once); retry later |
 | 507 | `File quota reached` (JSON) | `E_FILE_QUOTA_REACHED` | the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of file parts |
+| 507 | `File share reached` (JSON) | `E_FILE_SHARE_REACHED` | the uploader holds its share of the conversation's `FILE_CONVERSATION_QUOTA_BYTES` |
 | 507 | `File store full` (JSON) | `E_FILE_STORE_FULL` | the server holds `FILE_STORE_MAX_BYTES` of file parts, or has not counted them yet |
 
 `503 E_STORE_UNAVAILABLE` never means a key, session or conversation is gone: clients retry
@@ -580,6 +581,7 @@ part).
   - `409 Conflict` the caller's own identical part is already stored (the earlier attempt succeeded);
   - `409` `{"success":false,"message":"Id taken"}` (`E_ID_TAKEN`) the part is stored with other bytes or by another member: nothing stored, upload the file again under a fresh `id`;
   - `409` `{"success":false,"message":"File part out of order"}` (`E_FILE_PART_OUT_OF_ORDER`) a later part before the caller stored part 0 (or after part 0 expired);
+  - `507` `{"success":false,"message":"File share reached"}` (`E_FILE_SHARE_REACHED`) the caller holds its share of the conversation's quota (one member's share is the quota divided by the conversation's seat bound (a room's `max_members`, 2 for a one-to-one conversation), rounded down to whole parts and never less than one file of `MAX_FILE_BYTES`; it counts the member's own live parts in that conversation); other members may still upload. Checked before the quota itself;
   - `507` `{"success":false,"message":"File quota reached"}` (`E_FILE_QUOTA_REACHED`) the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of parts;
   - `507` `{"success":false,"message":"File store full"}` (`E_FILE_STORE_FULL`) the server holds `FILE_STORE_MAX_BYTES` of parts (or has not counted them yet: fail closed);
   - `429` `{"success":false,"message":"File budget spent"}` (`E_FILE_BUDGET_SPENT`) the account's daily budget is spent (checked right after membership, before the part's other checks);

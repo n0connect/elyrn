@@ -461,3 +461,43 @@ func TestFiles_DailyBudgetIsPerAccount(t *testing.T) {
 		t.Fatalf("%d parts stored, want 4", n)
 	}
 }
+
+// One member holds at most its share of a conversation's quota (the quota over the seat bound,
+// never less than one largest file), so a room member who fills its share leaves the others room;
+// a member who left keeps its parts readable, counted against the total and nobody's share. On
+// the old single conversation-wide count bob took the whole quota and alice was refused.
+func TestFiles_OneMemberCannotHoldTheRoomsQuota(t *testing.T) {
+	mux := filesSetup(t)
+	t.Setenv(config.EnvMaxFileBytes, strconv.Itoa(utils.FilePartBytes))                 // one part per file
+	t.Setenv(config.EnvFileConversationQuotaBytes, strconv.Itoa(8*utils.FilePartBytes)) // 4 seats: a share of 2
+	a, b, c := roomOfThree(t, mux)
+	roomID := a.room.ID.String()
+
+	expectStatus(t, b.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "bob's first file")
+	expectStatus(t, b.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "bob's second file")
+	expectAnswer(t, b.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), apperr.FileShareReached, "bob past his share")
+	expectStatus(t, a.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice uploads while bob holds his share")
+
+	// bob leaves: his two parts stay and count against the total, not against anyone's share
+	expectStatus(t, b.u.do(http.MethodDelete, b.path(""), nil), http.StatusNoContent, "bob leaves")
+	expectStatus(t, c.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "carol's first file")
+	expectStatus(t, c.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "carol's second file")
+	expectStatus(t, a.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice's second file")
+	if n := storedParts(t, a.room.ID); n != 6 {
+		t.Fatalf("the room holds %d parts, want 6 (bob's two kept)", n)
+	}
+
+	// The total still binds: with the quota lowered to the parts stored, a newcomer with an empty
+	// share stores nothing either
+	t.Setenv(config.EnvFileConversationQuotaBytes, strconv.Itoa(6*utils.FilePartBytes))
+	d := joinRoom(t, register(t, mux), a.code)
+	expectAnswer(t, d.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), apperr.FileQuotaReached, "dave past the room's quota")
+
+	// A one-to-one conversation splits its quota over two seats
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	t.Setenv(config.EnvFileConversationQuotaBytes, strconv.Itoa(2*utils.FilePartBytes))
+	expectStatus(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice's file in the pair")
+	expectAnswer(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.FileShareReached, "alice past her half")
+	expectStatus(t, bob.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "bob's half is his")
+}

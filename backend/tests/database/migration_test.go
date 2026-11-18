@@ -159,6 +159,12 @@ func TestUserTableIndexes(t *testing.T) {
 	if !database.DB.Migrator().HasIndex(&models.Invite{}, "idx_invites_lookup") {
 		t.Error("invites table should have unique index 'idx_invites_lookup'")
 	}
+	// The per-member file share count of every upload, and the retention purge of parts
+	for _, index := range []string{"idx_file_parts_uploader", "idx_file_parts_expires_on"} {
+		if !database.DB.Migrator().HasIndex(&models.FilePart{}, index) {
+			t.Errorf("file_parts table should have index %q", index)
+		}
+	}
 }
 
 // TestDatabaseConnection tests that database connection is working

@@ -23,6 +23,8 @@ var (
 	ErrFilePartOutOfOrder = errors.New("file part out of order")
 	// ErrFileQuotaReached: the conversation holds FILE_CONVERSATION_QUOTA_BYTES of parts
 	ErrFileQuotaReached = errors.New("file quota reached")
+	// ErrFileShareReached: the uploader holds its share of the conversation's quota (fileShareParts)
+	ErrFileShareReached = errors.New("file share reached")
 	// ErrFileStoreFull: the server holds FILE_STORE_MAX_BYTES of parts, or does not know yet
 	ErrFileStoreFull = errors.New("file store full")
 	// ErrFileBudgetSpent: the caller stored FILE_ACCOUNT_DAILY_BYTES of parts within a day
@@ -42,6 +44,8 @@ const (
 	FirstFilePart = 0
 	// unknownGeneration is a mark no recount ever reaches: a deletion under it is not subtracted
 	unknownGeneration = ^uint64(0)
+	// pairSeats is the seat bound of a one-to-one conversation (a room's is its max_members)
+	pairSeats = 2
 )
 
 // partCounter is the in-process count of stored file parts that FILE_STORE_MAX_BYTES is checked
@@ -179,11 +183,12 @@ func (s *Service) UploadFilePart(me *Member, conversationID uuid.UUID, rawFileID
 	if !okID || !okData || part < FirstFilePart || int64(part) >= utils.FilePartCount(config.GetMaxFileBytes()) {
 		return ErrInvalidInput
 	}
-	if _, err := s.liveRoom(s.chats, conversationID); err != nil {
+	room, err := s.liveRoom(s.chats, conversationID)
+	if err != nil {
 		return err
 	}
 	reserved, spent := false, false
-	err := s.chats.Transaction(func(tx store.ChatRepository) error {
+	err = s.chats.Transaction(func(tx store.ChatRepository) error {
 		if _, err := tx.LockConversation(conversationID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return ErrNotFound
@@ -208,7 +213,7 @@ func (s *Service) UploadFilePart(me *Member, conversationID uuid.UUID, rawFileID
 		if err != nil {
 			return err
 		}
-		if err := checkFileQuota(tx, conversationID); err != nil {
+		if err := checkFileQuota(tx, conversationID, seatBound(room), member.MemberTag, now); err != nil {
 			return err
 		}
 		if err := storedParts.reserve(storeLimitParts()); err != nil {
@@ -269,13 +274,43 @@ func partExpiry(tx store.ChatRepository, uploaderTag string, conversationID, fil
 	return opened.ExpiresOn, nil
 }
 
-// checkFileQuota refuses a part that would take the conversation past its quota.
-func checkFileQuota(tx store.ChatRepository, conversationID uuid.UUID) error {
+// seatBound is how many members a conversation can hold at once: a room's max_members, two for a
+// one-to-one conversation (room nil).
+func seatBound(room *models.Room) int {
+	if room == nil {
+		return pairSeats
+	}
+	return room.MaxMembers
+}
+
+// fileShareParts is one member's share of a conversation's quota, in parts: the quota divided by
+// the conversation's seat bound, rounded down to whole parts, and never less than one file of
+// maxFileBytes, so every member can always send one largest file while the conversation has room.
+// A seat bound below one (only a corrupted record) counts as one.
+func fileShareParts(quotaBytes int64, seats int, maxFileBytes int64) int64 {
+	share := quotaBytes / utils.FilePartBytes / int64(max(seats, 1))
+	return max(share, utils.FilePartCount(maxFileBytes))
+}
+
+// checkFileQuota refuses a part that would take its uploader past its share of the conversation's
+// quota (ErrFileShareReached: one member cannot hold the whole pool), then one that would take the
+// conversation past the quota itself (ErrFileQuotaReached). The share counts the uploader's own
+// live parts; the quota counts every stored part, a member's who left included (those count
+// against nobody's share, they still fill the conversation until they expire).
+func checkFileQuota(tx store.ChatRepository, conversationID uuid.UUID, seats int, uploaderTag string, now time.Time) error {
+	quota := config.GetFileConversationQuotaBytes()
+	own, err := tx.CountUploaderLiveFileParts(conversationID, uploaderTag, deletionCutoff(now))
+	if err != nil {
+		return err
+	}
+	if own+1 > fileShareParts(quota, seats, config.GetMaxFileBytes()) {
+		return ErrFileShareReached
+	}
 	stored, err := tx.CountFileParts(conversationID)
 	if err != nil {
 		return err
 	}
-	if (stored+1)*utils.FilePartBytes > config.GetFileConversationQuotaBytes() {
+	if (stored+1)*utils.FilePartBytes > quota {
 		return ErrFileQuotaReached
 	}
 	return nil

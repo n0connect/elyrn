@@ -85,6 +85,7 @@ var jsonWire = map[Code]struct {
 	SenderCardMismatch: {400, `{"success":false,"message":"Sender card mismatch"}`},
 	FilePartOutOfOrder: {409, `{"success":false,"message":"File part out of order"}`},
 	FileQuotaReached:   {507, `{"success":false,"message":"File quota reached"}`},
+	FileShareReached:   {507, `{"success":false,"message":"File share reached"}`},
 	FileStoreFull:      {507, `{"success":false,"message":"File store full"}`},
 	FileBudgetSpent:    {429, `{"success":false,"message":"File budget spent"}`},
 }
@@ -242,6 +243,7 @@ func TestSentinelsMapped(t *testing.T) {
 		chat.ErrSenderCardMismatch: SenderCardMismatch,
 		chat.ErrFilePartOutOfOrder: FilePartOutOfOrder,
 		chat.ErrFileQuotaReached:   FileQuotaReached,
+		chat.ErrFileShareReached:   FileShareReached,
 		chat.ErrFileStoreFull:      FileStoreFull,
 		chat.ErrFileBudgetSpent:    FileBudgetSpent,
 		auth.ErrPendingStoreFull:   PendingStoreFull,

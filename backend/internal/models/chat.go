@@ -101,13 +101,18 @@ func (Message) TableName() string {
 // ciphertext carries its key. The key spans the conversation, so nothing about another
 // conversation's file ids can be probed. Every part has one size and, like a message, only a
 // day-granular deletion date.
+//
+// idx_file_parts_uploader (conversation, uploader, expiry) serves the per-member share count that
+// every upload makes under the conversation lock: a conversation may hold up to
+// FILE_CONVERSATION_QUOTA_BYTES / 262144 parts (40960 at the bound), and the count reads only the
+// uploader's own index entries instead of every part's row.
 type FilePart struct {
-	ConversationID uuid.UUID `gorm:"type:uuid;primaryKey"`
+	ConversationID uuid.UUID `gorm:"type:uuid;primaryKey;index:idx_file_parts_uploader,priority:1"`
 	FileID         uuid.UUID `gorm:"type:uuid;primaryKey"` // client-generated, bound into the parts' encryption
 	Part           int       `gorm:"primaryKey;autoIncrement:false"`
-	UploaderTag    string    `gorm:"size:64;not null"` // the uploader's member tag in this conversation
+	UploaderTag    string    `gorm:"size:64;not null;index:idx_file_parts_uploader,priority:2"` // the uploader's member tag in this conversation
 	Data           []byte    `gorm:"type:bytea;not null"`
-	ExpiresOn      time.Time `gorm:"type:date;index;not null"`
+	ExpiresOn      time.Time `gorm:"type:date;index;not null;index:idx_file_parts_uploader,priority:3"`
 }
 
 func (FilePart) TableName() string {

@@ -110,7 +110,8 @@ const (
 	// SchemaVersion is the schema this binary migrates to. Raise it with every change to the
 	// models that a previous binary must not run against. 2: file_parts (a binary that does not
 	// know the table would never purge it), conversation_members.role, and users.account_hash
-	// dropped (a binary that still writes it would fail every registration).
+	// dropped (a binary that still writes it would fail every registration). Within one version a
+	// change is additive only (idx_file_parts_uploader): an older binary of the version runs on it.
 	SchemaVersion     = 2
 	schemaVersionName = "schema-version"
 	// droppedAccountHashColumn: the Argon2id hash of the auth key that registration used to store
