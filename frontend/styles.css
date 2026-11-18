@@ -78,6 +78,8 @@
     --tile-gap: calc(var(--touch-min) - var(--tile-box));
     /* The app header and the room header: one row height, the same space above and below a rule */
     --row-gap: 16px;
+    /* The identity panel's room around its aura line and around its delete row */
+    --identity-gap: 12px;
     /* Below this window height the conversation stops fitting and the page scrolls */
     --conversation-min-height: 420px;
     /* The message list never shrinks below this; an open panel scrolls inside itself instead */
@@ -736,7 +738,7 @@ header {
     margin-left: var(--tile-gap);
 }
 
-/* A destructive tile (burn, delete identity) keeps its red: the tile turns red, the word too */
+/* A destructive tile (burn) keeps its red: the tile turns red, the word too */
 .icon-btn.danger-tile:hover,
 .icon-btn.danger-tile:focus-visible {
     color: var(--danger);
@@ -1204,17 +1206,21 @@ header {
 }
 
 /* The identity panel: glyph, name and code on one line; deleting the identity set apart below,
-   a member row (.member-item) under a rule, its tile at the right edge */
+   a member row (.member-item) under a rule: its words at the left, the confirmation bar's red
+   word button (.burn-yes) at the right edge, both centred on one line, as much room above the
+   button as below it and as the aura line keeps below itself */
 .identity-aura {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 4px 10px;
-    margin-bottom: 12px;
+    margin-bottom: var(--identity-gap);
 }
 
 .member-item.identity-end {
-    margin-top: 16px;
+    min-height: 0;
+    margin-top: var(--identity-gap);
+    padding: var(--identity-gap) 0;
     border-top: 1px solid var(--border);
     border-bottom: none;
 }
@@ -1429,7 +1435,8 @@ header {
     color: var(--danger);
 }
 
-.menu-opt.burn-yes:hover {
+.menu-opt.burn-yes:hover,
+.menu-opt.burn-yes:focus-visible {
     background: var(--danger);
     color: #ffffff;
 }

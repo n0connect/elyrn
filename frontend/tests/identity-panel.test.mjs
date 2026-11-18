@@ -28,7 +28,7 @@ test('the header holds no delete control: the badge, the bell and logout only', 
     assert.deepEqual(ids, ['meBadge', 'alertsBtn', 'logoutBtn']);
     // one control with that id in the whole page, inside the identity panel
     assert.equal((html.match(/id="deleteIdentityBtn"/g) || []).length, 1);
-    assert.match(panelOf('identityPanel'), /<button type="button" id="deleteIdentityBtn" class="icon-btn danger-tile member-action"><span class="icon-tile" data-icon="erase"><\/span><\/button>/);
+    assert.match(panelOf('identityPanel'), /<button type="button" id="deleteIdentityBtn" class="menu-opt burn-yes member-action"><\/button>/);
 });
 
 test('the identity badge is a real button that names and controls its panel', () => {
@@ -83,18 +83,20 @@ test('wiring: badge toggles (home first from a conversation), Escape closes and 
     assert.match(panelOf('deletePanel'), /<input type="password" id="deleteAccountInput"[^>]*>\n\s*<button id="deleteConfirmBtn" class="menu-opt burn-yes">delete<\/button>/);
 });
 
-test('the delete row is a member row: muted words from UI_TEXT at the left, the erase tile at the right edge, red like burn', () => {
+test('the delete row is a member row: muted words from UI_TEXT at the left, the confirmation bar\'s red word button at the right', () => {
     const panel = panelOf('identityPanel');
-    assert.match(panel, /<div class="member-item identity-end">\n\s*<span id="deleteIdentityText" class="member-tag"><\/span>\n\s*<button type="button" id="deleteIdentityBtn"/);
-    // no word in the markup: the row's words, the tile's name and caption are UI_TEXT's
-    assert.doesNotMatch(panel, /delete identity|there is no undo|title=/);
-    assert.match(ui, /DELETE: 'delete',\n\s*DELETE_IDENTITY: 'delete identity',\n\s*DELETE_IDENTITY_TITLE: 'Delete identity',\n\s*NO_UNDO: 'there is no undo',/);
-    assert.match(ui, /\['deleteIdentityBtn', UI_TEXT\.DELETE_IDENTITY_TITLE, UI_TEXT\.DELETE\],/);
+    assert.match(panel, /<div class="member-item identity-end">\n\s*<span id="deleteIdentityText" class="member-tag"><\/span>\n\s*<button type="button" id="deleteIdentityBtn" class="menu-opt burn-yes member-action"><\/button>/);
+    // no word in the markup, no tile, no icon, no caption
+    assert.doesNotMatch(panel, /delete identity|there is no undo|title=|data-icon|data-caption|icon-btn/);
+    assert.match(ui, /DELETE: 'delete',\n\s*DELETE_IDENTITY: 'delete identity',\n\s*NO_UNDO: 'there is no undo',/);
     assert.match(ui, /getElementById\('deleteIdentityText'\)\.textContent = UI_TEXT\.DELETE_IDENTITY \+ ' ' \+ UI_TEXT\.MARK\(UI_TEXT\.NO_UNDO\);/);
-    // burn and delete share one destructive tile rule; the pink block and the old control are gone
-    assert.match(html, /id="burnBtn" class="icon-btn burn-btn danger-tile"/);
-    assert.match(css, /\.icon-btn\.danger-tile:hover \.icon-tile,\n\.icon-btn\.danger-tile:focus-visible \.icon-tile \{[^}]*background: var\(--danger\);/);
-    assert.match(css, /\.danger-tile\[data-caption\]::after \{\n\s*color: var\(--danger\);/);
-    assert.doesNotMatch(css + html, /identity-delete/);
-    assert.match(css, /\.member-item\.identity-end \{[^}]*border-bottom: none;/);
+    assert.match(ui, /getElementById\('deleteIdentityBtn'\)\.textContent = UI_TEXT\.DELETE;/);
+    assert.doesNotMatch(ui, /'deleteIdentityBtn', UI_TEXT/);
+    // the one red word button: the burn confirmation's, filled on hover and on keyboard focus
+    assert.match(html, /<button id="burnYesBtn" class="menu-opt burn-yes">/);
+    assert.match(css, /\.menu-opt\.burn-yes:hover,\n\.menu-opt\.burn-yes:focus-visible \{\n\s*background: var\(--danger\);/);
+    assert.doesNotMatch(css + html, /identity-delete|data-icon="erase"/);
+    // as much room above the row as below it, and as the aura line keeps below itself
+    assert.match(css, /\.identity-aura \{[^}]*margin-bottom: var\(--identity-gap\);/);
+    assert.match(css, /\.member-item\.identity-end \{[^}]*margin-top: var\(--identity-gap\);\n\s*padding: var\(--identity-gap\) 0;[^}]*border-bottom: none;/);
 });

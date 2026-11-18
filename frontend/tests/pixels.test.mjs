@@ -16,7 +16,7 @@ const source = read('../js/pixels.js');
 const Pixels = load({}, ['../js/pixels.js']).get('Pixels');
 const UI_TEXT = vm.runInNewContext('(' + ui.match(/const UI_TEXT = (Object\.freeze\(\{[\s\S]*?\n\}\));/)[1] + ')');
 
-const SET = ['bell-on', 'bell-off', 'logout', 'members', 'code', 'burn', 'back', 'send', 'attach', 'copy', 'close', 'chevron', 'verify', 'role', 'clear', 'erase'];
+const SET = ['bell-on', 'bell-off', 'logout', 'members', 'code', 'burn', 'back', 'send', 'attach', 'copy', 'close', 'chevron', 'verify', 'role', 'clear'];
 
 test('the table: every icon of the set, three frames, each 10x10 of only the two symbols', () => {
     assert.deepEqual(Object.keys(Pixels.ICONS).sort(), [...SET].sort());
@@ -177,16 +177,16 @@ test('a caption never covers a header rule: both header rows keep the caption\'s
     }
 });
 
-test('erase: the aura\'s 5x5 block solid at rest, its pixels (two icon pixels each) falling away in the two hover frames', () => {
-    const [rest, one, two] = Pixels.ICONS.erase;
-    rest.forEach(row => assert.equal(row, '#'.repeat(Pixels.ICON_GRID)));
-    const count = (rows) => rows.join('').split(Pixels.ON).length - 1;
-    assert.ok(count(rest) > count(one) && count(one) > count(two));
-    // drawn in aura pixels: every 2x2 block is all on or all off
-    for (const rows of [one, two]) {
-        for (let y = 0; y < 10; y += 2) for (let x = 0; x < 10; x += 2) {
-            const block = rows[y][x] + rows[y][x + 1] + rows[y + 1][x] + rows[y + 1][x + 1];
-            assert.ok(block === '####' || block === '....', `${y},${x}`);
-        }
+// A tile reads at rest only when its icon is a figure: not a filled square, not a speck
+const FILL_MIN = 0.1;
+const FILL_MAX = 0.7;
+
+test('every icon at rest fills between 10 % and 70 % of its 10x10 area', () => {
+    const area = Pixels.ICON_GRID * Pixels.ICON_GRID;
+    const ratios = Object.fromEntries(Object.entries(Pixels.ICONS).map(([name, frames]) =>
+        [name, (frames[0].join('').split(Pixels.ON).length - 1) / area]));
+    console.log('icon fill at rest:', Object.entries(ratios).map(([name, ratio]) => `${name} ${Math.round(ratio * 100)}%`).join(', '));
+    for (const [name, ratio] of Object.entries(ratios)) {
+        assert.ok(ratio >= FILL_MIN && ratio <= FILL_MAX, `${name}: ${ratio}`);
     }
 });

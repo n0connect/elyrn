@@ -87,10 +87,9 @@ const UI_TEXT = Object.freeze({
     BURN_PAIR_TITLE: 'Burn conversation',
     BURN_ROOM_TITLE: 'Burn room for everyone',
     LEAVE_ROOM_TITLE: 'Leave room',
-    // deleting the identity: the identity panel's last row (the tile opens the delete panel)
+    // deleting the identity: the identity panel's last row (its button opens the delete panel)
     DELETE: 'delete',
     DELETE_IDENTITY: 'delete identity',
-    DELETE_IDENTITY_TITLE: 'Delete identity',
     NO_UNDO: 'there is no undo',
     BURN_PAIR_QUESTION: 'burn for both sides? this cannot be undone.',
     BURN_ROOM_QUESTION: 'burn this room for everyone? this cannot be undone.',
@@ -156,7 +155,6 @@ const ICON_BUTTONS = Object.freeze([
     ['roomCodeBtn', UI_TEXT.ROOM_CODE_TITLE, UI_TEXT.ROOM_CODE],
     ['verifyBtn', UI_TEXT.VERIFY_TITLE, UI_TEXT.VERIFY],
     ['burnBtn', UI_TEXT.BURN_PAIR_TITLE, UI_TEXT.BURN],
-    ['deleteIdentityBtn', UI_TEXT.DELETE_IDENTITY_TITLE, UI_TEXT.DELETE],
     ['copyBtn', UI_TEXT.COPY, UI_TEXT.COPY],
     ['copyRobotBtn', UI_TEXT.COPY, UI_TEXT.COPY],
     ['copyInviteBtn', UI_TEXT.COPY, UI_TEXT.COPY],
@@ -202,8 +200,10 @@ function boxCell(icon, name, caption) {
 
 Pixels.install(document);
 ICON_BUTTONS.forEach(([id, name, caption]) => nameIconButton(document.getElementById(id), name, caption));
-// The identity panel's delete row says what its tile does, as a member row's marks do
+// The identity panel's delete row: what it does at the left, as a member row's marks say it, and
+// the confirmation bar's red word button at the right
 document.getElementById('deleteIdentityText').textContent = UI_TEXT.DELETE_IDENTITY + ' ' + UI_TEXT.MARK(UI_TEXT.NO_UNDO);
+document.getElementById('deleteIdentityBtn').textContent = UI_TEXT.DELETE;
 
 // The start view is the one view shown from the start (isShown reads this)
 document.getElementById(START_VIEW_ID).style.display = 'block';
