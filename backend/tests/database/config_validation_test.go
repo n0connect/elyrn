@@ -260,6 +260,51 @@ func TestValidateStartupConfig_ProductionFloors(t *testing.T) {
 	}
 }
 
+// An https:// or .onion origin is a public instance: outside production its session cookie
+// would lack Secure and the __Host- prefix and no production check would run, so startup
+// refuses with E_CONFIG_INVALID naming APP_ENV (never the origin). Loopback http origins stay
+// fine in development and test, and production accepts the public origins.
+func TestValidateStartupConfig_PublicOriginNeedsProduction(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+	public := []string{"https://chat.example.org", "http://localhost,https://chat.example.org:8443",
+		"http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv.onion", "http://ABCDEFGHIJKLMNOP.ONION",
+		"http://abcdefghijklmnop.onion.", "https://[2001:db8::1]"}
+	for _, mode := range []string{"development", "test", "Development"} {
+		for _, origins := range public {
+			t.Run(mode+" "+origins, func(t *testing.T) {
+				t.Setenv("APP_ENV", mode)
+				t.Setenv("ALLOWED_ORIGINS", origins)
+				err := validate(t)
+				var failure *opcode.Failure
+				if !errors.As(err, &failure) || failure.Code != opcode.ConfigInvalid || failure.Variable != config.EnvAppEnv {
+					t.Fatalf("APP_ENV=%s with ALLOWED_ORIGINS=%s: want E_CONFIG_INVALID naming APP_ENV, got %v", mode, origins, err)
+				}
+				if line := failure.Error(); strings.Contains(line, "example.org") || strings.Contains(strings.ToLower(line), "abcdefghijklmnop") {
+					t.Fatalf("the refusal echoes an origin: %q", line)
+				}
+			})
+		}
+		for _, local := range []string{"http://localhost", "http://localhost:3000,http://127.0.0.1", "http://[::1]:8080", "http://chat.example.org"} {
+			t.Setenv("APP_ENV", mode)
+			t.Setenv("ALLOWED_ORIGINS", local)
+			if err := validate(t); err != nil {
+				t.Errorf("APP_ENV=%s refused ALLOWED_ORIGINS=%s: %v", mode, local, err)
+			}
+		}
+	}
+
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DB_SSL_MODE", "verify-full")
+	t.Setenv("DB_PASSWORD", testutil.NewAuthKey(t))
+	for _, origins := range public {
+		t.Setenv("ALLOWED_ORIGINS", origins)
+		if err := validate(t); err != nil {
+			t.Errorf("production refused ALLOWED_ORIGINS=%s: %v", origins, err)
+		}
+	}
+}
+
 // Credentials can contain any character without changing the connection parameters
 // (a password like "x sslmode=disable" must stay a password).
 func TestConnectionURL_EscapesCredentials(t *testing.T) {

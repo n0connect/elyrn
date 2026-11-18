@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -33,6 +34,12 @@ type bounded[T int | int64] struct {
 // invalid is the E_CONFIG_INVALID failure for variable with its rule.
 func invalid(variable, rule string) error {
 	return opcode.Fail(opcode.ConfigInvalid, variable, rule)
+}
+
+// invalidOrigins is the E_CONFIG_INVALID failure for a malformed ALLOWED_ORIGINS (the entry by
+// position only).
+func invalidOrigins(err error) error {
+	return invalid(config.EnvAllowedOrigins, "must list exact origins scheme://host[:port], comma-separated, no wildcard or path ("+err.Error()+")")
 }
 
 func checkBounds[T int | int64](settings []bounded[T]) error {
@@ -85,6 +92,7 @@ func ValidateStartupConfig() error {
 		func() error { return checkSecrets(minJWTLen) },
 		checkSizesFit,
 		checkConnections,
+		checkPublicInstanceMode,
 	} {
 		if err := check(); err != nil {
 			return err
@@ -215,13 +223,53 @@ func checkConnections() error {
 		return err
 	}
 	if _, err := utils.ParseOrigins(config.GetAllowedOrigins()); err != nil {
-		return invalid(config.EnvAllowedOrigins, "must list exact origins scheme://host[:port], comma-separated, no wildcard or path ("+err.Error()+")")
+		return invalidOrigins(err)
 	}
 	if _, _, err := utils.ParseProxyList(config.GetTrustedProxies()); err != nil {
 		return invalid(config.EnvTrustedProxies, fmt.Sprintf("must list IP addresses or CIDR ranges of at least /%d (IPv4) or /%d (IPv6), comma-separated (%s)",
 			utils.MinProxyPrefixIPv4, utils.MinProxyPrefixIPv6, err.Error()))
 	}
 	return nil
+}
+
+const (
+	// publicOriginScheme: a browser reaches this origin over TLS, so the instance is served to a
+	// network (WebCrypto runs over plain http only on localhost)
+	publicOriginScheme = "https"
+	// onionHostSuffix: the origin is a Tor onion service, reachable from anywhere
+	onionHostSuffix = ".onion"
+)
+
+// checkPublicInstanceMode refuses a public instance outside production: an ALLOWED_ORIGINS entry
+// that is https:// or a .onion host means browsers reach this instance from a network, and
+// development or test mode would issue the session cookie without Secure and without the
+// __Host- prefix, send no HSTS and skip every production check. Runs after checkConnections,
+// so ALLOWED_ORIGINS is known to parse.
+func checkPublicInstanceMode() error {
+	if config.IsProductionMode() {
+		return nil
+	}
+	origins, err := utils.ParseOrigins(config.GetAllowedOrigins())
+	if err != nil {
+		return invalidOrigins(err)
+	}
+	for origin := range origins {
+		if isPublicOrigin(origin) {
+			return invalid(config.EnvAppEnv, "must be production when ALLOWED_ORIGINS names an https:// or .onion origin (a public instance): set APP_ENV=production in .env, or list only http://localhost origins for development")
+		}
+	}
+	return nil
+}
+
+// isPublicOrigin: an https:// origin, or any origin whose host is a .onion name (any case, with
+// or without the root dot).
+func isPublicOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	return strings.EqualFold(u.Scheme, publicOriginScheme) || strings.HasSuffix(host, onionHostSuffix)
 }
 
 // checkRootCert: when set, PGSSLROOTCERT must be a readable file holding at least one PEM

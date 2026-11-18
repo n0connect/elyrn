@@ -43,7 +43,7 @@ make setup        # .env with fresh secrets (mode 0600) and the database TLS cer
 
 | Variable | Value for a public instance |
 |---|---|
-| `APP_ENV` | `production`: the `__Host-Session` cookie with `Secure`, and the production startup checks ([Production Mode](configuration-and-tuning.md#production-mode)). Required by `make onion` |
+| `APP_ENV` | `production`: the `__Host-Session` cookie with `Secure`, and the production startup checks ([Production Mode](configuration-and-tuning.md#production-mode)). Required by `make onion`, and by `make up` and the backend's startup as soon as `ALLOWED_ORIGINS` names an `https://` or `.onion` origin |
 | `ALLOWED_ORIGINS` | the exact origin users open, `https://` and the host name, no path and no trailing slash. For an onion-only instance, the `http://<address>.onion` origin once `make onion-address` has printed it |
 | `HTTP_PORT` | the loopback port nginx is published on (default 80). Set another one (for example `8088`) when your reverse proxy itself listens on port 80 of the host |
 | `LOG_LEVEL` | `info` (the default); `debug` is refused in production |

@@ -12,7 +12,9 @@ outlast its shutdown budget in backend/cmd/server/main.go. EDGE_TRUSTED_PROXIES:
 believes a client address or protocol a request names only from a listed proxy on the clearnet
 listener, and nginx-edge-proxies.sh is run (into a temporary directory) to prove that the
 configured value renders, that the default renders no entry and that malformed lists are
-refused. Exit 0 when every control holds, 1
+refused. A public instance never runs in development: make check-public-mode is run on
+throwaway env files (APP_ENV and ALLOWED_ORIGINS only) to prove that make up stops on an
+https:// or .onion origin outside production. Exit 0 when every control holds, 1
 with one line per failure otherwise, 2 on unusable input.
 """
 
@@ -198,6 +200,30 @@ HSTS_MALFORMED = (
 )
 # Go sources that answer requests; a second HSTS source there would disagree with nginx's
 BACKEND_SOURCES = ROOT / "backend/internal"
+# A public instance runs in production only: make onion always runs check-production, make up
+# runs it through check-public-mode when ALLOWED_ORIGINS names an https:// or .onion origin, and
+# the backend refuses the same at startup (validate.go)
+MAKEFILE = ROOT / "Makefile"
+VALIDATE_GO = ROOT / "backend/internal/database/validate.go"
+PUBLIC_MODE_TARGET = "check-public-mode"
+PRODUCTION_TARGET = "check-production"
+PUBLIC_MODE_STARTUP_CHECK = "checkPublicInstanceMode,"
+# The Makefile reads only these two from the env file (the shell's values would win: none are passed)
+PUBLIC_MODE_SETTINGS = ("APP_ENV", "ALLOWED_ORIGINS")
+PUBLIC_MODE_TIMEOUT_SEC = 30
+# (APP_ENV, ALLOWED_ORIGINS as written in .env, whether make up may go on)
+PUBLIC_MODE_CASES = (
+    ("development", "http://localhost,http://127.0.0.1", True),
+    ("development", "http://chat.example.org", True),
+    ("development", "https://chat.example.org", False),
+    ("development", "http://localhost, https://chat.example.org:8443", False),
+    ("development", "http://abcdefghijklmnop.onion", False),
+    ("Development", '"HTTP://ABCDEFGHIJKLMNOP.ONION:80"', False),
+    ("test", "https://chat.example.org", False),
+    ("", "http://abcdefghijklmnop.onion.", False),
+    ("production", "https://chat.example.org", True),
+    ("prod", "http://abcdefghijklmnop.onion", True),
+)
 # Zero telemetry: at error level nginx names the client address in upstream and limit_req lines
 NGINX_LOG_LINES = ("access_log off;", "error_log /dev/stderr crit;")
 # Shutdown budget constants in main.go, e.g. "shutdownGrace   = 10 * time.Second"
@@ -603,6 +629,48 @@ def check_hsts(services):
             fail("nginx", f"{HSTS_RENDERER.name} accepts the malformed {settings}")
 
 
+def make_rule(makefile, target):
+    """The prerequisites of one Makefile rule (None when the rule is missing)."""
+    found = re.search(r"^" + re.escape(target) + r":([^=\n]*)$", makefile, re.MULTILINE)
+    return found.group(1).split() if found else None
+
+
+def public_mode_allows(app_env, origins):
+    """Runs make check-public-mode on an env file holding only these two settings; True when it
+    lets make up go on, None when make cannot be run."""
+    with tempfile.TemporaryDirectory() as out_dir:
+        env_file = Path(out_dir, "env")
+        env_file.write_text(f"APP_ENV={app_env}\nALLOWED_ORIGINS={origins}\n", encoding="utf-8")
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        try:
+            code = subprocess.run(["make", "-s", "--no-print-directory", "-C", str(ROOT), PUBLIC_MODE_TARGET,
+                                   f"ENV_FILE={env_file}", "DOCKER_COMPOSE=none"], env=env, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, timeout=PUBLIC_MODE_TIMEOUT_SEC, check=False).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return code == 0
+
+
+def check_public_mode():
+    """A public instance (an https:// or .onion origin, or the onion service) never starts in
+    development: make onion and make up refuse it, and so does the backend at startup."""
+    makefile = read(MAKEFILE)
+    if PRODUCTION_TARGET not in (make_rule(makefile, "onion") or []):
+        fail("make", f"make onion must depend on {PRODUCTION_TARGET}")
+    if PUBLIC_MODE_TARGET not in (make_rule(makefile, "up") or []):
+        fail("make", f"make up must depend on {PUBLIC_MODE_TARGET}")
+    if PUBLIC_MODE_STARTUP_CHECK not in read(VALIDATE_GO).split():
+        fail("backend", "ValidateStartupConfig must run checkPublicInstanceMode (development with a public origin)")
+    for app_env, origins, allowed in PUBLIC_MODE_CASES:
+        got = public_mode_allows(app_env, origins)
+        if got is None:
+            fail("make", f"make {PUBLIC_MODE_TARGET} cannot be run")
+            return
+        if got != allowed:
+            fail("make", f"make up with APP_ENV={app_env or '(unset)'} and ALLOWED_ORIGINS={origins} must "
+                 + ("start" if allowed else "stop at check-production"))
+
+
 def check_backend_memory(svc):
     bound = FILES_BOUND.search(read(FILES_GO))
     if not bound:
@@ -687,6 +755,7 @@ def main():
     check_nginx()
     check_edge_proxies(services)
     check_hsts(services)
+    check_public_mode()
     if failures:
         for line in failures:
             print(f"[FAIL] {layout}: {line}")
