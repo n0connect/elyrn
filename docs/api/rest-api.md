@@ -441,6 +441,7 @@ Advances the caller's read marker. Cannot be moved backwards or past `last_seq`.
 }
 ```
 - **Response:** `204 No Content`
+- **Errors:** `400` a `seq` past `last_seq`; `404` the caller is not a member, the conversation does not exist, or the room expired (as on every other route, also before retention removed it).
 
 ---
 

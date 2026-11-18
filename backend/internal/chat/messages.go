@@ -185,10 +185,14 @@ func messageBlob(room *models.Room, ciphertext string) (*utils.RoomBlob, error) 
 }
 
 // MarkRead advances the caller's read marker (never backwards, never past the end). seq is at
-// least FirstSeq: the input contract refuses anything lower before a handler runs.
+// least FirstSeq: the input contract refuses anything lower before a handler runs. A room past
+// its expiry answers ErrNotFound (liveRoom), as every other route does before it is purged.
 func (s *Service) MarkRead(me *Member, conversationID uuid.UUID, seq int64) error {
 	member, err := s.requireMembership(s.chats, me, conversationID)
 	if err != nil {
+		return err
+	}
+	if _, err := s.liveRoom(s.chats, conversationID); err != nil {
 		return err
 	}
 	lastSeqs, err := s.chats.LastSeqs([]uuid.UUID{conversationID})

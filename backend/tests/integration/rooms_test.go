@@ -576,6 +576,13 @@ func TestRooms_ExpiredRoomStopsAnsweringAndIsPurged(t *testing.T) {
 	expectStatus(t, bob.do("GET", b.path("/members"), nil), http.StatusNotFound, "roster of an expired room")
 	id := newMessageID()
 	expectStatus(t, b.post(id, b.sealTo(t, []string{a.member.Card, b.member.Card}, id, "late", 1)), http.StatusNotFound, "send to an expired room")
+	// The read marker too: a member's mark on a message it could still mark before the expiry
+	expectAnswer(t, bob.do("POST", b.path("/read"), models.MarkReadRequest{Seq: 1}), apperr.NotFound, "mark read in an expired room")
+	var readSeq int64
+	database.DB.Model(&models.ConversationMember{}).Where("conversation_id = ?", a.room.ID).Select("max(read_seq)").Scan(&readSeq)
+	if readSeq != 0 {
+		t.Fatalf("an expired room's read marker moved to %d", readSeq)
+	}
 	expectStatus(t, carol.do("POST", "/api/v2/rooms/join", sideOf(t, carol, a.code).joinRequest(t)), http.StatusNotFound, "join an expired room")
 	if findConversation(listOf(t, bob), a.room.ID.String()) != nil {
 		t.Fatal("an expired room is still listed")
