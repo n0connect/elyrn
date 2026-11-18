@@ -35,11 +35,6 @@ const Chat = (() => {
     const drafts = new Map();         // id -> composer text typed for it and not sent (memory only, never stored)
     const unverified = new Map();     // id -> { id, aura, owner }: listed rooms that failed verification
     const reportedRooms = new Set();  // ids of rooms whose failed verification was reported (once each)
-    // id -> the last counter record of a conversation dropped from this session but not burned by
-    // the user (a listing omitted it, a 404): it judges again if the server lists it again, also
-    // when storage failed (counters.js KEEPING RECORDS)
-    const parked = new Map();
-    let evictionWarned = false;       // W_COUNTER_RECORDS_EVICTED is logged once per page load
     // Raised by every local change to the set of conversations (a join, a burn, a leave, the end
     // of the session): a list fetched before it is stale and is never applied (refreshNow)
     let listGeneration = 0;
@@ -164,7 +159,7 @@ const Chat = (() => {
         unsent = null;
         unverified.clear();
         reportedRooms.clear();
-        parked.clear();
+        CounterRecords.clearParked();
         drafts.clear();
         me = null;
         clearChildren(document.getElementById('conversationList'));
@@ -211,7 +206,7 @@ const Chat = (() => {
         if (!listed) return;
         dropUnlisted(listed.seen);
         order = listed.order;
-        if (!listLoaded) pruneMarks(listed.seen);
+        if (!listLoaded) CounterRecords.pruneMarks(listed.seen);
         listLoaded = true;
         renderList();
         const active = conversations.get(activeId);
@@ -249,7 +244,7 @@ const Chat = (() => {
             // Joining again (from another device) re-seals this account's vault: verify the new
             // one from scratch instead of taking the change for tampering
             if (existing && isRoom && existing.room && item.room.vault !== existing.room.vault) {
-                parked.set(item.id, existing.mark);
+                CounterRecords.park(item.id, existing.mark);
                 conversations.delete(item.id);
                 existing = null;
                 reopen = reopen || activeId === item.id;
@@ -312,7 +307,7 @@ const Chat = (() => {
             ledger: Counters.ledger(Counters.EMPTY),  // senders' counters in the loaded sequence
             // the last record saved (kept in memory when storage fails), or the one kept when this
             // conversation was dropped from the session earlier (parked)
-            mark: parked.get(item.id) || Counters.EMPTY,
+            mark: CounterRecords.parkedMark(item.id) || Counters.EMPTY,
             markLoad: Promise.resolve(Counters.EMPTY),  // the record read when last opened
             lastSeq: item.last_seq,
             readSeq: item.read_seq,
@@ -368,7 +363,7 @@ const Chat = (() => {
             if (result.status === 204 || result.status === 404) {
                 listGeneration++;
                 unverified.delete(id);
-                if (result.status === 204) await forgetRecord(id);
+                if (result.status === 204) await CounterRecords.forgetRecord(id);
                 renderList();
                 showSuccess(held.owner ? Errors.NOTICE.BURNED : Errors.NOTICE.ROOM_LEFT);
                 scheduleRefresh();
@@ -382,7 +377,7 @@ const Chat = (() => {
     // parked, never forgotten (only forgetMark forgets it)
     function forget(id) {
         const conv = conversations.get(id);
-        if (conv) parked.set(id, conv.mark);
+        if (conv) CounterRecords.park(id, conv.mark);
         conversations.delete(id);
         drafts.delete(id);
     }
@@ -408,7 +403,7 @@ const Chat = (() => {
         // myMaxN is kept: this device's counter only ever grows
         conv.loaded = false;
         // Read now, before any await, so every sync and send of this open waits for the same record
-        conv.markLoad = loadMark(conv);
+        conv.markLoad = CounterRecords.loadMark(conv);
         if (conv.room) {
             renderRoomHeader(conv.room);
             setRoomComposerHint(conv.room.expiresAt, me.ttlDays);
@@ -522,8 +517,9 @@ const Chat = (() => {
             conv.firstSeq = page.first;
             conv.earlier = mayHaveEarlier(result.data.messages.length, page.first);
         }
-        // Once per sync, never per message; kept even if the user moved on meanwhile
-        await saveMark(conv);
+        // Once per sync, never per message; kept even if the user moved on meanwhile, never for a
+        // conversation dropped from this session
+        if (me && conversations.get(conv.id) === conv) await CounterRecords.saveMark(conv);
         if (activeId !== conv.id) return true;
 
         appendMessages(page.fresh);
@@ -682,87 +678,6 @@ const Chat = (() => {
         return false;
     }
 
-    // ---------- the counter record (Keystore) ----------
-
-    // What this device remembers of a conversation; the in-memory copy stands in when storage fails
-    async function loadMark(conv) {
-        return Counters.merge(Counters.parse(await Keystore.loadCounters(conv.id)), conv.mark);
-    }
-
-    // Records only grow (each field is a high-water mark), so a save merges with the record as
-    // stored now, read under the counter lock every tab shares: another tab's higher record is
-    // never overwritten, and a save made before the first sync of a reload never lowers it
-    async function saveMark(conv) {
-        if (!me || conversations.get(conv.id) !== conv) return;
-        const raised = Counters.merge(await conv.markLoad, Counters.snapshot(conv.ledger, conv.maxSeq, conv.myMaxN));
-        await Keystore.withCounterLock(conv.id, async () => {
-            const stored = await storedMark(conv);
-            await writeMark(conv, stored, Counters.merge(Counters.merge(stored, conv.mark), raised));
-        });
-    }
-
-    // The record as stored right now (Counters.EMPTY when there is none or storage failed)
-    async function storedMark(conv) {
-        return Counters.parse(await Keystore.loadCounters(conv.id));
-    }
-
-    // Keeps record as this tab's last one (it stands in when storage fails) and stores it unless
-    // the stored one already says the same
-    async function writeMark(conv, stored, record) {
-        conv.mark = record;
-        if (!Counters.same(record, stored)) {
-            await Keystore.saveCounters(conv.id, record, conv.room ? conv.room.expiresAt : 0);
-        }
-    }
-
-    // Takes this account's next counter in a conversation, under the counter lock every tab
-    // shares: the stored record is read fresh inside it and raised to the new counter before the
-    // message is posted (write-ahead), so a second tab, hidden or behind on its syncs, never takes
-    // the same one. A counter given back by a send the server refused (releaseCounter) is taken
-    // again, as long as no tab has gone past it since.
-    async function allocateCounter(conv) {
-        const opened = await conv.markLoad;
-        return Keystore.withCounterLock(conv.id, async () => {
-            const stored = await storedMark(conv);
-            const known = Counters.merge(Counters.merge(stored, conv.mark), opened);
-            const top = Math.max(conv.myMaxN, known.mine);
-            const counter = conv.spare > 0 && conv.spare === top ? top : top + 1;
-            conv.spare = 0;
-            conv.myMaxN = counter;
-            await writeMark(conv, stored, Counters.merge(known, Counters.parse({ seq: 0, mine: counter, senders: [] })));
-            return counter;
-        });
-    }
-
-    // A send the server settled as not stored gives its counter back for the next one, unless an
-    // earlier attempt of it went unanswered (the server may hold that one) or a later one was taken
-    function releaseCounter(conv, attempt) {
-        if (!attempt.lost && conv.myMaxN === attempt.counter) {
-            conv.spare = attempt.counter;
-        }
-    }
-
-    // The user's own burn or leave, confirmed by the server (204): the only time a conversation's
-    // counter record is forgotten before its room expires (counters.js KEEPING RECORDS). Queued
-    // behind the conversation's syncs so a save in flight cannot land after the removal.
-    function forgetMark(conv) {
-        conv.syncChain = conv.syncChain.then(() => forgetRecord(conv.id));
-    }
-
-    function forgetRecord(id) {
-        parked.delete(id);
-        return Keystore.forgetCounters(id);
-    }
-
-    // Once per session, on its first listing: drops the records of rooms expired long ago and,
-    // past the bound, the least recently used (the conversations listed now last)
-    async function pruneMarks(listedIds) {
-        if (await Keystore.pruneCounters(Date.now(), listedIds) && !evictionWarned) {
-            evictionWarned = true;
-            Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
-        }
-    }
-
     // Nothing is read while nobody can see it: a hidden page shows what arrived and marks it read
     // only once it is shown again (onVisible resyncs, and that sync lands here)
     async function markRead(conv) {
@@ -867,7 +782,7 @@ const Chat = (() => {
     // A new send of text (and file, if any): a fresh id and the next counter, sealed on its first post
     async function freshAttempt(conv, text, file) {
         const attempt = { convId: conv.id, text: text, file: file || null, id: ElyrnCrypto.newMessageId(), counter: 0, ciphertext: null, lost: false };
-        attempt.counter = await allocateCounter(conv);
+        attempt.counter = await CounterRecords.allocateCounter(conv);
         return attempt;
     }
 
@@ -890,7 +805,7 @@ const Chat = (() => {
             }
         } finally {
             // Nothing posted, or refused before any attempt could have been stored
-            if (!result || settledUnstored(result)) releaseCounter(conv, attempt);
+            if (!result || settledUnstored(result)) CounterRecords.releaseCounter(conv, attempt);
         }
         return { attempt, result, rosterLost };
     }
@@ -1368,7 +1283,7 @@ const Chat = (() => {
             listGeneration++;
             forget(id);
             // Only a burn or leave the server confirmed forgets the record; a 404 is its word only
-            if (conv && result.status === 204) forgetMark(conv);
+            if (conv && result.status === 204) CounterRecords.forgetMark(conv);
             // Nothing typed for a burned conversation is kept
             setComposer('');
             backToList();

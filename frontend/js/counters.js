@@ -4,7 +4,7 @@
 // Every message carries its sender's counter inside the authenticated payload, so the server
 // can withhold, repeat or reorder messages but never change a counter. This module decides,
 // for pairs and rooms alike, what a counter says about the message that carries it. It is pure:
-// no storage, no DOM, no network (chat.js persists the record through Keystore).
+// no storage, no DOM, no network (counter-records.js persists the record through Keystore).
 //
 // THE RULE. A sender's device sends one message at a time and numbers them 1, 2, 3…, and the
 // server numbers stored messages with an increasing seq, so for one sender the counter grows
@@ -37,7 +37,7 @@
 // as history, under its original authenticated time. A server that rolls its seqs back below
 // the remembered one makes new messages look like history. Two devices of one account sending
 // at once can spend the same counter; the second is then flagged as a replay. Two tabs of one
-// browser cannot: chat.js takes each counter under a lock they share, from the record as stored
+// browser cannot: counter-records.js takes each counter under a lock they share, from the record as stored
 // at that moment, and stores the raised record before the message is posted.
 //
 // KEEPING RECORDS (zero trust; the agent's rule, backend/internal/agent/state.go). The server

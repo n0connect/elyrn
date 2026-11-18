@@ -328,7 +328,7 @@ const Keystore = (() => {
         }
     }
 
-    // Without storage the record lives in memory only (chat.js), as before it was persisted.
+    // Without storage the record lives in memory only (counter-records.js), as before it was persisted.
     // Resolves to the stored value (undefined when none), or null when storage failed.
     async function countersRun(storeNames, mode, action) {
         try {
@@ -345,7 +345,7 @@ const Keystore = (() => {
     }
 
     // Runs action holding one conversation's counter lock, shared by every tab of this browser,
-    // so two tabs never read, raise and write one counter record at once (chat.js). Without the
+    // so two tabs never read, raise and write one counter record at once (counter-records.js). Without the
     // Web Locks API action runs unlocked, still reading fresh and writing ahead; logged once.
     function withCounterLock(conversationId, action) {
         if (navigator.locks && typeof navigator.locks.request === 'function') {
