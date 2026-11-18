@@ -175,3 +175,36 @@ func TestSenderBound_AFullUnrecordedSetFailsClosed(t *testing.T) {
 		t.Fatal("the overflow mark was cleared once the set had room: the dropped sender shows as recorded")
 	}
 }
+
+// An earlier page judged on its own ledger keeps the bound's rule too: a made-up sender the page's
+// run did not track (the page holds more made-up senders than the bound) has its message marked
+// unrecorded, a roster member's never is, and the record is left as it was. Before, a history
+// ledger reported nothing, so that message showed as recorded.
+func TestSenderBound_AHistoryPageReportsItsUntrackedSenders(t *testing.T) {
+	fx := newRoomFixture(t)
+	st := seatedState(fx)
+	if err := st.verifyMembers(fx.honestRows()); err != nil {
+		t.Fatalf("verifyMembers: %v", err)
+	}
+	page := make([]models.MessageDTO, 0, maxTrackedSenders+2)
+	for range maxTrackedSenders + 1 {
+		from := fx.madeUpMember(t)
+		page = append(page, fx.sealFrom(t, from, []string{fx.members[0].Card, from.Card}, int64(len(page)+1), 1, "made up"))
+	}
+	page = append(page, fx.sealFrom(t, fx.members[1], []string{fx.members[0].Card, fx.members[1].Card}, int64(len(page)+1), 1, "member"))
+	recordBefore := len(st.counters.Senders)
+	got := st.openHistory(page, int64(len(page)+1))
+	result := newReadResult(st, got.messages, got.gaps, got.replays, got.last)
+	if len(result.Messages) != len(page) {
+		t.Fatalf("%d messages of %d", len(result.Messages), len(page))
+	}
+	if late := result.Messages[maxTrackedSenders]; !late.Unrecorded {
+		t.Fatal("the made-up sender the page's run did not track is not marked unrecorded")
+	}
+	if member := result.Messages[len(page)-1]; member.Unrecorded {
+		t.Fatal("a roster member's message on the history page is marked unrecorded")
+	}
+	if len(st.counters.Senders) != recordBefore {
+		t.Fatal("a history page changed the record")
+	}
+}

@@ -140,7 +140,8 @@ func (l *ledger) judge(sender string, counter, seq int64) verdict {
 // THE SENDER BOUND: a kept sender is always tracked (so the run exceeds the bound by at most the
 // kept set), and a sender that is not kept and arrives at the bound is not: rule 1 no longer
 // applies to it, so snapshot reports it with the senders the record refused (its messages say
-// unrecorded). A flood of made-up senders can thus never keep a roster member untracked.
+// unrecorded), for a history ledger as for a forward one. A flood of made-up senders can thus
+// never keep a roster member untracked.
 func (l *ledger) admit(sender string, counter int64) {
 	if _, known := l.run[sender]; !known {
 		if len(l.run) >= maxTrackedSenders && !l.kept(sender) {
@@ -155,20 +156,27 @@ func (l *ledger) admit(sender string, counter int64) {
 	l.run[sender] = counter
 }
 
+// untrackedSenders is the senders the run did not track (admit), first seen first, each once.
+func (l *ledger) untrackedSenders() []string {
+	return slices.Clone(l.untracked)
+}
+
 // snapshot is counters.js snapshot and bound: record raised by this sequence, processed up to
 // seq, new senders recorded in the order first admitted under THE SENDER BOUND (the ledger's kept
-// says which keys the bound never refuses nor displaces). A history ledger changes nothing. It
-// reports whether the record changed, and the refused senders, each once: those the run did not
-// track, then those the record did not take or gave up to a kept sender (displaced).
+// says which keys the bound never refuses nor displaces). It reports whether the record changed,
+// and the refused senders, each once: those the run did not track (untrackedSenders), then those
+// the record did not take or gave up to a kept sender (displaced). A history ledger changes
+// nothing and reports its untracked senders alone: a bound only makes the answer more
+// conservative, on an earlier page as on new messages.
 func (l *ledger) snapshot(record *counterRecord, seq int64) (bool, []string) {
 	if l.history() {
-		return false, nil
+		return false, l.untrackedSenders()
 	}
 	changed := false
 	if seq > record.Seq {
 		record.Seq, changed = seq, true
 	}
-	refused, listed := slices.Clone(l.untracked), maps.Clone(l.refusedIn)
+	refused, listed := l.untrackedSenders(), maps.Clone(l.refusedIn)
 	refuse := func(key string) {
 		if _, done := listed[key]; !done {
 			listed[key] = struct{}{}

@@ -80,6 +80,16 @@ func (st *roomState) historyWindow(before int64) pageWindow {
 	return pageWindow{before: before, ledger: newHistoryLedger(st.counters, st.ceilingAbove(before), st.keptSender)}
 }
 
+// openHistory opens a page below before on its own ledger (historyWindow); the record is left as
+// it was, but the senders the page's ledger did not track are noted unrecorded (settle), so their
+// messages in the result say so.
+func (st *roomState) openHistory(page []models.MessageDTO, before int64) *opened {
+	window := st.historyWindow(before)
+	got := st.openPage(page, window)
+	st.settle(window.ledger, got.last)
+	return got
+}
+
 // ceilingAbove is counters.js lowest for a page below before: each sender's lowest counter among
 // the messages this agent admitted (judged in order, not replays) at seq before or above. For one
 // sender the counter grows strictly with seq, so everything below before must stay under it.
@@ -356,7 +366,7 @@ func (a *Agent) ReadBefore(ctx context.Context, id uuid.UUID, before int64) (*Re
 		if err != nil {
 			return err
 		}
-		got := st.openPage(page, st.historyWindow(before))
+		got := st.openHistory(page, before)
 		result = newReadResult(st, got.messages, got.gaps, got.replays, got.last)
 		return nil
 	})

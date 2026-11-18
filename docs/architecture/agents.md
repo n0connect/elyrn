@@ -144,7 +144,7 @@ This is the design of record. Decisions are dated and final unless the owner rev
   made-up keys is recorded later; the direction `counters.js` `trim` takes). The agent's own entry
   and the list's are never displaced. The record keeps the order senders were first recorded in
   (`"order"` in `agent.counters.json`; a record written before it has none and is read in key
-  order). One loaded sequence (a read, or a counter sync) tracks its senders under the same keep
+  order). One loaded sequence (a read, a counter sync, or a history page, which never changes the record) tracks its senders under the same keep
   set: the agent itself and the current list are always tracked, so a flood of made-up senders
   early in a sequence never stops a member from being judged; a sender that is neither and
   arrives once 256 are tracked is not, and is reported like a refused one (`unrecorded: true`,

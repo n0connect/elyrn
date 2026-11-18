@@ -30,14 +30,7 @@ func (fx *roomFixture) lookalike(tb testing.TB, i int) *e2e.RoomMember {
 		tb.Fatalf("AuraOf: %v", err)
 	}
 	for try := 0; try < maxGrindTries; try++ {
-		root, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
-		if err != nil {
-			tb.Fatalf("RandomBytes: %v", err)
-		}
-		member, err := fx.keys.Member(root)
-		if err != nil {
-			tb.Fatalf("Member: %v", err)
-		}
+		member := fx.madeUpMember(tb)
 		aura, err := e2e.AuraOf(member.Public)
 		if err == nil && aura.Name == want.Name && aura.Code != want.Code {
 			return member
@@ -45,6 +38,21 @@ func (fx *roomFixture) lookalike(tb testing.TB, i int) *e2e.RoomMember {
 	}
 	tb.Fatal("no lookalike key found within the bound")
 	return nil
+}
+
+// madeUpMember is a member key of the fixture's room from a random root: one a member could send
+// under, of its own making.
+func (fx *roomFixture) madeUpMember(tb testing.TB) *e2e.RoomMember {
+	tb.Helper()
+	root, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
+	if err != nil {
+		tb.Fatalf("RandomBytes: %v", err)
+	}
+	member, err := fx.keys.Member(root)
+	if err != nil {
+		tb.Fatalf("Member: %v", err)
+	}
+	return member
 }
 
 // sealFrom seals text as from, wrapped for every card in roster (from's own card included).
