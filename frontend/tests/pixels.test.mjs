@@ -161,3 +161,18 @@ test('an aura glyph is data: no frame or inversion rule can reach it', () => {
         if (/background: var\(--fg\)/.test(body)) assert.doesNotMatch(selector, /aura-glyph/, selector.trim());
     }
 });
+
+test('a caption never covers a header rule: both header rows keep the caption\'s reach between their tiles and the rule', () => {
+    assert.match(css, /--caption-reach: calc\(var\(--caption-gap\) \+ var\(--caption-size\) \* var\(--caption-line\) \+ 1px\);/);
+    assert.match(css, /--header-pad: max\(var\(--row-gap\), calc\(var\(--caption-reach\) - \(var\(--touch-min\) - var\(--tile-box\)\) \/ 2\)\);/);
+    const caption = css.match(/\[data-caption\]::after \{[^}]*\}/)[0];
+    assert.match(caption, /top: calc\(100% \+ var\(--caption-gap\)\)/);
+    assert.match(caption, /font-size: var\(--caption-size\)/);
+    assert.match(caption, /line-height: var\(--caption-line\)/);
+    for (const selector of ['header', '.chat-header']) {
+        const rule = css.match(new RegExp(`^${selector.replace('.', '\\.')} \\{[^}]*\\}`, 'm'))[0];
+        assert.match(rule, /padding-bottom: var\(--header-pad\)/, selector);
+        assert.match(rule, /min-height: calc\(var\(--touch-min\) \+ var\(--header-pad\)\)/, selector);
+        assert.match(rule, /border-bottom: 1px solid var\(--border\)/, selector);
+    }
+});
