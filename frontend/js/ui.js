@@ -907,12 +907,12 @@ function disputedTag() {
     return tag;
 }
 
-// Tags (or untags) every message whose sender's key is in keys, with the tag makeTag() draws
-// (found again by its class tagClass)
-function markSenders(keys, tagClass, makeTag) {
+// Tags (or untags) every message whose sender's key isMarked(key) says, with the tag makeTag()
+// draws (found again by its class tagClass)
+function markSenders(isMarked, tagClass, makeTag) {
     document.querySelectorAll('#messageList .msg-sender').forEach(sender => {
         const tag = sender.querySelector('.' + tagClass);
-        const marked = keys.has(sender.dataset.sender);
+        const marked = isMarked(sender.dataset.sender);
         if (marked && !tag) {
             sender.appendChild(makeTag());
         } else if (!marked && tag) {
@@ -923,12 +923,12 @@ function markSenders(keys, tagClass, makeTag) {
 
 // keys: public keys whose name another key shares; tags (or untags) every message from them
 function markLookalikes(keys) {
-    markSenders(keys, 'lookalike-tag:not(.disputed-tag):not(.unrecorded-tag)', lookalikeTag);
+    markSenders(key => keys.has(key), 'lookalike-tag:not(.disputed-tag):not(.unrecorded-tag)', lookalikeTag);
 }
 
 // keys: public keys more than one seat claims; tags (or untags) every message from them
 function markDisputed(keys) {
-    markSenders(keys, 'disputed-tag', disputedTag);
+    markSenders(key => keys.has(key), 'disputed-tag', disputedTag);
 }
 
 // The tag on each message from a sender the full counter record did not take
@@ -938,9 +938,10 @@ function unrecordedTag() {
     return tag;
 }
 
-// keys: senders the room's counter record did not take; tags (or untags) every message from them
-function markUnrecorded(keys) {
-    markSenders(keys, 'unrecorded-tag', unrecordedTag);
+// isUnrecorded(key): whether the room's counter record did not take that sender
+// (CounterRecords.isUnrecorded); tags (or untags) every message from them
+function markUnrecorded(isUnrecorded) {
+    markSenders(isUnrecorded, 'unrecorded-tag', unrecordedTag);
 }
 
 // entries: verified roster (one entry per key); skipped: cards that failed to open (shown, never

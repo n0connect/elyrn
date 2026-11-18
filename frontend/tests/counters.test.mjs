@@ -338,6 +338,75 @@ test('counter-records.js bounds every record it writes and every record it reads
     assert.equal((source.match(/Keystore\.loadCounters\(/g) || []).length, 1);
     // What was not recorded is shown: the chat tags the senders and warns once
     const chat = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
-    assert.match(chat, /markUnrecorded\(conv\.unrecorded\)/);
+    assert.match(chat, /markUnrecorded\(sender => CounterRecords\.isUnrecorded\(conv, sender\)\)/);
+    assert.doesNotMatch(chat, /conv\.unrecorded\.has\(/, 'the chat asks CounterRecords.isUnrecorded, never the set');
     assert.match(chat, /Errors\.CODES\.W_COUNTER_RECORD_FULL/);
+    // writeMark keeps conv.unrecorded through the one bounded path
+    assert.match(write.slice(0, write.indexOf('\n    }\n')), /trackUnrecorded\(conv, kept\);/);
+    assert.equal((source.match(/conv\.unrecorded\.add\(/g) || []).length, 1);
+});
+
+// ---------- conv.unrecorded: bounded, never failing open (counter-records.js) ----------
+
+// counter-records.js in the same context: its bookkeeping is pure, Keystore is reached only by
+// the functions not called here
+const CounterRecords = vm.runInContext(readFileSync(new URL('../js/counter-records.js', import.meta.url), 'utf8') + '\n;CounterRecords', context);
+
+// A room conversation as chat.js builds it, with the fields the bookkeeping reads
+function roomConv(roster) {
+    return {
+        room: { member: { publicKey: OWN }, roster: roster.map(publicKey => ({ publicKey })) },
+        unrecorded: new Set(), unrecordedOverflow: false, mark: Counters.EMPTY
+    };
+}
+
+// Bounds next against conv's record and keeps conv as writeMark does
+function written(conv, next, keep) {
+    const kept = Counters.bound(conv.mark, next, keep);
+    CounterRecords.trackUnrecorded(conv, kept);
+    conv.mark = kept.record;
+    return kept;
+}
+
+test('conv.unrecorded holds at most MAX_UNRECORDED senders; past it every unknown sender is shown unrecorded, never a kept or recorded one', () => {
+    const conv = roomConv([BOB]);
+    conv.mark = Counters.parse({ seq: 1, mine: 1, senders: [[FORMER, 5], [OWN, 1],
+        ...Array.from({ length: Counters.MAX_SENDERS - 2 }, (_, i) => [mintedKey(i), 1])] });
+    const flood = Array.from({ length: Counters.MAX_UNRECORDED + 2 }, (_, i) => mintedKey(1000000 + i));
+    const kept = written(conv, Counters.merge(conv.mark, raisedBy(conv.mark, flood)), [OWN, BOB]);
+    assert.equal(kept.refused.length, flood.length);
+    assert.equal(conv.unrecorded.size, Counters.MAX_UNRECORDED, 'the set never passes its bound');
+    assert.equal(conv.unrecordedOverflow, true);
+    const overflowed = flood[flood.length - 1];
+    assert.equal(conv.unrecorded.has(overflowed), false);
+    assert.equal(CounterRecords.isUnrecorded(conv, overflowed), true, 'a sender the full set could not hold is still shown unrecorded');
+    assert.equal(CounterRecords.isUnrecorded(conv, mintedKey(9999999)), true, 'an unknown sender counts as unrecorded');
+    assert.equal(CounterRecords.isUnrecorded(conv, flood[0]), true);
+    assert.equal(CounterRecords.isUnrecorded(conv, OWN), false, 'this device is never shown unrecorded');
+    assert.equal(CounterRecords.isUnrecorded(conv, BOB), false, 'a roster member is never shown unrecorded');
+    assert.equal(CounterRecords.isUnrecorded(conv, FORMER), false, 'a recorded sender is never shown unrecorded');
+    // A write that records none of them leaves the flag set
+    written(conv, conv.mark, [OWN, BOB]);
+    assert.equal(conv.unrecordedOverflow, true, 'the flag is sticky');
+    assert.equal(CounterRecords.isUnrecorded(conv, overflowed), true);
+});
+
+test('the overflow clears only when a sender recorded since brings conv.unrecorded below its bound; the sender it displaced is unrecorded', () => {
+    const conv = roomConv([BOB]);
+    conv.mark = Counters.parse({ seq: 1, mine: 1, senders: [[FORMER, 5], [OWN, 1],
+        ...Array.from({ length: Counters.MAX_SENDERS - 2 }, (_, i) => [mintedKey(i), 1])] });
+    const flood = Array.from({ length: Counters.MAX_UNRECORDED + 1 }, (_, i) => mintedKey(1000000 + i));
+    written(conv, Counters.merge(conv.mark, raisedBy(conv.mark, flood)), [OWN, BOB]);
+    assert.equal(conv.unrecordedOverflow, true);
+    // One of them joins the roster: recorded, it leaves the set and displaces the latest off-roster entry
+    const joined = flood[0];
+    conv.room.roster.push({ publicKey: joined });
+    const kept = written(conv, Counters.merge(conv.mark, raisedBy(conv.mark, [joined])), [OWN, BOB, joined]);
+    const latest = mintedKey(Counters.MAX_SENDERS - 3);
+    assert.deepEqual([...kept.displaced], [latest]);
+    assert.equal(conv.unrecordedOverflow, false, 'the set went below its bound');
+    assert.equal(CounterRecords.isUnrecorded(conv, joined), false);
+    assert.equal(CounterRecords.isUnrecorded(conv, latest), true, 'the displaced sender is marked unrecorded');
+    assert.equal(conv.unrecorded.size, Counters.MAX_UNRECORDED);
+    assert.equal(CounterRecords.isUnrecorded(conv, FORMER), false);
 });

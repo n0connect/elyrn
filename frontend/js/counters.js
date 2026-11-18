@@ -76,6 +76,9 @@ const Counters = (() => {
     // The most senders one record names (THE SENDER BOUND): a room has at most 32 seats at a time,
     // so honest churn stays far below it; made-up senders past it are not recorded
     const MAX_SENDERS = 4096;
+    // The most senders a conversation remembers as not recorded this session (the agent's
+    // maxUnrecordedSenders); past it the answer only grows more conservative (counter-records.js)
+    const MAX_UNRECORDED = 4096;
     // The most counter records one device keeps (the agent keeps as many, maxStateRooms)
     const MAX_RECORDS = 1024;
     // How long past its own expiry a room's record is kept (the agent's expiredRoomGrace)
@@ -278,7 +281,7 @@ const Counters = (() => {
     }
 
     return Object.freeze({
-        EMPTY, MAX_RECORDS, MAX_SENDERS, EXPIRED_ROOM_GRACE_MS, parse, parseBounded, trim, bound, merge, same, ledger, history,
+        EMPTY, MAX_RECORDS, MAX_SENDERS, MAX_UNRECORDED, EXPIRED_ROOM_GRACE_MS, parse, parseBounded, trim, bound, merge, same, ledger, history,
         lowest, judge, admit, snapshot, expiredLongAgo, retentionEntry, retention
     });
 })();

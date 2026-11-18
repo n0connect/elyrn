@@ -320,6 +320,7 @@ const Chat = (() => {
             spare: 0,                   // a counter taken for a send the server refused: taken again next
             ledger: Counters.ledger(Counters.EMPTY),  // senders' counters in the loaded sequence
             unrecorded: new Set(),      // senders the full counter record did not take (counter-records.js)
+            unrecordedOverflow: false,  // unrecorded was full: unknown senders count as unrecorded
             recordFullWarned: false,    // that the record is full was said this session
             // the last record saved (kept in memory when storage fails), or the one kept when this
             // conversation was dropped from the session earlier (parked)
@@ -1032,10 +1033,11 @@ const Chat = (() => {
     }
 
     // Senders the full counter record did not take (counters.js THE SENDER BOUND): each of their
-    // messages is tagged, and the room says once per session that its record is full
+    // messages is tagged (CounterRecords.isUnrecorded decides which), and the room says once per
+    // session that its record is full
     function checkUnrecorded(conv) {
         if (activeId !== conv.id) return;
-        markUnrecorded(conv.unrecorded);
+        markUnrecorded(sender => CounterRecords.isUnrecorded(conv, sender));
         if (conv.unrecorded.size === 0 || conv.recordFullWarned) return;
         conv.recordFullWarned = true;
         Errors.report(Errors.CODES.W_COUNTER_RECORD_FULL);
