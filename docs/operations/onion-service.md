@@ -35,8 +35,9 @@ Tor Browser ──Tor──▶ tor container ──PROXY header + HTTP──▶ 
    (`fc00:dead:beef:4dad::/64`, circuit ID in the low 32 bits).
 2. **nginx** listens on `8081 proxy_protocol` and accepts connections from the tor container
    only (`allow ${TOR_IP}; deny all;`). Nothing else can reach that port, so nobody else can
-   claim to be a Tor circuit. The circuit address becomes `$client_addr`, which feeds nginx's
-   rate limit and is the only address forwarded.
+   claim to be a Tor circuit. The circuit address becomes `$client_addr`, the only address
+   forwarded; nginx's rate limit and connection shares count each circuit as one client
+   (`$client_network` keeps a circuit address whole, as the backend does).
 3. **backend** trusts the forwarded address only from nginx (`TRUSTED_PROXIES`), as for
    clearnet traffic, and keys each Tor circuit separately
    (`backend/internal/middleware/trustedproxy.go`).
@@ -50,11 +51,20 @@ defenses stay layered and none of them needs an identity:
 | Layer | Defense |
 |---|---|
 | Tor | `HiddenServicePoWDefensesEnabled` (client puzzles when the service is under load), `HiddenServiceEnableIntroDoSDefense` (rate-limited introductions), `HiddenServiceMaxStreams 32` (a circuit asking for more open connections is torn down: rate limits count requests, not idle connections) |
-| nginx | 20 req/s per circuit, onion listener open to the tor container only |
+| nginx | 20 req/s per circuit; per circuit at most 16 API requests, 16 event streams, 4 file requests and 2 message pages at once; for all clients together 128 API requests, 256 event streams, 32 file requests and 8 message pages (`nginx.conf`, `nginx-site.conf`, `nginx-api-limits.conf`); a request body may pause 2 s (3 s for messages, 5 s for file parts) between two reads; onion listener open to the tor container only |
 | backend | Per-circuit rate limits and PoW challenge budget, PoW for registration, invites and rooms, per-circuit share of live event streams (16), every input validated as for clearnet traffic. The PoW issuer forgets a client once it has been idle for a whole window (its budget has refilled by then), so filling its client cap takes 50,000 circuits within a minute, not within an hour |
 
 A client can open new circuits, but each one costs a Tor rendezvous, and under load also the
-Tor-layer puzzle. Registration, invites and rooms still cost an application-level proof of work per
+Tor-layer puzzle.
+
+**Residual: one client address is one Tor circuit.** nginx and the backend cannot tell two
+circuits of one Tor client from two people, so every per-client share above multiplies with the
+circuits a client opens. Behind the onion listener the per-client shares therefore bound one
+circuit, not one party; what bounds a party are the global shares (a party holding them all
+blocks those requests for everyone, clearnet included, until it lets go, but never takes nginx's
+connections or memory beyond the sizes in `nginx-main.conf`) and Tor's own defences above. A
+slowly sent body keeps its slot as long as each pause stays under the location's body timeout:
+nginx bounds the pause between two reads, not the whole body. Registration, invites and rooms still cost an application-level proof of work per
 request, whatever circuit they arrive on.
 
 ## The onion address key

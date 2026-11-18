@@ -155,8 +155,9 @@ instead of appending to it.
 > tell who the client is or that the request came over HTTPS. Then:
 > - **every user shares one address**: one rate-limit bucket in nginx and in the backend (a busy
 >   instance answers `429` to everyone), one per-network event-stream allowance (16 streams for
->   the whole instance, after which nobody gets live updates), and one per-address file request
->   allowance;
+>   the whole instance, after which nobody gets live updates), one per-client share of nginx's
+>   connections (16 API requests, 4 file requests and 2 message pages at once for everyone
+>   together), and one per-address file request allowance;
 > - **no HSTS is sent**, because nginx never learns that the request was HTTPS.
 
 **HSTS.** nginx is the one source of `Strict-Transport-Security`: it sends it on every answer of

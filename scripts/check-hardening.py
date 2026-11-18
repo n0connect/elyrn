@@ -160,13 +160,48 @@ EVENTS_STREAM_LINES = ("proxy_buffering off;", "proxy_pass_header X-Accel-Buffer
 FILES_LOCATION = re.compile(r"^location [^\n]*/files\(/", re.MULTILINE)
 FILES_GO = ROOT / "backend/internal/handlers/files.go"
 FILES_BOUND = re.compile(r"^const maxConcurrentFileRequests = (\d+)$", re.MULTILINE)
-FILES_ZONES = ("limit_conn_zone $file_requests_key zone=files:1m;",
-               "limit_conn_zone $client_addr zone=files_per_client:10m;")
-# Per client address (as the request-rate zone counts it): small enough that one cannot take the pool
+FILES_ZONES = ("limit_conn_zone $shared_pool_key zone=files:1m;",
+               "limit_conn_zone $client_network zone=files_per_client:10m;")
+# Per client (as every per-client zone counts it): small enough that one cannot take the pool
 FILES_PER_CLIENT = re.compile(r"^limit_conn files_per_client (\d+);$")
-FILES_KEY_MAP = re.compile(r"^map \$request_method \$file_requests_key \{\n\s+default all;\n\}", re.MULTILINE)
-FILES_MEMORY_LINES = ("client_body_buffer_size 342k;", "proxy_max_temp_file_size 0;", "limit_conn_status 503;",
-                      "client_body_timeout 5s;")
+FILES_KEY_MAP = re.compile(r"^map \$request_method \$shared_pool_key \{\n\s+default all;\n\}", re.MULTILINE)
+FILES_MEMORY_LINES = ("client_body_buffer_size 342k;", "client_body_timeout 5s;")
+# nginx's worker pool and memory (nginx-main.conf), sized from the frontend container's limits
+NGINX_MAIN = ROOT / "nginx-main.conf"
+NGINX_API_LIMITS = ROOT / "nginx-api-limits.conf"
+FRONTEND_DOCKERFILE = ROOT / "dev.frontend.Dockerfile"
+MAIN_CONF_COPY = "COPY nginx-main.conf /etc/nginx/nginx.conf"
+API_LIMITS_COPY = "COPY nginx-api-limits.conf /etc/nginx/elyrn/api-limits.conf"
+API_LIMITS_INCLUDE = "include /etc/nginx/elyrn/api-limits.conf;"
+# Descriptors the worker keeps besides connections (listeners, stdio, epoll, the master's channel)
+NOFILE_RESERVE = 96
+# Master and worker without any request: code, configuration, connection and event tables
+NGINX_BASE_BYTES = 8 << 20
+# Every proxied request takes two pool connections: the client's and the backend's
+CONNECTIONS_PER_PROXIED = 2
+# Every per-client zone is keyed on $client_network, the backend's client (IPv4, IPv6 /64, a circuit)
+CLIENT_KEYED_ZONES = ("api", "api_per_client", "events_per_client", "files_per_client")
+SHARED_KEYED_ZONES = ("api_all", "events_all", "files", "pages_all")
+HUB_GO = ROOT / "backend/internal/realtime/hub.go"
+HUB_PER_CLIENT = re.compile(r"^\s*MaxSubscribersPerClient = (\d+)$", re.MULTILINE)
+# The message page (nginx-site.conf's messages location): the input contract's ciphertext bound,
+# the JSON around each message and around the list (models.MessagesResponse, json.Encoder)
+CONTRACT_DOC = ROOT / "docs/api/input-contract.md"
+CONTRACT_CIPHERTEXT = re.compile(r"^\| message-ciphertext \| [^|]+ \| \d+\.\.(\d+) \|", re.MULTILINE)
+MESSAGE_JSON_BYTES = 101
+PAGE_JSON_BYTES = 16
+CONFIG_GO = ROOT / "backend/internal/config/config.go"
+PAGE_LIMIT_DEFAULT = re.compile(r"^\s*defaultMessagePageLimit\s*=\s*(\d+)", re.MULTILINE)
+PAGE_LIMIT_SETTING = "MESSAGE_PAGE_LIMIT"
+MESSAGES_LOCATION = re.compile(r"^location [^\n]*/\(messages\|notes\)\$", re.MULTILINE)
+# The longest pause between two reads of a body, by the location's body bound (nginx-site.conf):
+# (largest bound, seconds); a bound above every row is refused
+BODY_TIMEOUTS = ((2 << 10, 2), (8 << 10, 3), (342 << 10, 5))
+# The client map: generated addresses (fixed seed) must reduce exactly as clientNetwork does
+CLIENT_MAP = re.compile(r"^map \$client_addr \$client_network \{\n(.*?)\n\}", re.MULTILINE | re.DOTALL)
+CLIENT_MAP_SAMPLES = 4000
+CLIENT_MAP_SEED = 20261118
+TOR_CIRCUIT_PREFIX = bytes.fromhex("fc00deadbeef4dad")
 # HSTS: one source, nginx's server-level header from $hsts, which nginx-hsts.sh renders at start
 HSTS_RENDERER = ROOT / "nginx-hsts.sh"
 HSTS_OUT_DIR = "HSTS_OUT_DIR"
@@ -629,6 +664,243 @@ def check_hsts(services):
             fail("nginx", f"{HSTS_RENDERER.name} accepts the malformed {settings}")
 
 
+def nginx_size(raw):
+    """An nginx size ("8k", "1m", "512") in bytes; None when it is not one."""
+    found = re.fullmatch(r"(\d+)([kKmM]?)", str(raw or "").strip())
+    if not found:
+        return None
+    return int(found.group(1)) << {"": 0, "k": 10, "m": 20}[found.group(2).lower()]
+
+
+def directive(text, name):
+    """The arguments of the one `name ...;` line in text, or None when it is absent."""
+    found = re.findall(r"^\s*" + re.escape(name) + r"\s+([^;]+);", text, re.MULTILINE)
+    return found[0].split() if len(found) == 1 else None
+
+
+def directives(text, name):
+    """The arguments of every `name ...;` line in text."""
+    return [args.split() for args in re.findall(r"^\s*" + re.escape(name) + r"\s+([^;]+);", text, re.MULTILINE)]
+
+
+def site_parts(site):
+    """(server-level text, [location blocks]) of nginx-site.conf."""
+    parts = re.split(r"\n(?=location )", site)
+    return parts[0], parts[1:]
+
+
+def effective(block, server, name):
+    """A directive's arguments in a location, or else at server level (nginx's inheritance)."""
+    return directive(block, name) or directive(server, name)
+
+
+def limit_of(text, zone):
+    """N of `limit_conn <zone> N;` in text, or None."""
+    for args in directives(text, "limit_conn"):
+        if len(args) == 2 and args[0] == zone and args[1].isdigit():
+            return int(args[1])
+    return None
+
+
+def proxy_memory(block, server):
+    """Bytes one proxied answer may hold in a location: proxy_buffer_size and proxy_buffers."""
+    head = effective(block, server, "proxy_buffer_size") or []
+    bufs = effective(block, server, "proxy_buffers") or []
+    if len(head) != 1 or len(bufs) != 2 or not bufs[0].isdigit() or None in (nginx_size(head[0]), nginx_size(bufs[1])):
+        return None
+    return nginx_size(head[0]) + int(bufs[0]) * nginx_size(bufs[1])
+
+
+def check_nginx_pool(services):
+    """E3: the worker pool and memory are sized from the frontend container's limits, every /api/
+    location has a per-client and a global connection share, nothing is spooled, the largest
+    message page relays from memory, and body pauses are as short as each body bound allows."""
+    main, conf, site = read(NGINX_MAIN), read(NGINX_CONF), read(NGINX_SITE)
+    proxy, limits = read(NGINX_API_PROXY), read(NGINX_API_LIMITS)
+    dockerfile = read(FRONTEND_DOCKERFILE).splitlines()
+    for line in (MAIN_CONF_COPY, API_LIMITS_COPY):
+        if line not in dockerfile:
+            fail("frontend", f"dev.frontend.Dockerfile must '{line}'")
+    svc = services.get("frontend", {})
+    cpus = float(svc.get("cpus") or 0)
+    nofile = (svc.get("ulimits") or {}).get("nofile") or {}
+    soft = as_int(nofile.get("soft") if isinstance(nofile, dict) else nofile, 0)
+    mem = as_int(svc.get("mem_limit"), 0)
+    workers = directive(main, "worker_processes")
+    conns = directive(main, "worker_connections")
+    # (a) one worker per whole CPU of the container's share (at least one), a pool its nofile holds
+    if workers != [str(max(1, int(cpus)))]:
+        fail("nginx", f"nginx-main.conf must set worker_processes {max(1, int(cpus))} (cpus {cpus:g})")
+    pool = int(conns[0]) if conns and conns[0].isdigit() else 0
+    if not 0 < pool <= soft - NOFILE_RESERVE:
+        fail("nginx", f"nginx-main.conf worker_connections must be set and at most nofile - {NOFILE_RESERVE}")
+    server, blocks = site_parts(site)
+    events = [b for b in blocks if b.startswith(EVENTS_LOCATION)]
+    proxied = [b for b in blocks if API_PROXY_INCLUDE in b]
+    # (b) every proxied location: the API shares, or the event stream's own; the client key is the
+    # backend's client, and the event stream's per-client share is the hub's per-network share
+    for block in proxied:
+        if block in events:
+            if API_LIMITS_INCLUDE in block:
+                fail("nginx", "the event stream must keep its own pool, not the API's")
+        elif API_LIMITS_INCLUDE not in block:
+            fail("nginx", "a proxied /api/ location lacks " + API_LIMITS_INCLUDE)
+    api_client, api_all = limit_of(limits, "api_per_client"), limit_of(limits, "api_all")
+    hub = HUB_PER_CLIENT.search(read(HUB_GO))
+    ev_client = limit_of(events[0], "events_per_client") if events else None
+    ev_all = limit_of(events[0], "events_all") if events else None
+    if not hub or ev_client != int(hub.group(1)):
+        fail("nginx", "the event stream's per-client share must be realtime.MaxSubscribersPerClient")
+    if None in (api_client, api_all, ev_all) or not api_client < api_all or not (ev_client or 0) < (ev_all or 0):
+        fail("nginx", "the API and the event stream need a per-client share below a global one")
+    elif CONNECTIONS_PER_PROXIED * (api_all + ev_all) >= pool:
+        fail("nginx", "the API and event-stream shares must leave worker connections for the page and static files")
+    zones = {}
+    for args in directives(conf, "limit_conn_zone") + directives(conf, "limit_req_zone"):
+        name = next((a.split("=", 1)[1] for a in args if a.startswith("zone=")), "")
+        zones[name.split(":")[0]] = (args[0], nginx_size(name.split(":")[1]) if ":" in name else None)
+    for zone in CLIENT_KEYED_ZONES:
+        if zones.get(zone, ("",))[0] != "$client_network":
+            fail("nginx", f"zone {zone} must count clients by $client_network")
+    for zone in SHARED_KEYED_ZONES:
+        if zones.get(zone, ("",))[0] != "$shared_pool_key":
+            fail("nginx", f"zone {zone} must hold every client under one key")
+    check_client_map(conf)
+    # (c) nothing spooled, every body in memory, the largest message page in memory
+    if "proxy_max_temp_file_size 0;" not in proxy.splitlines():
+        fail("nginx", "nginx-api-proxy.conf must set proxy_max_temp_file_size 0 (no proxied answer spooled)")
+    if [args for args in directives(site + "\n" + limits, "proxy_max_temp_file_size")]:
+        fail("nginx", "proxy_max_temp_file_size belongs in nginx-api-proxy.conf alone")
+    for block in proxied:
+        bound = nginx_size((effective(block, server, "client_max_body_size") or [""])[0])
+        buffer = nginx_size((effective(block, server, "client_body_buffer_size") or [""])[0])
+        if bound is None or buffer is None or buffer < bound:
+            fail("nginx", "a proxied location's client_body_buffer_size must hold its client_max_body_size")
+        # (d) the pause between two body reads by the body bound
+        allowed = next((secs for limit, secs in BODY_TIMEOUTS if bound is not None and bound <= limit), None)
+        timeout = (effective(block, server, "client_body_timeout") or [""])[0]
+        if allowed is None or not re.fullmatch(r"\d+s", timeout) or int(timeout[:-1]) > allowed:
+            fail("nginx", f"a location with a {bound}-byte body bound must pause at most {allowed} s between body reads")
+    pages = [b for b in blocks if MESSAGES_LOCATION.match(b)]
+    ciphertext = CONTRACT_CIPHERTEXT.search(read(CONTRACT_DOC))
+    default_limit = PAGE_LIMIT_DEFAULT.search(read(CONFIG_GO))
+    page_limit = as_int((services.get("backend", {}).get("environment") or {}).get(PAGE_LIMIT_SETTING),
+                        int(default_limit.group(1)) if default_limit else 0)
+    if len(pages) != 1 or not ciphertext or not page_limit:
+        fail("nginx", "the message page bound cannot be computed (messages location, contract, MESSAGE_PAGE_LIMIT)")
+        return
+    page = page_limit * (int(ciphertext.group(1)) + MESSAGE_JSON_BYTES) + PAGE_JSON_BYTES
+    page_memory = proxy_memory(pages[0], server)
+    if page_memory is None or page_memory < page:
+        fail("nginx", f"the messages location's proxy buffers must hold a whole page ({page} bytes at "
+             f"{PAGE_LIMIT_SETTING}={page_limit})")
+    # The memory arithmetic of nginx-main.conf, from the files themselves, within mem_limit
+    header = sum(nginx_size((directive(server, n) or ["0"])[0]) or 0 for n in
+                 ("client_header_buffer_size", "connection_pool_size", "request_pool_size"))
+    large = directive(server, "large_client_header_buffers") or ["0", "0"]
+    header += int(large[0]) * (nginx_size(large[1]) or 0)
+    files = [b for b in blocks if FILES_LOCATION.match(b)]
+    files_all = limit_of(files[0], "files") if files else None
+    pages_all = limit_of(pages[0], "pages_all")
+    others = [b for b in proxied if b not in events]
+    request = max((proxy_memory(b, server) or 0) + (nginx_size((effective(b, server, "client_body_buffer_size") or ["0"])[0]) or 0)
+                  for b in others if b not in files + pages) if others else 0
+    file_request = (proxy_memory(files[0], server) or 0) + (nginx_size((directive(files[0], "client_body_buffer_size") or ["0"])[0]) or 0) if files else 0
+    page_request = (page_memory or 0) + (nginx_size((effective(pages[0], server, "client_body_buffer_size") or ["0"])[0]) or 0)
+    stream = nginx_size((effective(events[0], server, "proxy_buffer_size") or ["0"])[0]) or 0 if events else 0
+    if None in (files_all, pages_all, api_all, ev_all):
+        fail("nginx", "the files, pages, API and event-stream global shares must all be set")
+        return
+    worst = (NGINX_BASE_BYTES + sum(size or 0 for _, size in zones.values()) + pool * header
+             + files_all * file_request + pages_all * page_request + api_all * request + ev_all * stream)
+    if mem <= 0 or worst > mem:
+        fail("nginx", f"nginx's worst case ({-(-worst // (1 << 20))} MiB) must fit the frontend's mem_limit")
+
+
+def nginx_ntop(packed):
+    """An IPv6 address as nginx writes it (ngx_inet6_ntop): lowercase hex without leading zeros,
+    the first longest run of two or more zero groups as "::", IPv4-mapped and IPv4-compatible
+    addresses with a dotted tail."""
+    groups = [packed[i] << 8 | packed[i + 1] for i in range(0, 16, 2)]
+    zero, best, run, start = -1, 1, 0, -1
+    for i, group in enumerate(groups):
+        if group:
+            if best < run:
+                zero, best = start, run
+            run = 0
+            continue
+        if run == 0:
+            start = i
+        run += 1
+    if best < run:
+        zero, best = start, run
+    if zero == 0 and ((best == 5 and groups[5] == 0xFFFF) or best == 6 or (best == 7 and packed[14] != 0 and packed[15] != 1)):
+        return ("::ffff:" if best == 5 else "::") + ".".join(str(b) for b in packed[12:])
+    out, i = "", 0
+    if zero == 0:
+        out = ":"
+    while i < 8:
+        if i == zero:
+            out += ":"
+            i += best
+            continue
+        out += f"{groups[i]:x}" + (":" if i < 7 else "")
+        i += 1
+    return out
+
+
+def client_network_reference(packed):
+    """What backend clientNetwork keeps of an IPv6 address, written as the map writes it."""
+    if packed[:12] == bytes(10) + b"\xff\xff":
+        return ".".join(str(b) for b in packed[12:])
+    if packed[:8] == TOR_CIRCUIT_PREFIX:
+        return None
+    return ":".join(f"{packed[i] << 8 | packed[i + 1]:x}" for i in range(0, 8, 2))
+
+
+def check_client_map(conf):
+    """$client_network reduces nginx's text of an address exactly as the backend's clientNetwork
+    does: IPv4 (also IPv4-mapped) itself, a Tor circuit itself, any other IPv6 address its /64.
+    Each map line is run, first match wins, on generated addresses of every zero-run shape."""
+    import random
+    block = CLIENT_MAP.search(conf)
+    if not block:
+        fail("nginx", "nginx.conf must define the $client_network map on $client_addr")
+        return
+    rules = []
+    for line in block.group(1).splitlines():
+        found = re.fullmatch(r'\s*(?:"(~\*?)([^"]+)"|(default))\s+(\S+);\s*', line)
+        if not found:
+            continue
+        flags = re.IGNORECASE if found.group(1) == "~*" else 0
+        rules.append((re.compile(found.group(2), flags) if found.group(2) else None, found.group(4)))
+
+    def mapped(text):
+        for pattern, value in rules:
+            match = pattern.search(text) if pattern else True
+            if match:
+                groups = match.groups() if pattern else ()
+                return re.sub(r"\$(\d|client_addr)",
+                              lambda m: text if m.group(1) == "client_addr" else (groups[int(m.group(1)) - 1] or ""), value)
+        return None
+
+    rng = random.Random(CLIENT_MAP_SEED)
+    samples = [bytes(16), bytes(15) + b"\x01", bytes(10) + b"\xff\xff" + bytes([192, 0, 2, 7]),
+               bytes(12) + bytes([192, 0, 2, 7]), TOR_CIRCUIT_PREFIX + bytes(6) + b"\x2c\x3d"]
+    for _ in range(CLIENT_MAP_SAMPLES):
+        groups = [0 if rng.random() < 0.55 else rng.choice((1, 0xF, 0xFFFF, rng.randrange(1, 0x10000))) for _ in range(8)]
+        samples.append(b"".join(g.to_bytes(2, "big") for g in groups))
+    for packed in samples:
+        text = nginx_ntop(packed)
+        want = client_network_reference(packed)
+        got = mapped(text)
+        if got != (text if want is None else want):
+            fail("nginx", f"$client_network maps {text} to {got}, the backend's client is {want or text}")
+            return
+    if mapped("198.51.100.7") != "198.51.100.7":
+        fail("nginx", "$client_network must keep an IPv4 address as it is")
+
+
 def make_rule(makefile, target):
     """The prerequisites of one Makefile rule (None when the rule is missing)."""
     found = re.search(r"^" + re.escape(target) + r":([^=\n]*)$", makefile, re.MULTILINE)
@@ -753,6 +1025,7 @@ def main():
     check_backend_lifecycle(services["backend"])
     check_trust(services)
     check_nginx()
+    check_nginx_pool(services)
     check_edge_proxies(services)
     check_hsts(services)
     check_public_mode()

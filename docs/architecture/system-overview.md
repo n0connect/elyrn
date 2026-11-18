@@ -29,6 +29,9 @@
 |  - Strict CSP + Trusted Types policy ('noaddx-worker')                 |
 |  - /api/ whitelist mirroring the input contract; own refusals as JSON  |
 |  - Unbuffered SSE proxy for /api/v2/events (proxy_buffering off)       |
+|  - One worker, 1024 connections, sized from the container's limits;    |
+|    per-client (IPv4, IPv6 /64, circuit) and global connection shares   |
+|    on every /api/ location; nothing ever spooled to a temporary file   |
 |  - Strips/Overrides untrusted client proxy headers                     |
 |  - Onion listener :8081: tor container only; forwards the circuit as   |
 |    the client address, so rate limits stay per circuit                 |

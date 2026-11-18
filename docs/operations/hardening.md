@@ -112,11 +112,14 @@ fails when the limit is below the pool plus 128 MiB.
 | Method whitelist for the whole site: GET, HEAD, POST, DELETE, OPTIONS, else 405 | `nginx-site.conf` `if ($request_method ...)` |
 | Body bound 1k outside `/api/`; per API location below | `client_max_body_size` |
 | Headers: 1k buffer, at most 4 × 8k | `client_header_buffer_size`, `large_client_header_buffers` |
-| Timeouts: header and body 10 s, send 30 s, keepalive 30 s, upstream connect 5 s | `client_*_timeout`, `send_timeout`, `keepalive_timeout`, `proxy_connect_timeout` |
+| Worker pool sized from the frontend container's limits: one worker (`cpus 1.0`), 1024 connections (under `nofile 4096`; the worst case of every header, body and proxy buffer at its bound, 117 MiB, inside `mem_limit 128m`); the arithmetic is in the file and `make check-hardening` recomputes it from the rendered limits | [nginx-main.conf](../../nginx-main.conf) `worker_processes`, `worker_connections` |
+| Connection shares per client (an IPv4 address, an IPv6 /64 or a Tor circuit, `$client_network`, as the backend's `clientNetwork`) and for all clients together, one more answering 503 `E_BACKEND_UNAVAILABLE`: API 16 / 128, event stream 16 (the hub's per-network share) / 256, file parts 4 / 32, message pages 2 / 8 | `nginx.conf` zones, [nginx-api-limits.conf](../../nginx-api-limits.conf), `nginx-site.conf` |
+| No request body or proxied answer in a temporary file: every body bound fits `client_body_buffer_size`, `proxy_max_temp_file_size 0` on every proxied location, a message page (up to 208 messages) fits the messages location's buffers | `nginx-site.conf`, [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
+| Timeouts: whole header 10 s; a body may pause 2 s between reads (3 s for messages, 5 s for file parts); send 30 s, keepalive 30 s, upstream connect 5 s | `client_*_timeout`, `send_timeout`, `keepalive_timeout`, `proxy_connect_timeout` |
 | Redirects never name the internal port | `absolute_redirect off` |
 | Dotfiles never served (first regex location) | `location ~ /\.` |
 | Path whitelist: `/`, static files, the one status page (the 404 page, an exact location equal to the `error_page 404` target and `STATUS_PAGES.NOT_FOUND`, checked by `make check-hardening`), the API below; everything else 404 | `location / { return 404; }` |
-| Rate limit 20 r/s per client (burst 40), per Tor circuit behind the onion listener | `nginx.conf` `limit_req_zone`, [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
+| Rate limit 20 r/s per client (burst 40; an IPv6 /64 is one client), per Tor circuit behind the onion listener | `nginx.conf` `limit_req_zone`, [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
 | Onion listener open to the tor container only, PROXY header required | `nginx.conf` `allow ${TOR_IP}; deny all;` |
 | Forwarding headers set by nginx alone | [nginx-api-proxy.conf](../../nginx-api-proxy.conf) |
 | CSP, Trusted Types, isolation headers | `nginx-site.conf` `add_header` (unchanged) |
@@ -137,8 +140,8 @@ in `location /api/ { include /etc/nginx/elyrn/api-errors.conf; return 404; }`.
 | `register`, `rooms`, `rooms/join` | POST | 2k (≤ 1351) |
 | `conversations/{id}/read` | POST | 1k (93) |
 | `conversations/{id}/members` | GET, POST | 1k (290) |
-| `conversations/{id}/messages`, `…/notes` | GET, POST | 8k (≤ 7873) |
-| `conversations/{id}/files`, `…/files/{file}` | GET, POST | 342k (≤ 349695); request and response kept in memory (`client_body_buffer_size 342k`, `proxy_buffers 6 64k`, `proxy_max_temp_file_size 0`), never in a temporary file; at most 4 file requests at once per client address and 32 for all clients together (`limit_conn files_per_client 4`, `limit_conn files 32`, the backend's own bound; one more answers 503 `E_BACKEND_UNAVAILABLE`), and a body stalled 5 s between reads is cut off (`client_body_timeout 5s`); behind it every stored part spends from the account's in-memory daily budget (`FILE_ACCOUNT_DAILY_BYTES`, 429 `E_FILE_BUDGET_SPENT`) |
+| `conversations/{id}/messages`, `…/notes` | GET, POST | 8k (≤ 7873); a page (`MESSAGE_PAGE_LIMIT` × 7848 + 16 bytes, 1569616 at 200) fits `proxy_buffers 25 64k`, so the backend never waits on a slow reader; 2 pages at once per client, 8 for all |
+| `conversations/{id}/files`, `…/files/{file}` | GET, POST | 342k (≤ 349695); request and response kept in memory (`client_body_buffer_size 342k`, `proxy_buffers 6 64k`, `proxy_max_temp_file_size 0`), never in a temporary file; at most 4 file requests at once per client and 32 for all clients together (`limit_conn files_per_client 4`, `limit_conn files 32`, the backend's own bound; one more answers 503 `E_BACKEND_UNAVAILABLE`), and a body that pauses 5 s between two reads is cut off (`client_body_timeout 5s`; a body sent just inside the pause keeps its slot until complete); behind it every stored part spends from the account's in-memory daily budget (`FILE_ACCOUNT_DAILY_BYTES`, 429 `E_FILE_BUDGET_SPENT`) |
 | `conversations/{id}`, `conversations/{id}/notes/{note}` | DELETE | 1k (none) |
 
 A method outside the list answers 405, as the backend would; an unknown path 404; a body over
