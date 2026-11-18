@@ -34,6 +34,8 @@ class EyeHoverAnimation {
         this.lastMousePos = { x: 0, y: 0 };
         this.lastMouseTime = Date.now();
         this.revealProgress = 0; // 0 to 1
+        // A login is reading the number (holdMasked): nothing is drawn until release()
+        this.held = false;
 
         // Zone configurations (in pixels)
         this.zones = { ...EYE_ZONE_RADII_PX };
@@ -109,7 +111,7 @@ class EyeHoverAnimation {
     }
 
     handleMouseMove(e) {
-        if (!this.eyeIcon || !this.accountNumberInput) return;
+        if (!this.eyeIcon || !this.accountNumberInput || this.held) return;
         
         // Only activate when login container is visible
         const loginContainer = document.getElementById('loginContainer');
@@ -169,7 +171,7 @@ class EyeHoverAnimation {
     }
 
     startAnimation() {
-        if (this.animationFrame) return;
+        if (this.animationFrame || this.held) return;
         this.originalValue = this.accountNumberInput.value;
         if (!this.originalValue) return;
         this.generateRevealOrder();
@@ -261,6 +263,26 @@ class EyeHoverAnimation {
         this.accountNumberInput.type = 'password';
         this.accountNumberInput.value = this.originalValue;
         this.displayValue = '';
+    }
+
+    // A login reads the number (auth.js takeLoginNumber): the effect stops and draws nothing more
+    // until release(); the field goes back to type=password before its value is set, in this same
+    // task, so no frame ever shows a character of the number in clear. Returns the number as typed
+    // (this animation's copy while it was drawing, else the field's own value).
+    holdMasked() {
+        this.held = true;
+        this.stopAnimation();
+        const typed = this.currentZone !== 'none' ? this.originalValue : this.accountNumberInput.value;
+        this.currentZone = 'none';
+        if (this.eyeIcon) this.updateEyeStyle();
+        this.originalValue = typed;
+        this.resetToMasked();
+        return typed;
+    }
+
+    // The login has ended: hovering may draw again
+    release() {
+        this.held = false;
     }
 
     // Drops what was typed: the field and this animation's copy of it (leaving login, logging

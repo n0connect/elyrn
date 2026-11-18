@@ -114,6 +114,10 @@ const Errors = (() => {
         E_MESSAGE_ID_CONFLICT: e('the server refused the message as a duplicate — press send again'),
         // A 409 "Id taken" (the id is held by something else, nothing stored) also under a fresh id
         E_MESSAGE_ID_TAKEN: e('the server said the message id is already in use, twice — nothing was sent, press send again'),
+        // A room message or note whose header card is not the card the server holds for this
+        // member (apperr SenderCardMismatch, JSON "Sender card mismatch"): this page's view of its
+        // own seat is stale, and a reload fetches the member list again
+        E_SENDER_CARD_MISMATCH: e('the server holds another member card for you in this room — nothing was sent; reload the page, then send again'),
         W_VERIFICATION_NOT_SAVED: w('could not save verification on this device'),
         // Browser storage (keystore.js): refused or failed, another tab blocking an upgrade, or
         // another tab upgrading or deleting it under this one
@@ -124,6 +128,9 @@ const Errors = (() => {
         W_IDENTITY_NOT_KEPT: w('this browser cannot keep your identity — you will need your account number after a reload'),
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_COPY_MANUALLY: w('copy it manually'),
+        // A clear of the clipboard (utils.js clearClipboardOrWarn) was refused or did not settle
+        // within CLIPBOARD_WRITE_TIMEOUT_MS: the account number or code may still be in it
+        W_CLIPBOARD_NOT_CLEARED: w('could not clear the clipboard — copy something else to overwrite it'),
         // The robot door's challenge cannot run here (no random source, or no SHA-256 outside
         // https). The door is theatre and gates nothing, so the visitor is let through.
         W_DOOR_CHECK_UNAVAILABLE: w('this browser cannot run the door check — come in anyway'),
@@ -137,6 +144,11 @@ const Errors = (() => {
         // Shown where a sender's counter skipped (counters.js): the server withheld, delayed or
         // deleted their messages. The count comes from the sender's own counter and is repeated
         // only up to a bound (ui.js MAX_GAP_SHOWN); past it the uncounted sentence is shown
+        // A room's counter record is full (counters.js THE SENDER BOUND): a sender new to it and
+        // not on the roster is not recorded. The tag on each of its messages, and the room's
+        // warning, once per session
+        W_SENDER_NOT_RECORDED: w('replay protection is not kept for this sender on this device'),
+        W_COUNTER_RECORD_FULL: w('this room\'s replay record on this device is full — new senders who are not members are shown without replay protection after a reload'),
         W_MESSAGE_MISSING: w('⚠ 1 message from {who} never arrived'),
         W_MESSAGES_MISSING: w('⚠ {count} messages from {who} never arrived'),
         W_MESSAGES_MISSING_UNCOUNTED: w('⚠ messages from {who} never arrived'),
@@ -166,6 +178,12 @@ const Errors = (() => {
         W_LOOKALIKE_MEMBERS: w('two members share a name — tell them apart by glyph and code'),
         // The tag on each member, and each of their messages, whose name another member shares (ui.js)
         W_LOOKALIKE_MEMBER: w('same name as another member'),
+        // Two or more cards of the served member list open to one key (Rooms.disputed): the tag
+        // on that member and on each of their messages, the room's warning (once per session),
+        // and the warning to the member whose own key it is
+        W_MEMBER_DISPUTED: w('two seats claim this identity'),
+        W_ROOM_SEATS_DISPUTED: w('two seats in this room claim one identity — that member shows no role and cannot be befriended; compare the room safety number with the others'),
+        W_OWN_SEAT_DISPUTED: w('another seat in this room claims to be you — the others see you marked as disputed; compare the room safety number with them'),
         W_ROOM_EXPIRED: w(ROOM_EXPIRED),
         E_ROOM_CODE_EXPIRED: e(ROOM_EXPIRED),
         E_ROOM_CODE_INVALID: e('invalid room code'),
@@ -202,6 +220,8 @@ const Errors = (() => {
         W_FILE_BUDGET_SPENT: w('you have sent as many files today as this server allows — try again tomorrow'),
         W_FILE_RATE_LIMITED: w('too many new files at once — wait a moment, then press send again'),
         E_FILE_QUOTA_REACHED: e('this conversation holds as many files as the server allows — the file was not sent'),
+        // This member's own share of the conversation's file quota (apperr FileShareReached, 507)
+        E_FILE_SHARE_REACHED: e('you already hold your share of this conversation\'s files — the file was not sent; send it once some of yours have expired'),
         E_FILE_STORE_FULL: e('the server has no room for files right now — the file was not sent, try again later'),
         // Id taken or out of order: the next send uploads the file afresh under a new id
         E_FILE_UPLOAD_RESTART: e('the server lost track of this upload — press send again to upload the file afresh'),
@@ -216,7 +236,13 @@ const Errors = (() => {
         W_FRIEND_REQUEST_PENDING: w('you already have a request waiting with them'),
         W_FRIEND_GONE: w('they are no longer in this room'),
         E_FRIEND_REQUEST_NOT_SENT: e('friend request not sent'),
-        E_FRIEND_REQUEST_MALFORMED: e('that friend request is malformed — ignored')
+        E_FRIEND_REQUEST_MALFORMED: e('that friend request is malformed — ignored'),
+        // The binder in a friend request does not match the account that created its invite
+        // (Rooms.binderMatches): another member relayed someone else's invite
+        E_FRIEND_REQUEST_RELAYED: e('this request did not come from the member who sent it — the conversation it opened was burned'),
+        // A friend request without a binder (sent by an elyrn from before binders): it cannot be
+        // checked, so it can only be ignored
+        W_FRIEND_REQUEST_OUTDATED: w('sent by an older elyrn and cannot be checked — ignore it and ask them to send a new request')
     });
 
     // Reported codes are read from here, so a misspelt name is undefined and reports E_UNKNOWN_CODE
@@ -228,7 +254,6 @@ const Errors = (() => {
         // The Clipboard API refused the copy or did not settle within CLIPBOARD_WRITE_TIMEOUT_MS
         // (an unfocused tab can wait forever): the selection fallback is tried next (utils.js)
         W_CLIPBOARD_WRITE_FAILED: 'W_CLIPBOARD_WRITE_FAILED',
-        W_CLIPBOARD_NOT_CLEARED: 'W_CLIPBOARD_NOT_CLEARED',
         E_SCRAMBLE_ELEMENTS_MISSING: 'E_SCRAMBLE_ELEMENTS_MISSING',
         W_KEYSTORE_UNAVAILABLE: 'W_KEYSTORE_UNAVAILABLE',
         // A stored identity record gave no identity at load (an engine that cannot read its key
@@ -244,7 +269,10 @@ const Errors = (() => {
         // No Web Locks API: counters are still read fresh and written ahead, without the lock
         W_COUNTER_LOCK_UNAVAILABLE: 'W_COUNTER_LOCK_UNAVAILABLE',
         // More counter records than Counters.MAX_RECORDS: the least recently used were dropped,
-        // so those conversations are judged from their visible messages only (once per page load)
+        // so those conversations are judged from their visible messages only (once per page load).
+        // Also: a record read above Counters.MAX_SENDERS was trimmed (Counters.trim), or a roster
+        // member new to a full record displaced the off-roster entry recorded longest ago
+        // (Counters.bound); once per read or write that dropped any
         W_COUNTER_RECORDS_EVICTED: 'W_COUNTER_RECORDS_EVICTED',
         // The event stream delivered no event within its silence limit (a proxy buffering or
         // holding it): updates are fetched on an interval until it delivers one again (live-updates.js)
@@ -294,7 +322,11 @@ const Errors = (() => {
         'file part out of order': CODES.E_FILE_UPLOAD_RESTART,
         'file quota reached': CODES.E_FILE_QUOTA_REACHED,
         'file store full': CODES.E_FILE_STORE_FULL,
-        'file budget spent': CODES.W_FILE_BUDGET_SPENT
+        'file budget spent': CODES.W_FILE_BUDGET_SPENT,
+        // A member's own share of the conversation's file quota (507, like "File quota reached")
+        'file share reached': CODES.E_FILE_SHARE_REACHED,
+        // A room message or note under a header card that is not the sender's stored card (400)
+        'sender card mismatch': CODES.E_SENDER_CARD_MISMATCH
     });
 
     // Used when the answer carries no message

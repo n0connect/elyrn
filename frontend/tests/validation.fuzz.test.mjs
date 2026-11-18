@@ -219,21 +219,33 @@ test('validateRoleText: never throws, matches an independent model, and what it 
 });
 
 // The Go rule (backend/internal/e2e/file.go fileNameValid), written apart from validation.js:
-// unicode.IsControl is Cc, Bidi_Control is this fixed set, and the text must be valid UTF-8
+// unicode.IsControl is Cc, unicode.Cf every format character (the bidirectional controls among
+// them), no two Zs space characters in a row, and the text must be valid UTF-8. Every Cf the old
+// rule named one by one is still refused (GO_BIDI_CONTROL is checked against Cf below).
 const GO_BIDI_CONTROL = new Set([0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]);
 function goFileNameValid(name) {
     if (typeof name !== 'string' || !name.isWellFormed()) return false;
     const points = [...name];
+    const spaceRun = points.some((ch, i) => i > 0 && /\p{Zs}/u.test(ch) && /\p{Zs}/u.test(points[i - 1]));
     return points.length >= 1 && points.length <= 128 && new TextEncoder().encode(name).length <= 512 &&
-        name.normalize('NFC') === name && !name.startsWith('.') &&
-        points.every((ch) => !/\p{Cc}/u.test(ch) && !GO_BIDI_CONTROL.has(ch.codePointAt(0)) && ch !== '/' && ch !== '\\');
+        name.normalize('NFC') === name && !name.startsWith('.') && !spaceRun &&
+        points.every((ch) => !/\p{Cc}/u.test(ch) && !/\p{Cf}/u.test(ch) && !GO_BIDI_CONTROL.has(ch.codePointAt(0)) &&
+            ch !== '/' && ch !== '\\');
 }
+
+test('every bidirectional control is a format character (Cf): the Cf rule keeps refusing them', () => {
+    for (const point of GO_BIDI_CONTROL) assert.match(String.fromCodePoint(point), /^\p{Cf}$/u, point.toString(16));
+});
 
 test('isFileName agrees with the Go rule, and every chosen name is sent under one it accepts', async () => {
     const isFileName = get('isFileName');
     const outgoing = get('outgoingFileName');
     await fuzz(SEED + 8, NAME_ITERATIONS, (r) => {
-        const input = r.bool(0.9) ? (r.bool(0.5) ? r.string(r.int(0, 140)) : r.mutate('report 2026.pdf')) : r.value();
+        const roll = r.next();
+        const input = roll < 0.45 ? r.string(r.int(0, 140)) : roll < 0.8 ? r.mutate('report 2026.pdf')
+            // runs and lone spaces of every kind between words
+            : roll < 0.9 ? 'a' + r.string(r.int(1, 3)).replace(/[^\s\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/gu, ' ') + 'b'
+                : r.value();
         assert.equal(isFileName(input), goFileNameValid(input), JSON.stringify(input));
         const sent = outgoing(input, r.bytes(4));
         assert.equal(goFileNameValid(sent), true, JSON.stringify([input, sent]));

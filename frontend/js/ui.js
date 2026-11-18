@@ -589,6 +589,7 @@ function createMessageElement(message) {
         appendAura(sender, message.from);
         const role = RoleControl.tag(message.role);
         if (role) sender.appendChild(role);
+        if (message.disputed) sender.appendChild(disputedTag());
         if (message.left) {
             const left = document.createElement('span');
             left.textContent = UI_TEXT.LEFT_MARK;
@@ -899,35 +900,68 @@ function lookalikeTag() {
     return tag;
 }
 
-// keys: public keys whose name another key shares; tags (or untags) every message from them
-function markLookalikes(keys) {
+// The tag on a member more than one seat claims (Rooms.disputed), in the panel and on bubbles
+function disputedTag() {
+    const tag = memberTag(Errors.message(Errors.CODES.W_MEMBER_DISPUTED));
+    tag.classList.add('lookalike-tag', 'disputed-tag');
+    return tag;
+}
+
+// Tags (or untags) every message whose sender's key is in keys, with the tag makeTag() draws
+// (found again by its class tagClass)
+function markSenders(keys, tagClass, makeTag) {
     document.querySelectorAll('#messageList .msg-sender').forEach(sender => {
-        const tag = sender.querySelector('.lookalike-tag');
-        const lookalike = keys.has(sender.dataset.sender);
-        if (lookalike && !tag) {
-            sender.appendChild(lookalikeTag());
-        } else if (!lookalike && tag) {
+        const tag = sender.querySelector('.' + tagClass);
+        const marked = keys.has(sender.dataset.sender);
+        if (marked && !tag) {
+            sender.appendChild(makeTag());
+        } else if (!marked && tag) {
             tag.remove();
         }
     });
 }
 
-// entries: verified roster; skipped: cards that failed to open (shown, never written to);
-// lookalikes: public keys whose name another key shares; roleControl(entry): the role control
-// for that entry, or null where this account may not change its role (RoleControl.control)
-function renderMembers({ entries, skipped, requested, lookalikes, onBefriend, roleControl }) {
+// keys: public keys whose name another key shares; tags (or untags) every message from them
+function markLookalikes(keys) {
+    markSenders(keys, 'lookalike-tag:not(.disputed-tag):not(.unrecorded-tag)', lookalikeTag);
+}
+
+// keys: public keys more than one seat claims; tags (or untags) every message from them
+function markDisputed(keys) {
+    markSenders(keys, 'disputed-tag', disputedTag);
+}
+
+// The tag on each message from a sender the full counter record did not take
+function unrecordedTag() {
+    const tag = memberTag(Errors.message(Errors.CODES.W_SENDER_NOT_RECORDED));
+    tag.classList.add('lookalike-tag', 'unrecorded-tag');
+    return tag;
+}
+
+// keys: senders the room's counter record did not take; tags (or untags) every message from them
+function markUnrecorded(keys) {
+    markSenders(keys, 'unrecorded-tag', unrecordedTag);
+}
+
+// entries: verified roster (one entry per key); skipped: cards that failed to open (shown, never
+// written to); lookalikes: public keys whose name another key shares; disputed(entry),
+// mayBefriend(entry), roleShown(entry): rooms.js's judgements, the one home of each;
+// roleControl(entry): the role control for that entry, or null where this account may not
+// change its role (RoleControl.control)
+function renderMembers({ entries, skipped, requested, lookalikes, disputed, mayBefriend, roleShown, onBefriend, roleControl }) {
     const list = document.getElementById('memberList');
     clearChildren(list);
     entries.forEach(entry => {
         const row = memberRow(entry);
-        const role = RoleControl.tag(entry.role);
+        const role = RoleControl.tag(roleShown(entry));
         if (role) row.appendChild(role);
         if (entry.mine) row.appendChild(memberTag(UI_TEXT.YOU_TAG));
         if (entry.owner) row.appendChild(memberTag(UI_TEXT.OWNER_TAG));
+        if (disputed(entry)) row.appendChild(disputedTag());
         if (lookalikes.has(entry.publicKey)) row.appendChild(lookalikeTag());
         const control = roleControl(entry);
         if (control) row.appendChild(control);
-        if (!entry.mine) {
+        if (mayBefriend(entry)) {
             const button = document.createElement('button');
             button.className = 'menu-opt member-action';
             const asked = requested.has(entry.publicKey);
@@ -959,7 +993,16 @@ function renderRoomSafety(groups) {
     });
 }
 
-// notes: [{ id, aura, from }] friend requests addressed to this member
+// What a friend request that cannot be accepted says instead (null: it can be accepted): one a
+// newer elyrn wrote, or one sent before binders (Rooms.notes)
+function noteRefusal(note) {
+    if (note.newer) return Errors.message(Errors.CODES.W_MESSAGE_FROM_NEWER);
+    if (!note.binder) return Errors.message(Errors.CODES.W_FRIEND_REQUEST_OUTDATED);
+    return null;
+}
+
+// notes: [{ id, aura, from, binder, newer }] friend requests addressed to this member; one that
+// cannot be accepted (noteRefusal) says why and offers ignore only
 function renderNotes(notes, onAccept, onIgnore) {
     const panel = document.getElementById('notesPanel');
     const list = document.getElementById('noteList');
@@ -968,15 +1011,22 @@ function renderNotes(notes, onAccept, onIgnore) {
     notes.forEach(note => {
         const row = memberRow({ aura: note.aura });
         row.appendChild(memberTag(note.from ? UI_TEXT.WANTS_FRIENDS : UI_TEXT.LEFT_WANTS_FRIENDS));
-        const accept = document.createElement('button');
-        accept.className = 'menu-opt member-action';
-        accept.textContent = UI_TEXT.ACCEPT;
-        accept.addEventListener('click', () => onAccept(note));
+        const refusal = noteRefusal(note);
+        if (refusal) {
+            const reason = memberTag(refusal);
+            reason.classList.add('lookalike-tag');
+            row.appendChild(reason);
+        } else {
+            const accept = document.createElement('button');
+            accept.className = 'menu-opt member-action';
+            accept.textContent = UI_TEXT.ACCEPT;
+            accept.addEventListener('click', () => onAccept(note));
+            row.appendChild(accept);
+        }
         const ignore = document.createElement('button');
         ignore.className = 'menu-opt';
         ignore.textContent = UI_TEXT.IGNORE;
         ignore.addEventListener('click', () => onIgnore(note));
-        row.appendChild(accept);
         row.appendChild(ignore);
         list.appendChild(row);
     });

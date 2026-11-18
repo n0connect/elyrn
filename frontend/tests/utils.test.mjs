@@ -287,3 +287,27 @@ test('the stream limits match the server\'s named heartbeats', () => {
     assert.match(events, /if !write\(sseRetryPreamble \+ ssePing\) \{/);
     assert.match(live, /const STREAM_EVENTS = Object\.freeze\(\['ping', 'msg', 'conv'\]\);/);
 });
+
+test('pollDelayMs: polls answered with a server error back off, doubling, up to the cap', () => {
+    const delay = fn('pollDelayMs');
+    const BASE = 5000;
+    const CAP = 60000;
+    assert.equal(delay(0, BASE, CAP), BASE);
+    assert.equal(delay(1, BASE, CAP), 2 * BASE);
+    assert.equal(delay(2, BASE, CAP), 4 * BASE);
+    assert.equal(delay(3, BASE, CAP), 8 * BASE);
+    assert.equal(delay(4, BASE, CAP), CAP);
+    assert.equal(delay(5000, BASE, CAP), CAP);
+    assert.equal(delay(Number.MAX_SAFE_INTEGER, BASE, CAP), CAP);
+    // Anything that is no count of answers is none
+    for (const n of [-1, 0.5, NaN, Infinity, '3', null, undefined]) assert.equal(delay(n, BASE, CAP), BASE, String(n));
+    // live-updates.js counts only 5xx answers while polling, resets on any success or stream event,
+    // and arms its watchdog with this delay
+    const live = readFileSync(new URL('../js/live-updates.js', import.meta.url), 'utf8');
+    assert.match(live, /cause\.status >= HTTP_STATUS\.SERVER_ERROR\) \{\n\s+serverErrors\+\+;/);
+    assert.match(live, /pollTimer = setTimeout\(watchStream, pollDelayMs\(serverErrors, POLL_INTERVAL_MS, POLL_BACKOFF_MAX_MS\)\);/);
+    for (const reset of ['function endOutage', 'function noteStreamEvent', 'function stop']) {
+        const at = live.indexOf(reset);
+        assert.match(live.slice(at, live.indexOf('\n        }\n', at)), /serverErrors = 0;/, reset);
+    }
+});

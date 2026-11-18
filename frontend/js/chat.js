@@ -40,7 +40,8 @@ const Chat = (() => {
     let listGeneration = 0;
     // The event stream and the watchdog behind it (live-updates.js): they say when to catch up
     const live = LiveUpdates.create({
-        api, loggedIn: () => me !== null, catchUp, onMessage: messageArrived, onConversations: scheduleRefresh
+        api, loggedIn: () => me !== null, catchUp, onMessage: messageArrived, onConversations: scheduleRefresh,
+        sameIdentity: data => me !== null && sameIdentity(data, me.publicKey), identityLost
     });
 
     // ---------- plumbing ----------
@@ -54,12 +55,25 @@ const Chat = (() => {
     }
 
     function sessionLost() {
-        if (!me) return;
+        endSession(Errors.CODES.W_SESSION_ENDED);
+    }
+
+    // A /me answered on a reconnect or on return from the back-forward cache named another public
+    // key than this device's (live-updates.js): the identity goes as on a refused login (auth.js
+    // enterApp), and every session of the account is ended at the server
+    function identityLost() {
+        if (endSession(Errors.CODES.E_IDENTITY_MISMATCH)) apiCall('POST', '/logout');
+    }
+
+    // Server-driven: the identity goes, the replay records stay (Keystore.wipeIdentity). Returns
+    // whether a session was ended (false when none was running).
+    function endSession(code) {
+        if (!me) return false;
         stop();
-        // Server-driven: the identity goes, the replay records stay (Keystore.wipeIdentity)
         Keystore.wipeIdentity();
-        Errors.report(Errors.CODES.W_SESSION_ENDED);
+        Errors.report(code);
         showLogin();
+        return true;
     }
 
     function isSeq(value) {
@@ -305,6 +319,8 @@ const Chat = (() => {
             myMaxN: 0,                  // this device's highest counter here: never spent twice
             spare: 0,                   // a counter taken for a send the server refused: taken again next
             ledger: Counters.ledger(Counters.EMPTY),  // senders' counters in the loaded sequence
+            unrecorded: new Set(),      // senders the full counter record did not take (counter-records.js)
+            recordFullWarned: false,    // that the record is full was said this session
             // the last record saved (kept in memory when storage fails), or the one kept when this
             // conversation was dropped from the session earlier (parked)
             mark: CounterRecords.parkedMark(item.id) || Counters.EMPTY,
@@ -526,7 +542,11 @@ const Chat = (() => {
         // Says hello only to a conversation that loaded and holds nothing (and replaces a retry)
         renderEmptyConversation(me.ttlDays, conv.room);
         if (first) setEarlierControl(conv.earlier, false);
-        if (conv.room) checkLookalikes(conv);
+        if (conv.room) {
+            checkLookalikes(conv);
+            checkDisputes(conv);
+            checkUnrecorded(conv);
+        }
         noteNewer(conv, conv.maxSeq);
         conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
         await markRead(conv);
@@ -610,7 +630,11 @@ const Chat = (() => {
         conv.firstSeq = page.first || before;
         conv.earlier = mayHaveEarlier(result.data.messages.length, page.first);
         prependMessages(page.fresh);
-        if (conv.room) checkLookalikes(conv);
+        if (conv.room) {
+            checkLookalikes(conv);
+            checkDisputes(conv);
+            checkUnrecorded(conv);
+        }
         setEarlierControl(conv.earlier, false);
     }
 
@@ -656,7 +680,7 @@ const Chat = (() => {
             // Off the roster, yet a lookalike all the same: its name is compared too
             conv.room.outsiders.set(plain.sender, { publicKey: plain.sender, aura: aura });
         }
-        return Object.assign(message, { from: aura, left: !entry, role: entry ? entry.role : '' });
+        return Object.assign(message, { from: aura, left: !entry, role: Rooms.roleShown(entry), disputed: Rooms.disputed(entry) });
     }
 
     // Judges an authenticated message's counter on a ledger (counters.js), the same way for pairs
@@ -775,7 +799,7 @@ const Chat = (() => {
         } else if (result.status === HTTP_STATUS.NOT_FOUND) {
             scheduleRefresh();
         } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
-            Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, result);
+            Errors.report(refusalCode(result, Errors.CODES.E_MESSAGE_NOT_SENT), null, result);
         }
     }
 
@@ -820,6 +844,13 @@ const Chat = (() => {
         return result.status >= HTTP_STATUS.BAD_REQUEST && result.status < HTTP_STATUS.SERVER_ERROR && (result.status !== HTTP_STATUS.CONFLICT || Errors.idTaken(result));
     }
 
+    // A refusal the server explained with a sentence of its own that says what to do (the room
+    // seat this page sends under is stale: E_SENDER_CARD_MISMATCH), else fallback
+    function refusalCode(result, fallback) {
+        const said = Errors.fromResult(result);
+        return said === Errors.CODES.E_SENDER_CARD_MISMATCH ? said : fallback;
+    }
+
     function sealAttempt(conv, attempt) {
         if (conv.room) {
             return Rooms.seal({ conv, id: attempt.id, text: attempt.text, counter: attempt.counter, file: attempt.file });
@@ -834,7 +865,7 @@ const Chat = (() => {
     // ---------- pairing ----------
 
     // Pays for an invite with a proof of work (as registration does) and builds its code.
-    // Returns { code, expiresAt }, or null once the reason has been shown.
+    // Returns { code, token, expiresAt }, or null once the reason has been shown.
     async function requestInvite(owner) {
         const issued = await api('GET', '/pow/challenge');
         if (me !== owner) return null;
@@ -859,6 +890,7 @@ const Chat = (() => {
         try {
             return {
                 code: await ElyrnCrypto.buildInviteCode(result.data.token, owner.publicKey),
+                token: result.data.token,
                 expiresAt: result.data.expires_at
             };
         } catch (e) {
@@ -929,9 +961,11 @@ const Chat = (() => {
         await open(id);
     }
 
-    // Redeems an invite and checks the peer key against its fingerprint. Returns the new
-    // conversation id, or null once the reason has been shown.
-    async function redeemInvite(invite) {
+    // Redeems an invite and checks the peer key against its fingerprint and, for a friend request,
+    // against the request's binder (bound(creatorKey) resolves to whether it matches). A key that
+    // fails either check burns the conversation it opened. Returns the new conversation id, or
+    // null once the reason has been shown.
+    async function redeemInvite(invite, bound) {
         if (await ElyrnCrypto.fingerprintMatches(invite, me.publicKey)) {
             Errors.report(Errors.CODES.W_OWN_INVITE);
             return null;
@@ -952,12 +986,22 @@ const Chat = (() => {
         }
         // The server chose which key we got; the invite code says which key we should get
         if (!(await ElyrnCrypto.fingerprintMatches(invite, conv.peer_public_key))) {
-            await api('DELETE', `/conversations/${conv.id}`);
-            Errors.report(Errors.CODES.E_PEER_KEY_SUBSTITUTED);
+            await burnRefused(conv.id, Errors.CODES.E_PEER_KEY_SUBSTITUTED);
+            return null;
+        }
+        // A friend request's binder says whether that key's account sent the request
+        if (bound && !(await bound(conv.peer_public_key))) {
+            await burnRefused(conv.id, Errors.CODES.E_FRIEND_REQUEST_RELAYED);
             return null;
         }
         showSuccess(Errors.NOTICE.CONNECTED);
         return conv.id;
+    }
+
+    // A conversation a redeem opened with a peer that failed a check: burned, and code reported
+    async function burnRefused(id, code) {
+        await api('DELETE', `/conversations/${id}`);
+        Errors.report(code);
     }
 
     // ---------- rooms ----------
@@ -979,11 +1023,34 @@ const Chat = (() => {
             return false;
         }
         checkLookalikes(conv);
+        checkDisputes(conv);
         if (activeId === conv.id) {
             renderRoomHeader(conv.room);
-            RoleControl.markBubbles(new Map(conv.room.roster.map(entry => [entry.publicKey, entry.role])));
+            RoleControl.markBubbles(new Map(conv.room.roster.map(entry => [entry.publicKey, Rooms.roleShown(entry)])));
         }
         return true;
+    }
+
+    // Senders the full counter record did not take (counters.js THE SENDER BOUND): each of their
+    // messages is tagged, and the room says once per session that its record is full
+    function checkUnrecorded(conv) {
+        if (activeId !== conv.id) return;
+        markUnrecorded(conv.unrecorded);
+        if (conv.unrecorded.size === 0 || conv.recordFullWarned) return;
+        conv.recordFullWarned = true;
+        Errors.report(Errors.CODES.W_COUNTER_RECORD_FULL);
+    }
+
+    // Keys more than one seat claims (Rooms.disputed): tagged wherever shown; the room warns once
+    // per session, and the member whose own key it is is told so plainly instead
+    function checkDisputes(conv) {
+        const room = conv.room;
+        if (activeId !== conv.id) return;
+        const disputed = Rooms.disputedEntries(room);
+        markDisputed(new Set(disputed.map(entry => entry.publicKey)));
+        if (disputed.length === 0 || room.disputeWarned) return;
+        room.disputeWarned = true;
+        Errors.report(disputed.some(entry => entry.mine) ? Errors.CODES.W_OWN_SEAT_DISPUTED : Errors.CODES.W_ROOM_SEATS_DISPUTED);
     }
 
     // Different keys under one name: one of them may have been ground to pass as the other.
@@ -1020,7 +1087,8 @@ const Chat = (() => {
         if (activeId !== conv.id || !conv.room.roster) return;
         renderMembers({
             entries: conv.room.roster, skipped: conv.room.skipped, requested: conv.room.requested,
-            lookalikes: conv.room.lookalikes, onBefriend: entry => befriend(conv, entry),
+            lookalikes: conv.room.lookalikes, disputed: Rooms.disputed, mayBefriend: Rooms.mayBefriend,
+            roleShown: Rooms.roleShown, onBefriend: entry => befriend(conv, entry),
             roleControl: entry => RoleControl.control({
                 room: conv.room, entry, save: text => saveRole(conv, entry, text), rerender: () => renderMemberList(conv)
             })
@@ -1170,12 +1238,17 @@ const Chat = (() => {
 
     async function befriendNow(conv, entry) {
         if (!me) return;
+        // The control is not offered for a disputed member; a roster refresh may have made one
+        if (!Rooms.mayBefriend(entry)) {
+            Errors.report(Errors.CODES.W_ROOM_SEATS_DISPUTED);
+            return;
+        }
         const owner = me;
         showSuccess(Errors.NOTICE.FRIEND_REQUEST_PREPARING);
         try {
             const invite = await requestInvite(owner);
             if (!invite || me !== owner) return;
-            const result = await Rooms.befriend(api, conv, entry, invite.code);
+            const result = await Rooms.befriend({ api, conv, entry, invite, accountKey: owner.privateKey });
             if (result.status === HTTP_STATUS.CREATED) {
                 conv.room.requested.add(entry.publicKey);
                 showSuccess(Errors.notice(Errors.NOTICE.FRIEND_REQUEST_SENT, { name: entry.aura.name }));
@@ -1184,7 +1257,7 @@ const Chat = (() => {
             } else if (result.status === HTTP_STATUS.NOT_FOUND) {
                 Errors.report(Errors.CODES.W_FRIEND_GONE);
             } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
-                Errors.report(Errors.CODES.E_FRIEND_REQUEST_NOT_SENT, null, result);
+                Errors.report(refusalCode(result, Errors.CODES.E_FRIEND_REQUEST_NOT_SENT), null, result);
             }
         } catch (e) {
             if (me === owner) Errors.report(powFailureCode(e, Errors.CODES.E_FRIEND_REQUEST_NOT_SENT), null, e);
@@ -1199,20 +1272,41 @@ const Chat = (() => {
         return 'note-' + note.id;
     }
 
-    // Accepting redeems the invite inside the note, with the usual fingerprint check
+    // Accepting redeems the invite inside the note, with the usual fingerprint check and the
+    // binder check (Rooms.binderMatches). A request without a binder (sent before binders) or
+    // from a newer elyrn is never redeemed: its invite stays unspent, and it can only be ignored.
     function acceptNote(conv, note) {
         return once(noteKey(note), () => acceptNoteNow(conv, note));
     }
 
     async function acceptNoteNow(conv, note) {
+        if (note.newer) {
+            Errors.report(Errors.CODES.W_MESSAGE_FROM_NEWER);
+            return;
+        }
+        if (!note.binder) {
+            Errors.report(Errors.CODES.W_FRIEND_REQUEST_OUTDATED);
+            return;
+        }
         const validation = validateInviteCode(note.invite);
         if (!validation.valid) {
             Errors.report(Errors.CODES.E_FRIEND_REQUEST_MALFORMED);
             await dismissNote(conv, note);
             return;
         }
-        const id = await redeemInvite(validation.sanitized);
-        if (!id || !me) return;
+        const invite = validation.sanitized;
+        let relayed = false;
+        const bound = async creatorKey => {
+            relayed = !(await Rooms.binderMatches({ conv, note, token: invite.token, creatorKey }));
+            return !relayed;
+        };
+        const id = await redeemInvite(invite, bound);
+        if (!id) {
+            // A relayed request's invite is spent and its conversation burned: it is not offered again
+            if (relayed && me) await dismissNote(conv, note);
+            return;
+        }
+        if (!me) return;
         listGeneration++;
         await Rooms.dismissNote(api, conv, note.id);
         showSuccess(Errors.NOTICE.FRIENDS_NOW);

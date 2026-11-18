@@ -45,9 +45,10 @@ const OFFSCREEN_LEFT = '-999999px';
 // A room or invite code is copied for the user to paste elsewhere: after this long it is cleared
 // from the clipboard (clearClipboardLater), if the clipboard still holds it
 const CLIPBOARD_CLEAR_DELAY_MS = 120000;
-// The longest a Clipboard API write may take: one in an unfocused tab can wait forever, which
-// would hold every step after a copy (registration's continue among them). Past it the write
-// counts as failed and the selection fallback (copyBySelection) is tried.
+// The longest a Clipboard API write or read may take: one in an unfocused tab can wait forever,
+// which would hold every step after a copy (registration's continue among them). Past it a copy
+// counts as failed and the selection fallback (copyBySelection) is tried; a clear counts as failed
+// and the user is told (clearClipboardOrWarn).
 const CLIPBOARD_WRITE_TIMEOUT_MS = 3000;
 // The error name of a write that did not settle in time, like TimeoutError for a request
 const CLIPBOARD_TIMEOUT = 'ClipboardTimeout';
@@ -106,24 +107,41 @@ function noteUserCopy() {
     lastCopied = document.getSelection ? String(document.getSelection()) : null;
 }
 
-// Best effort, never throws: empties the clipboard if it still holds value. Where the browser
-// lets the page read the clipboard without asking, its content is compared; otherwise value must
-// still be the last thing copied in this page. A page without focus may not write the clipboard;
-// that is logged, never shown.
+// Tries to empty the clipboard if it still holds value. Where the browser lets the page read the
+// clipboard without asking, its content is compared; otherwise value must still be the last thing
+// copied in this page (something copied since, here or as far as the page can tell, is left
+// alone). A page without focus may refuse the write, and an unfocused tab's write may never
+// settle: each read and write is bounded by CLIPBOARD_WRITE_TIMEOUT_MS. Never throws; resolves to
+// null when nothing is left to clear, or to why a clear that was due failed (a refusal, a write
+// that did not settle in time, or no Clipboard API to clear with): value may then still be in the
+// clipboard, and clearClipboardOrWarn tells the user.
 async function clearClipboardIfHolds(value) {
-    if (!navigator.clipboard || !window.isSecureContext || lastCopied !== value) return;
+    if (lastCopied !== value) return null;
     try {
-        if (await clipboardReadable() && await navigator.clipboard.readText() !== value) return;
-        await navigator.clipboard.writeText('');
+        if (!navigator.clipboard || !window.isSecureContext) throw new Error('no clipboard to clear');
+        if (await clipboardReadable() &&
+            await withinTime(navigator.clipboard.readText(), CLIPBOARD_WRITE_TIMEOUT_MS) !== value) {
+            lastCopied = null;
+            return null;
+        }
+        await withinTime(navigator.clipboard.writeText(''), CLIPBOARD_WRITE_TIMEOUT_MS);
         lastCopied = null;
+        return null;
     } catch (error) {
-        Log.warn(Errors.INTERNAL.W_CLIPBOARD_NOT_CLEARED, error);
+        return error;
     }
+}
+
+// clearClipboardIfHolds, and a clear that failed is reported with what to do about it
+// (W_CLIPBOARD_NOT_CLEARED): the account number, invite codes and room codes alike
+async function clearClipboardOrWarn(value) {
+    const failure = await clearClipboardIfHolds(value);
+    if (failure) Errors.report(Errors.CODES.W_CLIPBOARD_NOT_CLEARED, null, failure);
 }
 
 // The same, CLIPBOARD_CLEAR_DELAY_MS from now
 function clearClipboardLater(value) {
-    setTimeout(() => clearClipboardIfHolds(value), CLIPBOARD_CLEAR_DELAY_MS);
+    setTimeout(() => clearClipboardOrWarn(value), CLIPBOARD_CLEAR_DELAY_MS);
 }
 
 // Whether reading the clipboard is already granted: a read that would ask the user is never made
@@ -195,6 +213,15 @@ function isPageVisible() {
 function streamNeedsPolling({ now, lastEventAt, silenceLimitMs, visible, loggedIn, lastPollAt, hiddenIntervalMs }) {
     if (loggedIn !== true || provenWithin(now, lastEventAt, silenceLimitMs)) return false;
     return visible === true || !provenWithin(now, lastPollAt, hiddenIntervalMs);
+}
+
+// How long the polling watchdog waits before its next look after `serverErrors` polls in a row
+// were answered with a server error (5xx): baseMs, doubled per such answer, never more than maxMs.
+// Anything that is not a count of answers counts as none (the base interval).
+function pollDelayMs(serverErrors, baseMs, maxMs) {
+    const n = Number.isSafeInteger(serverErrors) && serverErrors > 0 ? serverErrors : 0;
+    // 2 ** n overflows to Infinity for a huge n; Math.min then still gives maxMs
+    return Math.min(maxMs, baseMs * 2 ** n);
 }
 
 // True when `at` provably lies less than limitMs before now

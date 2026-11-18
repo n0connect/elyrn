@@ -179,6 +179,8 @@ When storage fails, the page says so once: *"this browser is not keeping anythin
 
 In Safari (WebKit) before this was fixed, every reload opened on the main menu with no warning: WebKit stores the identity's X25519 key in IndexedDB without error and cannot read it back. Such a browser now keeps the identity in its sealed form ([Cryptography](../security/cryptography.md#3-the-identity-kept-across-reloads-indexeddb)); a record written by an older version is still unreadable, so the first reload after the update opens logged out once (the console shows `W_IDENTITY_UNREADABLE`) and the next login replaces it. A browser that can keep neither form says so after login: *"this browser cannot keep your identity — you will need your account number after a reload"*.
 
+A reload keeps the stored identity whatever the server answers its `/me` check, except a `401` (the session is gone) or another public key than this device's: a busy server (`429`), a `404`, any `5xx` or no answer shows that answer's sentence on the main menu with **retry**, and nothing is wiped.
+
 ### Handling
 - If privacy settings block IndexedDB, keep your 43-character `AccountNumber` copied in a password manager.
 - You can log back in at any time: the derived keys and conversations will be restored.
@@ -245,6 +247,18 @@ Sessions saved before rooms existed do not hold the rooms key; logging in once m
 - *"too many role changes — wait a moment"*: the role rate bucket is spent (`429`).
 - A role that was set shows as nothing: it did not open for this room and member, or its text breaks the role rule (logged as `W_ROLE_UNREADABLE`, never its text). Only the members of the room can set roles; a server can at most show an older role of the same member.
 
+### "two seats claim this identity"
+Two cards of the member list open to one member's key: someone holding the room code took a seat with a card carrying that member's key ([rooms](../architecture/rooms.md#disputed-seats)). The member is shown once, with no role, and cannot be befriended or given a role until one seat leaves; the room says so once per session (*"two seats in this room claim one identity — …"*), and the member whose key it is reads *"another seat in this room claims to be you — …"*. Compare the room safety number with the others on another channel; the owner can burn the room and open a new one with a fresh code.
+
+### "replay protection is not kept for this sender on this device"
+This device's replay record for the room is full (4096 senders, far more than a room's seats): a sender new to it who is not a member is not recorded, so a replay of its messages after a reload would not be caught on this device. The room says so once per session (*"this room's replay record on this device is full — …"*). Members, your own messages and every sender recorded earlier stay protected. So many senders mean someone sent under keys of their own making; a server of this release refuses that (`400 Sender card mismatch`).
+
+### Friend requests
+- *"this request did not come from the member who sent it — the conversation it opened was burned"*: the request's binder did not match the account that created its invite: another member relayed someone else's invite. The conversation it opened was burned at once and the request removed.
+- *"sent by an older elyrn and cannot be checked — ignore it and ask them to send a new request"*: the request has no binder (its sender's page is older than binders). Only **ignore** is offered; ask them to reload and send it again.
+- *"sent by a newer elyrn; reload this page to read it"* in place of a request: this page is older than the sender's. Reload.
+- A request you sent never shows up on the other side: their page may be older than binders, which drops such a request unread; ask them to reload.
+
 ---
 
 ## 11. Sign-in, Sending and Outages
@@ -269,11 +283,14 @@ own text is never shown.
 | the chosen file shows another name, `file-` and eight letters and digits | Every file is sent under such a name (with its extension when it is short and plain): the name you gave it never leaves your device. | Nothing; tell the other side what it is if they need to know. |
 | *"this file is delivered exactly as it is. …"* under every chosen file | elyrn. never reads, cleans or changes a file: photos and documents keep their location, device, author and time, and the file can be recognised wherever the same file turns up. This is said every time and cannot be turned off. | Remove what should not go with your own tools before choosing the file, or do not send it. |
 | a received file has only **save** | elyrn. never opens or previews a file; it hands the exact bytes to your browser. A received file is whatever another member chose to send. | Open it only if you trust it, with a program you trust. |
+| *"could not clear the clipboard — copy something else to overwrite it"* | elyrn. tried to clear the account number, an invite or a room code from the clipboard (on continue, or two minutes after a code was copied) and the browser refused the write or did not answer within 3 seconds (a tab without focus). | Copy something harmless to overwrite it; clear your clipboard history if your system keeps one. |
+| *"the server holds another member card for you in this room — nothing was sent; reload the page, then send again"* | `400 Sender card mismatch`: this page sent under a card the server does not hold for your seat (its view of the member list is stale). | Reload the page, then send again. |
 | *"this browser did not copy your account number — select it, copy it by hand and keep it safe, then press continue"* | The clipboard refused the copy, or did not answer within 3 seconds (a tab without focus can wait forever). The number stays on screen. | Select the number, copy it by hand, keep it, then press continue. |
 | *"the file could not be read — it may have changed or moved; choose it again"* | The file changed, moved or vanished on disk while the browser read it. | Choose it again. |
 | *"the file stopped uploading — check your connection, then press send again to continue"* / *"the server is busy — press send again in a moment to continue the upload"* | A part got no answer, or a server error, three times. The parts already stored stay. | Press send again: the upload continues where it stopped (same file id), while the page stays open. |
 | *"the server lost track of this upload — press send again to upload the file afresh"* | `409 Id taken` or `File part out of order` (part 0 expired or was never stored). | Press send again: the file goes again under a new id. |
 | *"you have sent as many files today as this server allows — try again tomorrow"* / *"too many new files at once — …"* | `429 File budget spent` (`FILE_ACCOUNT_DAILY_BYTES`) or the `file` rate bucket. | Wait. |
+| *"you already hold your share of this conversation's files — …"* | `507 File share reached`: the files you sent in this conversation fill your share of its quota (the quota divided by its seats). | Send it once some of yours have expired. |
 | *"this conversation holds as many files as the server allows — …"* / *"the server has no room for files right now — …"* | `507 File quota reached` (`FILE_CONVERSATION_QUOTA_BYTES`) or `507 File store full` (`FILE_STORE_MAX_BYTES`). | Wait for older files to expire; the operator can raise the limits. |
 | *"this conversation is gone (burned, expired or left) — the file was not sent"* | `404` during the upload: the room expired or the conversation was burned or left meanwhile. | Nothing to do: no message was sent. |
 | *"this file is no longer available — …"* | A part answered `404`: it expired with the messages' day rule, or its conversation lost it. | Ask the sender to send it again. |
@@ -287,7 +304,10 @@ own text is never shown.
 Every screen before login (login, new identity, the robot side) has a way back: its
 **← back to main menu** button (**← back to the human door** on the robot entrance), the brand
 title, or Escape. Leaving registration stops its proof of work and clears the account number from
-the screen and, when the page put it there, from the clipboard.
+the screen and, when the page put it there, tries to clear it from the clipboard (and says so when
+it could not). Leaving login while a login runs abandons it: nothing is saved and the app does not
+open; the number is never shown in clear while logging in, whether login was pressed with the
+pointer or with Enter.
 
 ---
 

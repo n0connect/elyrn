@@ -49,6 +49,13 @@ const ElyrnCrypto = (() => {
     const FILE_KEY = 'f';
     const FILE_FIELDS = Object.freeze(['i', 'k', 's', 'h', 'n']);
     const KNOWN_KEYS = Object.freeze([...PAYLOAD_KEYS, FILE_KEY]);
+    // A friend request (a room note, room-crypto.js sealNote) also carries BINDER_KEY: the binder
+    // that ties its invite to the member who sent it (32 bytes, base64url; docs/architecture/rooms.md,
+    // Friend Requests). Only a note's reader accepts it (decodePayload's { binder: true }); to any
+    // other reader, and to a browser from before binders, it is a key a newer elyrn wrote.
+    const BINDER_KEY = 'b';
+    const BINDER_BYTES = 32;
+    const NOTE_KEYS = Object.freeze([...KNOWN_KEYS, BINDER_KEY]);
     // The largest file any server may allow (backend/internal/config MaxFileBytesBound): a size
     // past it is refused whatever this server's file_max_bytes says
     const MAX_FILE_BYTES_BOUND = 104857600;
@@ -367,26 +374,37 @@ const ElyrnCrypto = (() => {
         }
     }
 
-    function payloadBytes({ text, sentAt, counter, file }) {
+    function payloadBytes({ text, sentAt, counter, file, binder }) {
         const payload = { t: text, ts: sentAt, n: counter };
         if (file) payload[FILE_KEY] = fileWire(file);
+        if (binder !== undefined) payload[BINDER_KEY] = binderWire(binder);
         return encoder.encode(JSON.stringify(payload));
     }
 
-    // The framed payload both conversation kinds encrypt: { text, sentAt, counter, file? }
-    function encodePayload({ text, sentAt, counter, file }) {
+    // The wire form of a binder: exactly BINDER_BYTES bytes, or nothing is written
+    function binderWire(binder) {
+        if (Object.prototype.toString.call(binder) !== '[object Uint8Array]' || binder.length !== BINDER_BYTES) {
+            throw new Error('invalid binder');
+        }
+        return b64urlEncode(binder);
+    }
+
+    // The framed payload both conversation kinds encrypt: { text, sentAt, counter, file?, binder? }
+    // (binder: a friend request's only)
+    function encodePayload({ text, sentAt, counter, file, binder }) {
         if (!Number.isSafeInteger(counter) || counter < 1 || typeof text !== 'string') {
             throw new Error('invalid payload');
         }
-        return frame(payloadBytes({ text, sentAt, counter, file }));
+        return frame(payloadBytes({ text, sentAt, counter, file, binder }));
     }
 
-    // Accepts exactly {t, ts, n} or exactly {t, ts, n, f} with a valid f; the caller wipes
-    // `plain`. A well-formed frame holding an object with valid t, ts and n plus keys this build
-    // does not know was written by a newer elyrn: it throws a NEWER_PAYLOAD error
-    // (isNewerPayload); anything else that fails, an invalid f included, throws 'bad payload'.
-    // Returns { text, sentAt, counter, file } (file null when there is none).
-    function decodePayload(plain) {
+    // Accepts exactly {t, ts, n} or exactly {t, ts, n, f} with a valid f, and for a note's reader
+    // (options.binder) also a valid b beside them; the caller wipes `plain`. A well-formed frame
+    // holding an object with valid t, ts and n plus keys this reader does not know was written by a
+    // newer elyrn: it throws a NEWER_PAYLOAD error (isNewerPayload); anything else that fails, an
+    // invalid f or b included, throws 'bad payload'. Returns { text, sentAt, counter, file, binder }
+    // (file and binder null when there is none).
+    function decodePayload(plain, options) {
         const parsed = JSON.parse(decoder.decode(unframe(plain)));
         const has = (key) => Object.prototype.hasOwnProperty.call(parsed, key);
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) || !PAYLOAD_KEYS.every(has) ||
@@ -394,7 +412,8 @@ const ElyrnCrypto = (() => {
             !Number.isSafeInteger(parsed.n) || parsed.n < 1 || parsed.n > MAX_COUNTER) {
             throw new Error('bad payload');
         }
-        if (Object.keys(parsed).some(key => !KNOWN_KEYS.includes(key))) {
+        const known = options && options.binder === true ? NOTE_KEYS : KNOWN_KEYS;
+        if (Object.keys(parsed).some(key => !known.includes(key))) {
             const newer = new Error('payload from a newer elyrn');
             newer.name = NEWER_PAYLOAD;
             throw newer;
@@ -403,7 +422,12 @@ const ElyrnCrypto = (() => {
         if (has(FILE_KEY) && !file) {
             throw new Error('bad payload');
         }
-        return { text: parsed.t, sentAt: parsed.ts, counter: parsed.n, file: file };
+        let binder = null;
+        if (has(BINDER_KEY)) {
+            if (!isEncoded(parsed[BINDER_KEY], BINDER_BYTES)) throw new Error('bad payload');
+            binder = b64urlDecode(parsed[BINDER_KEY], BINDER_BYTES);
+        }
+        return { text: parsed.t, sentAt: parsed.ts, counter: parsed.n, file: file, binder: binder };
     }
 
     // Whether error is decodePayload's verdict on a payload a newer elyrn wrote
@@ -594,6 +618,8 @@ const ElyrnCrypto = (() => {
         PAD_BLOCK,
         MAX_FRAME_BYTES,
         MAX_FILE_BYTES_BOUND,
+        BINDER_BYTES,
+        INVITE_TOKEN_BYTES,
         INVITE_PREFIX,
         INVITE_PREFIXES,
         // base64 spends four characters per three bytes

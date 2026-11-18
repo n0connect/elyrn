@@ -189,14 +189,16 @@ test('`mine` flags that lie: another\'s card marked mine is refused; my own card
     await assert.rejects(Rooms.loadRoster(apiCall, conv), { message: 'roster does not match this room' });
 });
 
-test('cards that are invites, room codes, account numbers, markup or duplicates are skipped and counted', async () => {
+test('cards that are invites, room codes, account numbers or markup are skipped and counted; a card served twice is a disputed seat', async () => {
     const { conv, me, others, code } = await roomFixture(R.MAX_MEMBERS);
     const junk = [C.INVITE_PREFIX + ACCOUNT_B, R.buildRoomCode(code), ACCOUNT_C, ...MARKUP.slice(0, 2)];
     serve(OK, { success: true, members: [card(me, true), card(others[0]), card(others[0]),
         ...junk.map(text => ({ card: text, mine: false, owner: false, role: '' })), { ...card(others[1]), extra: MARKUP[0] }] });
     const roster = await Rooms.loadRoster(apiCall, conv);
     assert.deepEqual([...roster].map(entry => entry.publicKey).sort(), [me.publicKey, others[0].publicKey, others[1].publicKey].sort());
-    assert.equal(conv.room.skipped, 1 + junk.length);
+    assert.equal(conv.room.skipped, junk.length);
+    // Two seats announce one key: shown once, as disputed (room-trust.test.mjs)
+    assert.equal(Rooms.disputed(roster.find(entry => entry.publicKey === others[0].publicKey)), true);
     // Every card served counts toward the seats the code allows
     assert.equal(conv.room.members, 4 + junk.length);
 });
@@ -412,14 +414,18 @@ test('befriend: a 409 "Id taken" seals and sends again once under a fresh id; a 
     serve(OK, { success: true, members: [card(me, true), card(others[0])] });
     await Rooms.loadRoster(apiCall, conv);
     const entry = conv.room.roster.find(e => !e.mine);
-    const invite = C.INVITE_PREFIX + ACCOUNT_B;
+    // A's own invite (its token and code) and A's account key, which binds the request (A4)
+    const token = C.b64urlEncode(new Uint8Array(16).fill(1));
+    const identity = await C.deriveIdentity(ACCOUNT_A);
+    const invite = { token, code: await C.buildInviteCode(token, identity.publicKey) };
+    const befriend = () => Rooms.befriend({ api: apiCall, conv, entry, invite, accountKey: identity.privateKey });
     const posted = (from) => server.requests.slice(from).map(r => JSON.parse(r.body));
 
     // Taken once: a second note under another id, then the server's answer to it
     let calls = 0;
     server.answer(() => (++calls === 1 ? { status: 409, body: ID_TAKEN } : { status: 201, body: { success: true } }));
     let from = server.requests.length;
-    assert.equal((await Rooms.befriend(apiCall, conv, entry, invite)).status, 201);
+    assert.equal((await befriend()).status, 201);
     let bodies = posted(from);
     assert.equal(bodies.length, 2);
     assert.notEqual(bodies[0].id, bodies[1].id);
@@ -428,7 +434,7 @@ test('befriend: a 409 "Id taken" seals and sends again once under a fresh id; a 
     // Taken twice: no third attempt, and the answer is the refusal
     serve(409, ID_TAKEN);
     from = server.requests.length;
-    const twice = await Rooms.befriend(apiCall, conv, entry, invite);
+    const twice = await befriend();
     assert.equal(twice.status, 409);
     assert.equal(Errors.idTaken(twice), true);
     assert.equal(posted(from).length, 2);
@@ -436,7 +442,7 @@ test('befriend: a 409 "Id taken" seals and sends again once under a fresh id; a 
     // The plain-text 409 (a note already waits for them) is not an id taken: one attempt only
     server.answer(() => ({ status: 409, text: 'Conflict\n', type: 'text/plain; charset=utf-8' }));
     from = server.requests.length;
-    const waiting = await Rooms.befriend(apiCall, conv, entry, invite);
+    const waiting = await befriend();
     assert.equal(waiting.status, 409);
     assert.equal(Errors.idTaken(waiting), false);
     assert.equal(posted(from).length, 1);

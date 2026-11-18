@@ -187,7 +187,7 @@ card  = nonce || AES-256-GCM(card key,  member public key, AAD "NADC" || 0x01 ||
 vault = nonce || AES-256-GCM(vault key, S || max_members || expires_hour, AAD "NADV" || 0x01 || room id)   (65 bytes)
 ```
 
-The member key differs per room, so nothing links an account's presence in two rooms. A client keeps using the card stored when it joined: cards are sealed under a random nonce, so a re-derived card differs in bytes.
+The member key differs per room, so nothing links an account's presence in two rooms. A client keeps using the card stored when it joined: cards are sealed under a random nonce, so a re-derived card differs in bytes. A card proves the code, not the key it carries: two served cards that open to one key make that key *disputed* (no role, no friend request, counted in the room safety number; [rooms](../architecture/rooms.md#disputed-seats)).
 
 ### 3. Message (`NADR` v1; a note is the same with `NADN` and exactly one wrap)
 
@@ -209,7 +209,27 @@ roster digest = SHA-256("noaddx/room/roster/v1" || cards as served, sorted by by
 - The wrap's AAD hashes header and body, so a member who learned `mk` cannot swap the body under genuine wraps.
 - The commitment makes `mk` binding: AES-GCM alone is not key-committing.
 - Every AES-GCM key in a message seals exactly one plaintext, hence the zero nonces.
-- The server checks only the structure (magic, version, 1 to 32 wraps, one of the five frame sizes) and the roster digest; it opens nothing.
+- The server checks only the structure (magic, version, 1 to 32 wraps, one of the five frame sizes), the roster digest, and that the sender card in the header is byte for byte the sending member's stored card (`400 Sender card mismatch`); it opens nothing.
+
+### 3a. Friend request binder (in a note's payload, `"b"`)
+
+```text
+binder = HKDF-SHA256(ikm  = X25519(requester account private key, addressee room public key),
+                     salt = room id (16),
+                     info = "noaddx/room/befriend/v1" || invite token (16) || requester room public key (32)
+                            || addressee room public key (32),
+                     32 bytes)
+note payload = {"t": invite code, "ts": sender clock, "n": 1, "b": base64url(binder)}
+```
+
+The addressee recomputes it as `HKDF(X25519(own room private key, C), ...)` once the redeem answer
+names the invite's creator account key `C` (already checked against the invite's fingerprint), with
+the note's authenticated sender room key as the requester's, and accepts only on equality
+(constant time). A member relaying another account's invite cannot produce it. On a mismatch the
+new conversation is burned (`E_FRIEND_REQUEST_RELAYED`). `"b"` is accepted only by a note's
+reader: anywhere else, and to a build from before binders, it is a key of a newer elyrn. The
+browser only (the agent has no friend requests); the X25519 private keys stay non-extractable
+WebCrypto keys used for `deriveBits` only.
 
 Both implementations (`frontend/js/room-crypto.js`, `backend/internal/e2e/room.go`) open each other's vectors in their test suites.
 
@@ -327,7 +347,12 @@ Because users have no usernames, `elyrn.` shows display values derived from publ
    as a big-endian number, mod 100000). Both sides see the same 30 digits; compare them on another
    channel, then **mark as verified**.
 3. **Room safety number:** the same six groups over `SHA-256("noaddx/room/safety/v1" || every
-   member key, sorted by bytes)`. Equal digits mean equal member lists.
+   distinct member key, sorted by bytes [|| "noaddx/room/seats/v1" || u32be(seats)])`, where
+   `seats` is the number of cards served (every row of the member list) and the bracketed part is
+   appended only when it differs from the number of distinct keys. Equal digits mean equal member
+   lists, seats included: a room where a code holder took a seat under another member's key shows
+   other digits than the room without that seat, while a room with one card per key keeps the
+   digits it always had.
 
 ---
 

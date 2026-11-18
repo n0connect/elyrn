@@ -176,18 +176,27 @@ function pageLimit(data) {
 // How an attempt to open the app ended
 const ENTRY = Object.freeze({
     ENTERED: 'entered',
-    // no answer from /me (status 0) or a server error: nothing was wiped, the caller offers a retry
+    // any answer that says nothing about the session or the identity (no answer, a server error,
+    // a 429, a 404 or any other 4xx but 401, settings this app refuses): nothing was wiped, the
+    // caller offers a retry with the code for that answer (meVerdict)
     UNREACHABLE: 'unreachable',
-    // the session is gone or the server's answer was refused: the stored identity was removed
-    REFUSED: 'refused'
+    // the session is gone (401) or the server holds another public key: the stored identity was removed
+    REFUSED: 'refused',
+    // the screen that asked was left meanwhile (alive() false): nothing was saved or opened
+    LEFT: 'left'
 });
+
+// Whether a /me answer body names exactly this device's public key (the one comparison every
+// /me check makes: here, and on a stream reconnect or a return from the back-forward cache)
+function sameIdentity(data, publicKey) {
+    return Boolean(data) && typeof data === 'object' && typeof data.public_key === 'string' && data.public_key === publicKey;
+}
 
 // A /me answer body judged against this device's public key: { code: null, ttlDays, limits }
 // when it is taken, else { code } to report. Another key is an attack on the identity
 // (E_IDENTITY_MISMATCH); settings out of range are only refused (E_SERVER_LIMITS_INVALID).
 function judgeMe(data, publicKey) {
-    const sameKey = Boolean(data) && typeof data.public_key === 'string' && data.public_key === publicKey;
-    if (!sameKey) {
+    if (!sameIdentity(data, publicKey)) {
         return { code: Errors.CODES.E_IDENTITY_MISMATCH };
     }
     const ttlDays = Number.isSafeInteger(data.message_ttl_days) ? data.message_ttl_days : 0;
@@ -198,28 +207,55 @@ function judgeMe(data, publicKey) {
     return { code: null, ttlDays: ttlDays, limits: limits };
 }
 
-// Opens the app once /me confirms the session and the identity. Never changes the view on
-// failure: each caller knows what its user still needs on screen. Returns { entry, result }.
-async function enterApp(identity, persist) {
-    const check = await apiCall('GET', '/me');
-    if (check.status === HTTP_STATUS.NO_ANSWER || check.status >= HTTP_STATUS.SERVER_ERROR) {
-        return { entry: ENTRY.UNREACHABLE, result: check };
+// What a /me answer means for the stored identity (C1: only the server's own word ends a session).
+// { entry, code }: REFUSED for a 401 (the session is gone) or a 2xx naming another public key (an
+// attack on the identity, E_IDENTITY_MISMATCH); UNREACHABLE, keeping the identity, for every
+// other answer that is not taken: no answer, any 5xx, a 429, a 404 or any other 4xx, and a 2xx
+// with this key whose settings this app refuses (E_SERVER_LIMITS_INVALID), each with the
+// registered code for that answer; null code with ENTERED otherwise (judged holds the settings).
+function meVerdict(check, publicKey) {
+    if (check.status === HTTP_STATUS.UNAUTHORIZED) {
+        return { entry: ENTRY.REFUSED, code: null };
     }
-    const judged = judgeMe(check.data, identity.publicKey);
-    if (!check.ok || judged.code) {
+    if (!check.ok) {
+        return { entry: ENTRY.UNREACHABLE, code: Errors.fromResult(check) };
+    }
+    const judged = judgeMe(check.data, publicKey);
+    if (judged.code === Errors.CODES.E_IDENTITY_MISMATCH) {
+        return { entry: ENTRY.REFUSED, code: judged.code };
+    }
+    if (judged.code) {
+        return { entry: ENTRY.UNREACHABLE, code: judged.code };
+    }
+    return { entry: ENTRY.ENTERED, code: null, judged: judged };
+}
+
+// Opens the app once /me confirms the session and the identity. Never changes the view on
+// failure: each caller knows what its user still needs on screen. alive() (optional) is asked
+// after every wait: once it is false (the screen that asked was left) nothing is wiped, saved,
+// shown or opened. Returns { entry, result, code } (code: what to tell for UNREACHABLE).
+async function enterApp(identity, persist, alive = () => true) {
+    const check = await apiCall('GET', '/me');
+    if (!alive()) return { entry: ENTRY.LEFT, result: check, code: null };
+    const verdict = meVerdict(check, identity.publicKey);
+    if (verdict.entry === ENTRY.UNREACHABLE) {
+        return { entry: ENTRY.UNREACHABLE, result: check, code: verdict.code };
+    }
+    if (verdict.entry === ENTRY.REFUSED) {
         // Server-driven: the replay records stay (Keystore.wipeIdentity)
         await Keystore.wipeIdentity();
-        if (check.ok) {
-            Errors.report(judged.code);
+        if (verdict.code) {
+            Errors.report(verdict.code);
             await apiCall('POST', '/logout');
         }
-        return { entry: ENTRY.REFUSED, result: check };
+        return { entry: ENTRY.REFUSED, result: check, code: verdict.code };
     }
     if (persist) {
         await Keystore.save(identity);
+        if (!alive()) return { entry: ENTRY.LEFT, result: check, code: null };
     }
-    await Chat.start(identity, judged.ttlDays, judged.limits);
-    return { entry: ENTRY.ENTERED, result: check };
+    await Chat.start(identity, verdict.judged.ttlDays, verdict.judged.limits);
+    return { entry: ENTRY.ENTERED, result: check, code: null };
 }
 
 // Raised whenever the login screen is left: a login still in flight then shows and opens nothing
@@ -248,7 +284,21 @@ function login() {
     return once('login', loginNow);
 }
 
+// The account number typed in the login field, read without ever showing it. The eye's hover
+// effect (eye-hover-animation.js) may be drawing scrambled or partly revealed text in the field
+// as clear text: it is held (no frame of it is drawn while a login runs) and the field goes back
+// to type=password before its value is touched, so no frame shows a character of the number.
+// The pointer path and the Enter path both pass here and reveal the same: nothing.
+function takeLoginNumber(field) {
+    const eye = window.eyeAnimation;
+    if (!eye) return field.value;
+    return eye.holdMasked();
+}
+
 async function loginNow() {
+    // Taken before the first await: a leave (leaveLogin raises loginRun) at any later point is seen
+    const run = loginRun;
+    const alive = () => run === loginRun && isShown('loginContainer');
     const accountNumberInputElement = document.getElementById('accountNumberInput');
     const errorElement = document.getElementById('loginError');
     const successElement = document.getElementById('loginSuccess');
@@ -257,37 +307,22 @@ async function loginNow() {
     errorElement.textContent = '';
     successElement.textContent = '';
 
-    // Check if eye animation is active and mask smoothly if needed
-    if (window.eyeAnimation && window.eyeAnimation.currentZone !== 'none') {
-        // Stop animation and get original value
-        const originalValue = window.eyeAnimation.originalValue || accountNumberInputElement.value;
-        window.eyeAnimation.stopAnimation();
-        window.eyeAnimation.currentZone = 'none';
-        window.eyeAnimation.resetToMasked();
-
-        // Smoothly mask the input using existing animation
-        await animateInputToMask(accountNumberInputElement, originalValue);
-
-        // Restore original value after masking
-        accountNumberInputElement.value = originalValue;
-        accountNumberInputElement.type = 'password';
-    }
-
     // NFKC, trimmed, an invite or room code named as such (validation.js parseAccountNumber)
-    const parsed = parseAccountNumber(accountNumberInputElement.value);
+    const parsed = parseAccountNumber(takeLoginNumber(accountNumberInputElement));
     if (!parsed.valid) {
+        releaseLoginNumber();
         Errors.inline(errorElement, parsed.error);
         return;
     }
 
-    const run = loginRun;
     loginBtn.disabled = true;
     try {
         // ZERO-KNOWLEDGE: only HKDF(AccountNumber, "noaddx/auth") goes over the wire
         const authKey = await ElyrnCrypto.deriveAuthKey(parsed.value);
+        if (!alive()) return;
+        // After every wait: the login screen left meanwhile shows nothing and opens nothing
         const result = await apiCall('POST', '/login', { auth_key: authKey });
-        // The login screen was left meanwhile: nothing is shown and the app is not opened
-        if (run !== loginRun) return;
+        if (!alive()) return;
         if (!result.ok || !result.data || !result.data.success) {
             // SECURITY: the server's own text is never shown (Errors.fromResult maps it)
             Errors.inline(errorElement, Errors.fromResult(result), null, result);
@@ -296,12 +331,13 @@ async function loginNow() {
 
         successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
         const identity = await deriveSession(parsed.value);
-        if (run !== loginRun) return;
-        const opened = await enterApp(identity, true);
+        if (!alive()) return;
+        const opened = await enterApp(identity, true, alive);
+        if (opened.entry === ENTRY.LEFT || !alive()) return;
         successElement.textContent = '';
         if (opened.entry === ENTRY.UNREACHABLE) {
             // The number stays in the field: pressing login again retries
-            Errors.inline(errorElement, Errors.fromResult(opened.result), null, opened.result);
+            Errors.inline(errorElement, opened.code, null, opened.result);
             return;
         }
         clearLoginField();
@@ -310,10 +346,16 @@ async function loginNow() {
             showMainMenu();
         }
     } catch (error) {
-        Errors.inline(errorElement, Errors.CODES.E_REQUEST_FAILED, null, error);
+        if (alive()) Errors.inline(errorElement, Errors.CODES.E_REQUEST_FAILED, null, error);
     } finally {
         loginBtn.disabled = false;
+        releaseLoginNumber();
     }
+}
+
+// The eye's hover effect may draw again once a login has ended
+function releaseLoginNumber() {
+    if (window.eyeAnimation) window.eyeAnimation.release();
 }
 
 // Global variables for registration state
@@ -506,35 +548,6 @@ async function copyIssuedAccountNumber(accountNumber) {
     }
 }
 
-// Animate input field to all asterisks (for input elements)
-function animateInputToMask(inputElement, originalValue) {
-    return new Promise((resolve) => {
-        const currentValue = inputElement.value || originalValue;
-        let masked = currentValue.split('');
-        let step = 0;
-        
-        // Show as text during animation
-        inputElement.type = 'text';
-        
-        const maskInterval = setInterval(() => {
-            // Mask 2-3 random characters per step
-            for (let i = 0; i < MASK_CHARS_PER_STEP; i++) {
-                const randomIndex = Math.floor(Math.random() * masked.length);
-                masked[randomIndex] = MASK_CHAR;
-            }
-            inputElement.value = masked.join('');
-            step++;
-            
-            // Check if all masked
-            if (masked.every(c => c === MASK_CHAR) || step > MASK_MAX_STEPS) {
-                clearInterval(maskInterval);
-                inputElement.value = MASK_CHAR.repeat(masked.length);
-                resolve();
-            }
-        }, MASK_STEP_MS);
-    });
-}
-
 // Phase 2 never leaves the page. The account number on screen is already saved by the user,
 // and the server keeps it redeemable until the account exists, so a failure says so and the
 // user presses continue again (with a fresh proof of work).
@@ -638,7 +651,8 @@ async function finishRegistration(run) {
     const identity = await deriveSession(accountNumber);
     // Left meanwhile (a second press accepted the loss): the app is not opened behind the menu
     if (run !== registrationRun) return;
-    const opened = await enterApp(identity, true);
+    const opened = await enterApp(identity, true, () => run === registrationRun);
+    if (opened.entry === ENTRY.LEFT) return;
     successElement.textContent = '';
     if (opened.entry !== ENTRY.ENTERED) {
         // Continue retries (the server answers 401, recoverRegistration logs in), or log in by hand
@@ -755,16 +769,16 @@ async function deletionOutcome(result) {
 }
 
 // Forgets the account number and pending token this page holds and every flag about them.
-// The number was copied for the user to save: it is cleared from the clipboard if the clipboard
-// still holds it (best effort, utils.js clearClipboardIfHolds; never throws). Resolves once that
-// clipboard attempt settled.
+// The number was copied for the user to save: elyrn tries to clear it from the clipboard if the
+// clipboard still holds it, and tells the user when it could not (utils.js clearClipboardOrWarn;
+// never throws). Resolves once that clipboard attempt settled.
 function dropRegistrationSecrets() {
     const accountNumber = pendingRegistrationAccountNumber;
     pendingRegistrationAccountNumber = null;
     pendingRegistrationToken = null;
     registrationAccountMayExist = false;
     registrationLeaveArmed = false;
-    return accountNumber ? clearClipboardIfHolds(accountNumber) : Promise.resolve();
+    return accountNumber ? clearClipboardOrWarn(accountNumber) : Promise.resolve();
 }
 
 // Gives up the registration in progress, whatever it was doing: every run still in flight stops

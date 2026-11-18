@@ -53,8 +53,10 @@ makes the message unreadable; a payload with keys other than these four is a new
 
 **The name rule** (`frontend/validation.js` `isFileName`, the same as Go's `fileNameValid`): NFC as it
 is (never normalised on reading), 1 to 128 code points, at most 512 bytes of UTF-8, no leading dot,
-no `/` or `\`, no control character (Unicode Cc: C0, DEL, C1), no bidirectional control (U+061C,
-U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), no lone surrogate. A received name that
+no `/` or `\`, no control character (Unicode Cc: C0, DEL, C1), no invisible format character
+(Unicode Cf: zero-width characters, the byte order mark, the soft hyphen, tag characters and every
+bidirectional control: U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), no run of two
+or more space characters in a row (Unicode Zs), no lone surrogate. A received name that
 fails it makes the message unreadable. A file is saved under its name with `<>:"|?*` replaced
 (`saveName`). Received names and captions are other people's data: shown as text only.
 
