@@ -298,28 +298,36 @@ const Rooms = (() => {
     }
 
     // Returns [{ id, from (roster entry or null), invite }] for the notes that open; the server
-    // cannot make a note open, so anything else is dropped.
+    // cannot make a note open, so anything else is dropped. A listing that failed shows no notes
+    // until the next refresh; it is logged (a 401 has already ended the session).
     async function notes(api, conv) {
         const result = await api('GET', `/conversations/${conv.id}/notes`);
         if (!result.ok || !result.data || !Array.isArray(result.data.notes)) {
+            if (result.status !== 401) Log.warn(Errors.INTERNAL.W_NOTES_NOT_LOADED, result);
             return [];
         }
         const opened = [];
         const seen = new Set();
+        let dropped = 0;
         for (const raw of result.data.notes.slice(0, R.MAX_MEMBERS)) {
             // A note listed twice is one request: shown once, answered once
             if (!raw || !ElyrnCrypto.isUuidV4(raw.id) || typeof raw.blob !== 'string' || seen.has(raw.id)) continue;
             seen.add(raw.id);
             try {
                 const note = await R.openNote(conv.room.keys, conv.room.member, raw.id, raw.blob);
-                if (note.text.length > MAX_NOTE_CHARS) continue;
+                if (note.text.length > MAX_NOTE_CHARS) {
+                    dropped++;
+                    continue;
+                }
                 opened.push({ id: raw.id, from: senderOf(conv.room, note.sender) || null, aura: await ElyrnCrypto.aura(note.sender), invite: note.text });
             } catch (e) {
                 // Not for us, or tampered with: a note sealed for another member never opens here
-                // by design, and the server can add notes at will, so each is dropped unlogged
-                // rather than letting the server fill the console
+                // by design, and the server can add notes at will, so each is dropped and counted;
+                // one line per listing is logged below rather than letting the server fill the console
+                dropped++;
             }
         }
+        if (dropped > 0) Log.warn(Errors.INTERNAL.W_NOTES_DROPPED);
         return opened;
     }
 

@@ -123,6 +123,9 @@ const LiveUpdates = (() => {
             try {
                 data = JSON.parse(event.data);
             } catch (e) {
+                // An event that is no JSON names no conversation: dropped unlogged like one of the
+                // wrong shape just below (the server could fill the console with them); the next
+                // event, poll or list refresh still catches up
                 return;
             }
             if (!data || Object.keys(data).length !== 1 || !validateConversationId(data.c)) return;

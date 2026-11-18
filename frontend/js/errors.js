@@ -259,6 +259,12 @@ const Errors = (() => {
         // A member's sealed role did not open, or opened to text the rule refuses: shown as no
         // role (rooms.js); its text is never logged
         W_ROLE_UNREADABLE: 'W_ROLE_UNREADABLE',
+        // The friend requests of a room could not be listed: none are shown until the next refresh
+        // (rooms.js notes)
+        W_NOTES_NOT_LOADED: 'W_NOTES_NOT_LOADED',
+        // A listing held notes that did not open for this member or were too long: they are
+        // dropped, one line per listing however many (rooms.js notes)
+        W_NOTES_DROPPED: 'W_NOTES_DROPPED',
         // No Notification API: the alerts control is not shown (alerts.js)
         W_ALERTS_UNSUPPORTED: 'W_ALERTS_UNSUPPORTED',
         // The browser has the API but refused to show a notification from the page (alerts.js)
