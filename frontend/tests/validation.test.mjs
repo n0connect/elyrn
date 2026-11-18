@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { FILE_NAMES_ACCEPTED, FILE_NAMES_REFUSED } from './file-names.mjs';
+import { FILE_NAMES_ACCEPTED, FILE_NAMES_REFUSED, OUTGOING_NAMES, OUTGOING_RANDOM } from './file-names.mjs';
 
 const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa });
 for (const file of ['../js/log.js', '../js/errors.js', '../js/crypto.js', '../js/room-crypto.js', '../validation.js']) {
@@ -120,7 +120,7 @@ test('the role rule agrees with the Go side\'s own cases (vectors from backend/i
 // ---------- file names (the same rule as backend/internal/e2e/file.go fileNameValid) ----------
 
 const isFileName = (name) => vm.runInContext('isFileName', context)(name);
-const forSending = (name) => vm.runInContext('fileNameForSending', context)(name);
+const outgoing = (name, random) => vm.runInContext('outgoingFileName', context)(name, random);
 const saveName = (name) => vm.runInContext('saveName', context)(name);
 const cp = (...points) => String.fromCodePoint(...points);
 // A lone surrogate: no Unicode text (Go's strings cannot even hold one)
@@ -135,20 +135,21 @@ test('file names: accepted and refused exactly as the Go side does (file-names.m
     }
 });
 
-test('file names: any chosen name is sent under one the rule accepts, its extension kept where it can be', () => {
-    const cases = [
-        ['.bashrc', 'bashrc'], ['..secret.txt', 'secret.txt'], ['a/b\\c.pdf', 'a_b_c.pdf'],
-        ['pay' + cp(0x202e) + 'txt.exe', 'pay_txt.exe'], ['e' + cp(0x301) + '.txt', cp(0xe9) + '.txt'],
-        ['', 'file'], ['...', 'file'], ['ok.png', 'ok.png'], ['tab' + cp(9) + 'name', 'tab_name']
-    ];
-    for (const [raw, want] of cases) assert.equal(forSending(raw), want, JSON.stringify(raw));
-    const long = forSending('x'.repeat(300) + '.jpeg');
-    assert.equal([...long].length, 128);
-    assert.ok(long.endsWith('.jpeg'));
-    const wide = forSending(cp(0x1f642).repeat(200) + '.pdf');
-    assert.ok(isFileName(wide) && wide.endsWith('.pdf'), wide);
-    for (const raw of [undefined, 7, LONE_HIGH, ('a' + cp(0)).repeat(100), cp(0x212b)]) {
-        assert.equal(isFileName(forSending(raw)), true, JSON.stringify(raw));
+test('file names: every file is sent as file-<8 hex> with its extension only when it is short and plain', () => {
+    const random = Uint8Array.from(OUTGOING_RANDOM);
+    for (const [chosen, sent] of OUTGOING_NAMES) {
+        assert.equal(outgoing(chosen, random), sent, JSON.stringify(chosen));
+        assert.equal(isFileName(sent), true, sent);
+    }
+    // The chosen name never shows through, whatever it is
+    for (const chosen of [undefined, 7, LONE_HIGH + '.txt', 'secret plan.docx', cp(0x1f642).repeat(200) + '.pdf']) {
+        const sent = outgoing(chosen, random);
+        assert.match(sent, /^file-deadbeef(\.[a-z0-9]{1,8})?$/, JSON.stringify(chosen));
+        assert.equal(sent.includes('secret'), false);
+    }
+    // Only four random bytes make the stem
+    for (const bad of [undefined, new Uint8Array(3), new Uint8Array(5), [1, 2, 3, 4], 'dead']) {
+        assert.throws(() => outgoing('a.txt', bad));
     }
     // Saved under a name common file systems take
     assert.equal(saveName('a<b>:"c"|?*.txt'), 'a_b___c____.txt');

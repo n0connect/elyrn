@@ -605,7 +605,20 @@ header {
     font-size: 13px;
 }
 
-/* A received file in its bubble: name and size, then view and save; a viewed image under them */
+/* The fixed lines at a chosen and a received file: it goes and comes exactly as it is */
+.file-notice {
+    flex: 1 0 100%;
+    font-size: 13px;
+    color: var(--muted);
+    text-align: left;
+}
+
+/* At a chosen file the notice is read before sending: full contrast */
+.file-chip .file-notice {
+    color: var(--fg);
+}
+
+/* A received file in its bubble: name, size and save */
 .file-card {
     display: flex;
     flex-wrap: wrap;
@@ -618,13 +631,6 @@ header {
     flex: 0 0 auto;
     padding: 2px 8px;
     font-size: 13px;
-}
-
-.file-card .file-view {
-    flex: 1 0 100%;
-    max-width: 100%;
-    height: auto;
-    border: 1px solid var(--border);
 }
 
 /* ========================================

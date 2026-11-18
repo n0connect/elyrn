@@ -4,9 +4,13 @@
 // One job: hold the one file chosen for the open conversation, from the moment it is chosen
 // (the attach control, a pasted file, a file dropped on the conversation) until its message is
 // stored (docs/architecture/files.md). A chosen file is checked before it is read (empty, over
-// this server's limit), read once, and cleaned when it is an image (image-clean.js); the chip
-// in the composer shows its name and size and removes it. Pressing send uploads its parts
-// (file-transfer.js) and gives chat.js the description its message carries. An upload that
+// this server's limit) and read once; its bytes are delivered exactly as they are: elyrn. never
+// reads, interprets or changes a file's content. The only thing it sets is the name the file is
+// sent under (validation.js outgoingFileName): the chosen name never leaves the device. The chip
+// in the composer shows the name that will be sent, the size, a way to remove the file, and,
+// every time, the notice that the file goes as it is (Errors.NOTICE.FILE_SENT_AS_IS). Pressing
+// send uploads its parts (file-transfer.js) and gives chat.js the description its message
+// carries. An upload that
 // stops keeps its file id and continues where it stopped on the next send, while the page
 // lives; one the server lost track of starts afresh under a new id. Leaving the conversation,
 // removing the file or ending the session cancels an upload between parts: nothing is sent.
@@ -23,7 +27,6 @@ const FileComposer = (() => {
     let activeConversation = () => null; // chat.js: the open conversation's id
     // The chosen file: { convId, bytes, name, size, ready, upload: { file, next, done } | null }
     let chosen = null;
-    let metadataTold = false;            // W_FILE_METADATA_KEPT is said once per session
 
     const el = (id) => document.getElementById(id);
 
@@ -59,7 +62,6 @@ const FileComposer = (() => {
     function start(limits) {
         maxBytes = limits.maxBytes;
         activeConversation = limits.activeConversation;
-        metadataTold = false;
         render();
     }
 
@@ -93,33 +95,29 @@ const FileComposer = (() => {
         const mine = { convId, bytes: null, name: '', size: 0, ready: false, uploading: false, upload: null };
         chosen = mine;
         render();
-        const prepared = await prepare(source);
+        const bytes = await read(source);
         if (chosen !== mine) return;  // removed, replaced or the conversation left meanwhile
-        if (!prepared.ok) {
+        if (!bytes) {
             chosen = null;
             render();
-            Errors.report(prepared.code, prepared.params);
+            Errors.report(Errors.CODES.E_FILE_NOT_READABLE);
             return;
         }
-        Object.assign(mine, { bytes: prepared.bytes, name: prepared.name, size: prepared.bytes.length, ready: true });
-        if (!prepared.cleaned && !metadataTold) {
-            metadataTold = true;
-            Errors.report(Errors.CODES.W_FILE_METADATA_KEPT);
-        }
+        const name = outgoingFileName(source.name, globalThis.crypto.getRandomValues(new Uint8Array(OUTGOING_NAME_RANDOM_BYTES)));
+        Object.assign(mine, { bytes, name, size: bytes.length, ready: true });
         render();
     }
 
-    // Reads the file once (one copy) and cleans it when it is an image; a file that changed or
-    // vanished on disk while it was read is refused
-    async function prepare(source) {
+    // The file's bytes, read once and left as they are, or null when it changed or vanished on
+    // disk while it was read
+    async function read(source) {
         let bytes;
         try {
             bytes = new Uint8Array(await source.arrayBuffer());
         } catch (error) {
-            return { ok: false, code: Errors.CODES.E_FILE_NOT_READABLE };
+            return null;
         }
-        if (bytes.length !== source.size || bytes.length === 0) return { ok: false, code: Errors.CODES.E_FILE_NOT_READABLE };
-        return ImageClean.prepare({ bytes, name: source.name, maxBytes });
+        return bytes.length === source.size && bytes.length > 0 ? bytes : null;
     }
 
     // The chosen file of conversation convId: { name, ready } or null
@@ -194,10 +192,13 @@ const FileComposer = (() => {
             chip.style.display = 'none';
             el('fileChipName').textContent = '';
             el('fileChipSize').textContent = '';
+            el('fileChipNotice').textContent = '';
             showStatus('');
             return;
         }
         chip.style.display = 'flex';
+        // Every time a file is chosen, for as long as it is: it goes exactly as it is
+        el('fileChipNotice').textContent = Errors.NOTICE.FILE_SENT_AS_IS;
         el('fileChipName').textContent = chosen.ready ? chosen.name : '';
         el('fileChipSize').textContent = chosen.ready ? formatFileSize(chosen.size) : '';
         if (!chosen.ready) showStatus(PREPARING);

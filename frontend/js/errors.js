@@ -190,17 +190,11 @@ const Errors = (() => {
         W_ROLE_RATE_LIMITED: w('too many role changes — wait a moment'),
         E_ROLE_NOT_SET: e('role not changed'),
 
-        // files: choosing one (file-composer.js, image-clean.js)
+        // files: choosing one (file-composer.js)
         E_FILE_EMPTY: e('that file is empty — choose another one'),
         E_FILE_TOO_LARGE: e('files can be at most {max} on this server — choose a smaller one'),
         W_FILE_ONE_AT_A_TIME: w('one file per message — choose a single file'),
         E_FILE_NOT_READABLE: e('the file could not be read — it may have changed or moved; choose it again'),
-        E_FILE_IMAGE_TOO_BIG: e('this image has more than {max} megapixels — make it smaller and choose it again'),
-        // An image that cannot be decoded here cannot be cleaned, so it is never sent as it is
-        E_FILE_IMAGE_NOT_CLEANED: e('this image could not be opened here to remove its hidden data, so it was not sent — save it again as PNG or JPEG (or take a screenshot) and choose that'),
-        E_FILE_CLEANED_TOO_LARGE: e('without its hidden data this image is larger than {max} — make it smaller and choose it again'),
-        // Once per session: a file that is not a PNG, JPEG or WebP goes as it is
-        W_FILE_METADATA_KEPT: w('files other than PNG, JPEG and WebP images are sent as they are: anything hidden inside them (author, location, device) goes along'),
 
         // files: sending one (file-transfer.js); a stopped upload continues from where it stopped
         W_FILE_UPLOAD_STOPPED: w('the file stopped uploading — check your connection, then press send again to continue'),
@@ -218,8 +212,6 @@ const Errors = (() => {
         W_FILE_GONE: w('this file is no longer available — it expired or the conversation lost it'),
         E_FILE_DOWNLOAD_STOPPED: e('the file could not be fetched — check your connection and try again'),
         E_FILE_UNREADABLE: e('this file failed its integrity check — nothing of it was kept'),
-        W_FILE_NOT_VIEWABLE: w('only PNG, JPEG and WebP images can be viewed here — use save'),
-        W_FILE_VIEW_TOO_LARGE: w('this image is too large to view here — use save'),
         E_FILE_NOT_SAVED: e('the file could not be handed to the browser — try save again'),
         W_FRIEND_REQUEST_PENDING: w('you already have a request waiting with them'),
         W_FRIEND_GONE: w('they are no longer in this room'),
@@ -355,7 +347,11 @@ const Errors = (() => {
         MARKED_VERIFIED: 'marked as verified on this device',
         FRIEND_REQUEST_PREPARING: 'preparing a friend request · solving a proof of work',
         FRIEND_REQUEST_SENT: 'friend request sent to {name}',
-        FRIENDS_NOW: 'you are now friends — a private conversation opened'
+        FRIENDS_NOW: 'you are now friends — a private conversation opened',
+        // Shown at every chosen file, for as long as it is chosen (file-composer.js)
+        FILE_SENT_AS_IS: 'this file is delivered exactly as it is. photos and documents usually carry hidden data — where, when and on what device they were made, who wrote them — and the file itself can be recognised wherever the same file turns up. elyrn. removes none of it.',
+        // On every received file (file-card.js)
+        FILE_FROM_MEMBER: 'sent by another member, exactly as they sent it — opening it is your own decision'
     });
 
     const PLACEHOLDER = /\{([a-z]+)\}/g;
