@@ -100,6 +100,9 @@ type From struct {
 	SenderCode string `json:"sender_code,omitempty"`
 	Left       bool   `json:"left,omitempty"`
 	SameName   bool   `json:"same_name,omitempty"`
+	// Unrecorded: the room's counter record was full when this sender (off the member list) first
+	// came, so replay protection is not kept for it on this agent
+	Unrecorded bool   `json:"unrecorded,omitempty"`
 	key        []byte // the authenticated sender key; never shown
 }
 

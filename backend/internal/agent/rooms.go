@@ -35,6 +35,7 @@ type roomState struct {
 	seen           map[uuid.UUID]seenMessage // message id → where it was served, and the verdict (bounded)
 	pendingGaps    []Gap                     // found while syncing counters, reported by the next read
 	pendingReplays []Replay                  // likewise
+	unrecorded     map[string]struct{}       // senders the full counter record did not take (bounded)
 }
 
 func isCount(value, max int) bool { return value >= 0 && value <= max }

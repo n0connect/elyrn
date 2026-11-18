@@ -229,7 +229,7 @@ func (h *pageHarness) forward(items []servedItem, after int64) {
 	accepted := h.accepted(items, after, 0)
 	l := newLedger(st.counters)
 	got := st.openPage(h.dtos(items), st.forwardWindow(after, l))
-	l.snapshot(st.counters, got.last)
+	st.settle(l, got.last)
 	h.check(got, accepted, func(e poolEntry, seq int64) {
 		if seq <= recordSeq {
 			return

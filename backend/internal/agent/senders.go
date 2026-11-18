@@ -57,6 +57,44 @@ func (st *roomState) attribute(r *ReadResult) {
 		key := senderKey(f.key)
 		f.Left = !onRoster[key]
 		f.SameName = len(keysByName[f.Sender]) > 1
+		_, f.Unrecorded = st.unrecorded[key]
+	}
+}
+
+// keptSender is the sender bound's keep set (counters.js keptSenders): this agent's own key and
+// every key of the current roster are never refused nor displaced.
+func (st *roomState) keptSender(key string) bool {
+	if key == senderKey(st.member.Public) {
+		return true
+	}
+	for _, entry := range st.roster {
+		if senderKey(entry.public) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// noteUnrecorded remembers the senders the bound refused (bounded), so the result marks their
+// messages unrecorded, and forgets those the record holds by now (counter-records.js keeps
+// conv.unrecorded the same way).
+func (st *roomState) noteUnrecorded(refused []string) {
+	for key := range st.unrecorded {
+		if _, recorded := st.counters.Senders[key]; recorded {
+			delete(st.unrecorded, key)
+		}
+	}
+	if len(refused) == 0 {
+		return
+	}
+	warn(CodeSenderUnrecorded)
+	if st.unrecorded == nil {
+		st.unrecorded = make(map[string]struct{})
+	}
+	for _, key := range refused {
+		if len(st.unrecorded) < maxUnrecordedSenders {
+			st.unrecorded[key] = struct{}{}
+		}
 	}
 }
 

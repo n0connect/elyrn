@@ -129,6 +129,18 @@ This is the design of record. Decisions are dated and final unless the owner rev
   room during the process, and the senders of the result. The tool descriptions and the MCP
   instructions say to identify a sender by name and code.
 
+- **D16. The sender bound keeps the roster** (as `counters.js` `bound`). A room's counter
+  record names at most 256 senders (the agent's own bound; the browser's is 4096). At the bound a
+  new sender that is neither the agent itself nor on the room's current member list is not
+  recorded: its messages say `unrecorded: true` (replay protection is not kept for it on this
+  agent) and `E_AGENT_SENDER_UNRECORDED` is logged. A new member of the current list is always
+  recorded and displaces the off-list entry recorded longest ago; the agent's own entry and the
+  list's are never displaced. The record keeps the order senders were first recorded in
+  (`"order"` in `agent.counters.json`; a record written before it has none and is read in key
+  order). Remaining differences from the browser: the bound (256 against 4096), and a record above
+  the bound fails the file closed (`E_AGENT_STATE_FILE`) where the browser trims it, since no agent
+  ever writes one.
+
 ## The program
 
 ```text

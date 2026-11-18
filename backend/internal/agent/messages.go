@@ -192,11 +192,20 @@ func (st *roomState) remember(id uuid.UUID, judged seenMessage) {
 }
 
 // settleLedger raises the room's record with what a forward sequence saw, up to seq, and
-// persists it when it (or this account's own counter, mineBefore) changed.
+// persists it when it (or this account's own counter, mineBefore) changed. The senders the bound
+// did not record are remembered for the result (st.noteUnrecorded).
 func (a *Agent) settleLedger(st *roomState, l *ledger, seq, mineBefore int64) {
-	if l.snapshot(st.counters, seq) || st.counters.Mine != mineBefore {
+	if st.settle(l, seq) || st.counters.Mine != mineBefore {
 		a.persistCountersOrWarn()
 	}
+}
+
+// settle raises st's record with l up to seq under the sender bound; it reports whether the record
+// changed.
+func (st *roomState) settle(l *ledger, seq int64) bool {
+	changed, refused := l.snapshot(st.counters, seq, st.keptSender)
+	st.noteUnrecorded(refused)
+	return changed
 }
 
 // read fetches, verifies and decrypts one page and moves the read marker.
