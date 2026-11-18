@@ -57,7 +57,7 @@ func (st *roomState) attribute(r *ReadResult) {
 		key := senderKey(f.key)
 		f.Left = !onRoster[key]
 		f.SameName = len(keysByName[f.Sender]) > 1
-		_, f.Unrecorded = st.unrecorded[key]
+		f.Unrecorded = st.unrecordedSender(key)
 	}
 }
 
@@ -77,12 +77,17 @@ func (st *roomState) keptSender(key string) bool {
 
 // noteUnrecorded remembers the senders the bound refused (bounded), so the result marks their
 // messages unrecorded, and forgets those the record holds by now (counter-records.js keeps
-// conv.unrecorded the same way).
+// conv.unrecorded the same way). A bound only makes the answer more conservative: a refused sender
+// that finds the set full sets st.unrecordedFull, which stays set until the forgetting pass leaves
+// the set below its bound again (unrecordedSender).
 func (st *roomState) noteUnrecorded(refused []string) {
 	for key := range st.unrecorded {
 		if _, recorded := st.counters.Senders[key]; recorded {
 			delete(st.unrecorded, key)
 		}
+	}
+	if len(st.unrecorded) < maxUnrecordedSenders {
+		st.unrecordedFull = false
 	}
 	if len(refused) == 0 {
 		return
@@ -94,8 +99,24 @@ func (st *roomState) noteUnrecorded(refused []string) {
 	for _, key := range refused {
 		if len(st.unrecorded) < maxUnrecordedSenders {
 			st.unrecorded[key] = struct{}{}
+		} else if _, noted := st.unrecorded[key]; !noted {
+			st.unrecordedFull = true
 		}
 	}
+}
+
+// unrecordedSender is whether a sender's messages say unrecorded: a sender noted unrecorded, and,
+// while a refused sender could not be noted (unrecordedFull), every sender that is neither kept
+// nor held by the record, since the one dropped may be any of them (fail closed).
+func (st *roomState) unrecordedSender(key string) bool {
+	if _, noted := st.unrecorded[key]; noted {
+		return true
+	}
+	if !st.unrecordedFull || st.keptSender(key) {
+		return false
+	}
+	_, recorded := st.counters.Senders[key]
+	return !recorded
 }
 
 // senders is every From in r that names an authenticated sender (a broken message names none).
