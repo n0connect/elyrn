@@ -32,6 +32,9 @@ const HTTP_STATUS = Object.freeze({
     PRECONDITION_FAILED: 412,
     TOO_MANY_REQUESTS: 429,
     SERVER_ERROR: 500,
+    BAD_GATEWAY: 502,
+    SERVICE_UNAVAILABLE: 503,
+    GATEWAY_TIMEOUT: 504,
     INSUFFICIENT_STORAGE: 507
 });
 // A send (a message or a friend request) answered 409 "Id taken" (Errors.idTaken: the id is held

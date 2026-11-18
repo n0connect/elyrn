@@ -6,8 +6,9 @@
 // untrusted store: an answer is judged by its status and registered sentence only, and a part
 // it serves must open (file-crypto.js) or the file is unreadable.
 //
-// A request that got no answer, or a server error, is tried again PART_ATTEMPTS times with a
-// growing pause; then the transfer stops and says where (`next`), so a later upload of the same
+// A request that got no answer, or a 502, 503 or 504 (transient()), is tried again PART_ATTEMPTS
+// times with a growing pause; any other refusal is final at once. A transfer stopped by a
+// transient failure says where (`next`) and is not final, so a later upload of the same
 // file id continues there (parts already stored answer 409 "Conflict", which means stored). The
 // caller's cancelled() is asked before every part and after every pause: a conversation left or
 // a session ended stops a transfer between parts, never half-way through one.
@@ -28,7 +29,7 @@ const FileTransfer = (() => {
     // at most RATE_PAUSES times per transfer
     const RATE_PAUSE_MS = 3000;
     const RATE_PAUSES = 120;
-    // How an ended transfer is told: { ok: true, ... } or { ok: false, code, next, restart, quiet }
+    // How an ended transfer is told: { ok: true, ... } or { ok: false, code, next, restart, quiet, final }
     const CANCELLED = Object.freeze({ ok: false, code: Errors.INTERNAL.W_FILE_TRANSFER_CANCELLED, quiet: true });
 
     function filesPath(conversationId) {
@@ -39,9 +40,22 @@ const FileTransfer = (() => {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // No answer, or a server error: worth another try
+    // The one home of "final or not": no answer at all, or a gateway or server that is busy for
+    // now (502, 503, 504), is worth another try; the request limit (429) is waited out apart
+    // (paced). Every other answer is final at once: a 507 (quota, share, store) or a 500 does not
+    // change by sending the same part again.
+    const TRANSIENT_STATUSES = new Set([HTTP_STATUS.NO_ANSWER, HTTP_STATUS.BAD_GATEWAY, HTTP_STATUS.SERVICE_UNAVAILABLE,
+        HTTP_STATUS.GATEWAY_TIMEOUT]);
+
     function transient(result) {
-        return result.status === HTTP_STATUS.NO_ANSWER || result.status >= HTTP_STATUS.SERVER_ERROR;
+        return TRANSIENT_STATUSES.has(result.status);
+    }
+
+    // Whether a refused upload is final: the file cannot go by pressing send again, so the
+    // composer lets it go. Not final: a transient failure that ran out of tries, the request
+    // limit on a new file (paced), and a 409 that asks for the upload afresh under a new id.
+    function final(result) {
+        return !transient(result) && !paced(result) && result.status !== HTTP_STATUS.CONFLICT;
     }
 
     // A request limit answer the transfer waits out: a 429 that is not the daily file budget
@@ -85,7 +99,7 @@ const FileTransfer = (() => {
             return { code: own ? said : Errors.CODES.E_FILE_STORE_FULL };
         }
         if (result.status === HTTP_STATUS.NO_ANSWER) return { code: Errors.CODES.W_FILE_UPLOAD_STOPPED };
-        if (result.status >= HTTP_STATUS.SERVER_ERROR) return { code: Errors.CODES.W_FILE_SERVER_BUSY };
+        if (transient(result)) return { code: Errors.CODES.W_FILE_SERVER_BUSY };
         return { code: Errors.CODES.E_FILE_UPLOAD_REFUSED };
     }
 
@@ -98,7 +112,7 @@ const FileTransfer = (() => {
     }
 
     // Uploads parts from..count-1 of file (its bytes: `bytes`), in order. Resolves to
-    // { ok: true } or { ok: false, code, next (the first part not stored), restart, quiet }.
+    // { ok: true } or { ok: false, code, next (the first part not stored), restart, quiet, final }.
     async function upload({ api, conversationId, file, bytes, from = 0, onProgress, cancelled }) {
         const parts = F.partCount(file.size);
         const pace = { left: RATE_PAUSES };
@@ -110,7 +124,7 @@ const FileTransfer = (() => {
                 cancelled, index > 0 ? pace : null);
             if (!result) return { ...CANCELLED, next: index };
             if (result.status !== HTTP_STATUS.CREATED && !storedBefore(result)) {
-                return { ok: false, next: index, restart: false, quiet: false, ...refusal(result) };
+                return { ok: false, next: index, restart: false, quiet: false, final: final(result), ...refusal(result) };
             }
             if (onProgress) onProgress({ done: index + 1, total: parts });
         }

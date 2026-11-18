@@ -159,6 +159,38 @@ test('every refusal has its code: budget, rate, quota, store, busy, gone, id tak
     assert.equal(quiet.quiet, true);
 });
 
+test('only no answer, 502, 503 and 504 are tried again; any other refusal is final at once and sent once', async () => {
+    const sentFor = async (answer) => {
+        server.answer(() => answer);
+        const before = server.requests.length;
+        const out = await upload(await newFile(10));
+        return { out, sent: server.requests.length - before };
+    };
+    // A permanent refusal: the share, the quota, the store, a server error, a plain refusal
+    for (const answer of [
+        { status: 507, body: { success: false, message: 'File share reached' } },
+        { status: 507, body: { success: false, message: 'File quota reached' } },
+        { status: 507, body: { success: false, message: 'File store full' } },
+        { status: 500, text: 'Internal server error\n', type: 'text/plain' },
+        { status: 400, text: 'Invalid request\n', type: 'text/plain' },
+        { status: 429, body: { success: false, message: 'File budget spent' } }
+    ]) {
+        const { out, sent } = await sentFor(answer);
+        assert.equal(sent, 1, `sent again after ${JSON.stringify(answer)}`);
+        assert.equal(out.final, true, JSON.stringify(answer));
+        assert.ok(Object.hasOwn(Errors.REGISTRY, out.code));
+    }
+    // A busy gateway or server is tried PART_ATTEMPTS times, and the file may go again later
+    for (const status of [502, 504]) {
+        const { out, sent } = await sentFor({ status, text: 'Bad gateway\n', type: 'text/plain' });
+        assert.equal(sent, T.PART_ATTEMPTS, String(status));
+        assert.deepEqual({ code: out.code, final: out.final }, { code: CODES.W_FILE_SERVER_BUSY, final: false });
+    }
+    // A new file's request limit and a lost upload ask for send again: not final either
+    assert.equal((await sentFor({ status: 429, text: 'Too many requests\n', type: 'text/plain' })).out.final, false);
+    assert.equal((await sentFor({ status: 409, body: { success: false, message: 'Id taken' } })).out.final, false);
+});
+
 test('a cancelled upload stops between parts and never sends the rest', async () => {
     behave();
     const one = await newFile(3 * PART);
