@@ -1,5 +1,5 @@
 // ========================================
-// CHAT (state, sync, realtime)
+// CHAT (conversations, messages, pairing and rooms)
 // ========================================
 // The server is treated as an untrusted relay: every response is shape-checked,
 // every message is authenticated by AES-GCM + AAD, peer keys from invites are
@@ -11,25 +11,6 @@
 const Chat = (() => {
     'use strict';
 
-    const MAX_RECONNECT_ATTEMPTS = 8;
-    const RECONNECT_BASE_MS = 1000;
-    const RECONNECT_MAX_MS = 30000;
-    // The server sends a named heartbeat right after a stream opens (backend handlers/events.go):
-    // a (re)connected stream that has not shown it this long is not delivering (a proxy buffers
-    // or holds it), and the page polls instead of waiting longer
-    const STREAM_FIRST_PROOF_MS = 5 * SECOND_MS;
-    // ...and one every 10 s after (sseKeepAlive): a stream that proved itself and then went silent
-    // for two of them and some slack has stopped delivering
-    const STREAM_SILENCE_LIMIT_MS = 25 * SECOND_MS;
-    // How often the watchdog looks, and so how often a silent stream's page fetches its updates:
-    // at most 5 requests per poll per visible tab (1 when no conversation is open), so 4 visible
-    // tabs stay at 4 r/s, inside nginx's 20 r/s with burst 40 per client
-    const POLL_INTERVAL_MS = 5 * SECOND_MS;
-    // A hidden page behind a silent stream polls too, this much less often: it is not being read
-    // (nothing is marked read while hidden), it only has to learn that something arrived
-    const HIDDEN_POLL_INTERVAL_MS = 30 * SECOND_MS;
-    // Every named event the stream sends; any one of them proves it is delivering
-    const STREAM_EVENTS = Object.freeze(['ping', 'msg', 'conv']);
     const MAX_CIPHERTEXT_CHARS = 11000;
     // A roster can change between fetching it and sending (412): fetch, re-encrypt, retry, bounded
     const MAX_ROSTER_RETRIES = 2;
@@ -46,15 +27,6 @@ const Chat = (() => {
     let order = [];                   // server order: newest conversation first
     let recent = [];                  // ids with activity this session, most recent first (memory only)
     let activeId = null;
-    let events = null;
-    let reconnectAttempts = 0;
-    let reconnectTimer = null;
-    let pollTimer = null;             // the watchdog's next look (watchStream), from start to stop
-    let lastStreamEventAt = 0;        // performance.now() of the last stream event, or of the last (re)connect
-    let streamLimitMs = STREAM_FIRST_PROOF_MS;  // the silence allowed since then: first proof, or the heartbeat limit
-    let polling = false;              // the watchdog is fetching for a silent stream (logged once per silence)
-    let lastPollAt = -Infinity;       // performance.now() of the watchdog's last poll (none yet: due)
-    let outageShown = false;          // a fetch failed while polling and was shown: polls stay quiet until one succeeds
     let refreshTimer = null;
     let listLoaded = false;           // distinguishes the first load from live additions
     let inviteRun = null;             // { stopScramble } while an invite is paid for and revealed
@@ -71,6 +43,10 @@ const Chat = (() => {
     // Raised by every local change to the set of conversations (a join, a burn, a leave, the end
     // of the session): a list fetched before it is stale and is never applied (refreshNow)
     let listGeneration = 0;
+    // The event stream and the watchdog behind it (live-updates.js): they say when to catch up
+    const live = LiveUpdates.create({
+        api, loggedIn: () => me !== null, catchUp, onMessage: messageArrived, onConversations: scheduleRefresh
+    });
 
     // ---------- plumbing ----------
 
@@ -109,10 +85,6 @@ const Chat = (() => {
             conv.key = ElyrnCrypto.conversationKey(me.privateKey, conv.peerPublicKey, conv.id);
         }
         return conv.key;
-    }
-
-    function isPageVisible() {
-        return document.visibilityState === 'visible';
     }
 
     // The open conversation counts too while the page is hidden: what arrived then is not read
@@ -171,8 +143,7 @@ const Chat = (() => {
         showHome();
         showApp();
         await refreshConversations();
-        connectEvents();
-        armWatchdog();
+        live.start();
     }
 
     function stop() {
@@ -183,11 +154,7 @@ const Chat = (() => {
         Alerts.stop();
         RoleControl.reset();
         FileComposer.stop();
-        closeEvents();
-        clearTimeout(pollTimer);
-        polling = false;
-        lastPollAt = -Infinity;
-        outageShown = false;
+        live.stop();
         clearTimeout(refreshTimer);
         conversations.clear();
         order = [];
@@ -235,10 +202,10 @@ const Chat = (() => {
         const result = await api('GET', '/conversations');
         if (generation !== listGeneration) return;
         if (!result.ok || !result.data || !Array.isArray(result.data.conversations)) {
-            if (result.status !== 401) reportFetchFailure(Errors.CODES.E_CONVERSATIONS_NOT_LOADED, result);
+            if (result.status !== 401) live.reportFetchFailure(Errors.CODES.E_CONVERSATIONS_NOT_LOADED, result);
             return;
         }
-        outageShown = false;
+        live.endOutage();
 
         const listed = await mergeListed(result.data.conversations, generation);
         if (!listed) return;
@@ -511,7 +478,7 @@ const Chat = (() => {
     function sync(conv) {
         conv.syncChain = conv.syncChain.then(() => syncNow(conv)).catch(error => {
             if (me && activeId === conv.id && conv.loaded) {
-                reportFetchFailure(Errors.CODES.E_MESSAGES_NOT_LOADED, error);
+                live.reportFetchFailure(Errors.CODES.E_MESSAGES_NOT_LOADED, error);
             } else {
                 Log.error(Errors.INTERNAL.E_SYNC_FAILED, error);
             }
@@ -534,11 +501,11 @@ const Chat = (() => {
         }
         if (!result.ok || !result.data || !Array.isArray(result.data.messages)) {
             // A first load that fails is shown in the conversation itself, by open()
-            if (conv.loaded) reportFetchFailure(Errors.CODES.E_MESSAGES_NOT_LOADED, result);
+            if (conv.loaded) live.reportFetchFailure(Errors.CODES.E_MESSAGES_NOT_LOADED, result);
             else Log.error(Errors.INTERNAL.E_SYNC_FAILED, result);
             return false;
         }
-        outageShown = false;
+        live.endOutage();
         if (!conv.loaded) {
             // A new loaded sequence starts from what this device remembers (counters.js, rule 2)
             const record = await conv.markLoad;
@@ -1412,74 +1379,12 @@ const Chat = (() => {
         }
     }
 
-    // ---------- realtime ----------
+    // ---------- live updates (live-updates.js says when) ----------
 
-    function closeEvents() {
-        clearTimeout(reconnectTimer);
-        if (events) {
-            events.close();
-            events = null;
-        }
-    }
-
-    function connectEvents() {
-        closeEvents();
-        if (!me) return;
-        // The new stream has STREAM_FIRST_PROOF_MS to show its first heartbeat before the watchdog
-        // polls (also while it backs off and reconnects: the page is not left waiting)
-        lastStreamEventAt = performance.now();
-        streamLimitMs = STREAM_FIRST_PROOF_MS;
-        events = new EventSource(`${API_BASE_URL}/events`);
-        // 'open' proves nothing: a buffering proxy sends the headers and holds every event after
-        // them, and a proxy that opens and drops would otherwise reconnect forever. It catches up
-        // (resync); only an event that arrived proves the stream (noteStreamEvent).
-        events.addEventListener('open', () => resync());
-        STREAM_EVENTS.forEach(kind => events.addEventListener(kind, noteStreamEvent));
-        events.addEventListener('msg', onMessageEvent);
-        events.addEventListener('conv', scheduleRefresh);
-        // Never rely on the browser's built-in retry (fixed interval, unlimited attempts):
-        // every drop goes through our bounded exponential backoff (RULES.md §17.1)
-        events.onerror = () => {
-            scheduleReconnect();
-        };
-    }
-
-    function scheduleReconnect() {
-        closeEvents();
-        if (!me) return;
-        const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            // Nothing to show: the watchdog keeps fetching (no stream event can arrive now; less
-            // often while the tab is hidden), and showing the tab again retries the stream (onVisible)
-            Log.warn(Errors.INTERNAL.W_LIVE_STREAM_GAVE_UP);
-            return;
-        }
-        reconnectAttempts++;
-        reconnectTimer = setTimeout(reconnect, delay);
-    }
-
-    // Only reconnect while the session is still valid (a 401 ends the session instead)
-    async function reconnect() {
-        if (!me) return;
-        const check = await api('GET', '/me');
-        if (!me || check.status === 401) return;
-        if (!check.ok) {
-            scheduleReconnect();
-            return;
-        }
-        connectEvents();
-    }
-
-    function onMessageEvent(event) {
-        let data;
-        try {
-            data = JSON.parse(event.data);
-        } catch (e) {
-            return;
-        }
-        if (!data || Object.keys(data).length !== 1 || !validateConversationId(data.c)) return;
+    // A message arrived in conversation id (an event the stream delivered)
+    function messageArrived(id) {
         Alerts.raise();
-        const conv = conversations.get(data.c);
+        const conv = conversations.get(id);
         if (!conv) {
             scheduleRefresh();
             return;
@@ -1496,94 +1401,16 @@ const Chat = (() => {
 
     // Resolves once the open conversation's sync has settled (the list refresh runs on its own
     // debounce, one at a time), so the watchdog never queues a poll behind one still running.
-    // fromPoll: the watchdog asked, so a failure already shown in this outage stays quiet
-    // (reportFetchFailure); any other resync shows its failure again, as it always did.
-    function resync(fromPoll = false) {
-        if (!me) return Promise.resolve();
-        if (!fromPoll) outageShown = false;
+    function catchUp() {
         scheduleRefresh();
         const conv = conversations.get(activeId);
         return conv ? sync(conv) : Promise.resolve();
     }
 
-    // ---------- watchdog: polling while the stream is silent ----------
-
-    // Any stream event proves the stream delivers: the watchdog stops polling, the stream's next
-    // silence may last the heartbeat limit, and the reconnect backoff starts again from the bottom
-    function noteStreamEvent() {
-        lastStreamEventAt = performance.now();
-        streamLimitMs = STREAM_SILENCE_LIMIT_MS;
-        polling = false;
-        reconnectAttempts = 0;
-    }
-
-    // A fetch failure the watchdog would repeat on every poll while the server is down: shown once
-    // per outage while polling (outageShown, cleared by the next fetch that succeeds or by any
-    // resync not from a poll), logged every time. Outside polling it is shown every time.
-    function reportFetchFailure(code, cause) {
-        if (polling && outageShown) {
-            Log.warn(code, cause);
-            return;
-        }
-        if (polling) outageShown = true;
-        Errors.report(code, null, cause);
-    }
-
-    // The one owner of pollTimer: at most one look is pending, from start() until stop()
-    function armWatchdog() {
-        clearTimeout(pollTimer);
-        if (!me) return;
-        pollTimer = setTimeout(watchStream, POLL_INTERVAL_MS);
-    }
-
-    // One look: a page whose stream proved nothing within its limit fetches what the stream would
-    // have poked (resync, an authenticated request, which also keeps the session sliding), then
-    // looks again. It keeps fetching until a stream event arrives: at every look while visible,
-    // every HIDDEN_POLL_INTERVAL_MS while hidden (streamNeedsPolling).
-    async function watchStream() {
-        const now = performance.now();
-        if (streamNeedsPolling({
-            now: now, lastEventAt: lastStreamEventAt, silenceLimitMs: streamLimitMs, visible: isPageVisible(),
-            loggedIn: me !== null, lastPollAt: lastPollAt, hiddenIntervalMs: HIDDEN_POLL_INTERVAL_MS
-        })) {
-            if (!polling) Log.warn(Errors.INTERNAL.W_LIVE_STREAM_SILENT);
-            polling = true;
-            lastPollAt = now;
-            await resync(true);
-        }
-        armWatchdog();
-    }
-
-    // The page came back from the back-forward cache: the session may have ended meanwhile. A 401
-    // ends it here as anywhere (sessionLost); a live one reconnects its event stream.
-    async function onRestored() {
-        if (!me) return;
-        // The look pending when the page was frozen is restarted from now
-        armWatchdog();
-        const check = await api('GET', '/me');
-        if (!me || check.status === 401) return;
-        if (!check.ok) {
-            scheduleReconnect();
-            return;
-        }
-        reconnectAttempts = 0;
-        connectEvents();
-    }
-
-    function onVisible() {
-        if (!me || !isPageVisible()) return;
-        if (!events) {
-            reconnectAttempts = 0;
-            connectEvents();
-        } else {
-            resync();
-        }
-    }
-
     return Object.freeze({
         start, stop, open, backToList, send, earlier, createInvite, join, createRoom,
         toggleMembers, toggleRoomCode, copyRoomCode,
-        showSafety, toggleVerified, askBurn, burn, onVisible, onRestored,
+        showSafety, toggleVerified, askBurn, burn, onVisible: live.onVisible, onRestored: live.onRestored,
         isActive: () => me !== null,
         publicKey: () => (me ? me.publicKey : null)
     });

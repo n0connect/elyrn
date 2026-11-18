@@ -211,7 +211,7 @@ Beyond edge cases and disasters, the browser client is checked by what a user do
 
 #### Negative-use tour (manual, real browser)
 
-What lives in DOM-bound code (`app.js`, `auth.js`'s screens, `chat.js`, `ui.js`) is checked by hand in a real browser, against a local stack, with the console open: no line may carry a secret, and each expected code must appear in the console's `[elyrn]` line. Each line is screen · action · expected.
+What lives in DOM-bound code (`app.js`, `auth.js`'s screens, `chat.js`, `live-updates.js`, `ui.js`) is checked by hand in a real browser, against a local stack, with the console open: no line may carry a secret, and each expected code must appear in the console's `[elyrn]` line. Each line is screen · action · expected.
 
 Pre-login screens:
 - Main menu · open the page · no `404` for `/favicon.ico` or `/favicon.svg` in the network panel; the tab shows a black square with a white dot (also on the 404 page).

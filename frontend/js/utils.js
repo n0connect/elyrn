@@ -11,7 +11,7 @@ const STATUS_PAGES = Object.freeze({
 });
 // The longest any API request may take, answer body included: past it the request is aborted
 // and reported as no answer (status 0), so no button, lock or queued sync waits forever. The live
-// event stream (EventSource, chat.js) is not an apiCall and is never cut by it.
+// event stream (EventSource, live-updates.js) is not an apiCall and is never cut by it.
 const REQUEST_TIMEOUT_MS = 30000;
 // The largest answer apiCall reads. A full page of messages at this client's own maxima (1000
 // messages of at most 11000 characters, auth.js and chat.js) stays well below it; a larger
@@ -135,7 +135,12 @@ function singleFlight(task) {
     };
 }
 
-// Whether a page must fetch its updates instead of waiting for its live event stream (chat.js
+// Whether the page is shown: the chat marks nothing read while it is not, and alerts are raised only then
+function isPageVisible() {
+    return document.visibilityState === 'visible';
+}
+
+// Whether a page must fetch its updates instead of waiting for its live event stream (live-updates.js
 // watchdog). Only a logged-in page polls, and only once the stream has delivered no event of any
 // kind for silenceLimitMs. A visible page then polls at every look; a hidden one only once
 // hiddenIntervalMs has passed since its last poll (lastPollAt), so a tab left in the background

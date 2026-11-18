@@ -236,10 +236,10 @@ const Errors = (() => {
         // so those conversations are judged from their visible messages only (once per page load)
         W_COUNTER_RECORDS_EVICTED: 'W_COUNTER_RECORDS_EVICTED',
         // The event stream delivered no event within its silence limit (a proxy buffering or
-        // holding it): updates are fetched on an interval until it delivers one again (chat.js)
+        // holding it): updates are fetched on an interval until it delivers one again (live-updates.js)
         W_LIVE_STREAM_SILENT: 'W_LIVE_STREAM_SILENT',
         // The event stream failed MAX_RECONNECT_ATTEMPTS times in a row: it is not retried until
-        // the tab is shown again, and polling carries the updates meanwhile (chat.js)
+        // the tab is shown again, and polling carries the updates meanwhile (live-updates.js)
         W_LIVE_STREAM_GAVE_UP: 'W_LIVE_STREAM_GAVE_UP',
         // A member's sealed role did not open, or opened to text the rule refuses: shown as no
         // role (rooms.js); its text is never logged

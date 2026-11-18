@@ -192,7 +192,7 @@ test('singleFlight: calls during a run share it and add exactly one run after it
     assert.equal(runs, 3);
 });
 
-// The watchdog's look as chat.js asks it: named fields, defaults a visible logged-in page with no
+// The watchdog's look as live-updates.js asks it: named fields, defaults a visible logged-in page with no
 // poll yet; `over` replaces any of them
 const HIDDEN_INTERVAL = 30000;
 function look(over) {
@@ -257,21 +257,21 @@ test('streamNeedsPolling: anything that is no proof of a recent event or poll co
     assert.equal(look({ now: limit, visible: false, lastPollAt: limit + 1 }), true);
 });
 
-// The watchdog's limits in chat.js against the heartbeat the server really sends, read from both
+// The watchdog's limits in live-updates.js against the heartbeat the server really sends, read from both
 // sources: a new stream shows one heartbeat at once and must show it within the first-proof
 // limit; a proven stream is allowed at least two heartbeats of silence before the page polls
 test('the stream limits match the server\'s named heartbeats', () => {
-    const chat = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
+    const live = readFileSync(new URL('../js/live-updates.js', import.meta.url), 'utf8');
     const events = readFileSync(new URL('../../backend/internal/handlers/events.go', import.meta.url), 'utf8');
     const seconds = (source, pattern) => {
         const found = source.match(pattern);
         assert.ok(found, `${pattern} moved or changed form`);
         return Number(found[1]);
     };
-    const firstProof = seconds(chat, /const STREAM_FIRST_PROOF_MS = (\d+) \* SECOND_MS;/);
-    const limit = seconds(chat, /const STREAM_SILENCE_LIMIT_MS = (\d+) \* SECOND_MS;/);
-    const poll = seconds(chat, /const POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
-    const hiddenPoll = seconds(chat, /const HIDDEN_POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
+    const firstProof = seconds(live, /const STREAM_FIRST_PROOF_MS = (\d+) \* SECOND_MS;/);
+    const limit = seconds(live, /const STREAM_SILENCE_LIMIT_MS = (\d+) \* SECOND_MS;/);
+    const poll = seconds(live, /const POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
+    const hiddenPoll = seconds(live, /const HIDDEN_POLL_INTERVAL_MS = (\d+) \* SECOND_MS;/);
     const keepAlive = seconds(events, /sseKeepAlive = (\d+) \* time\.Second/);
     assert.ok(limit >= 2 * keepAlive, 'silence limit shorter than two heartbeats');
     // ...and shorter than three: a held stream is noticed as soon as two heartbeats are missing
@@ -285,5 +285,5 @@ test('the stream limits match the server\'s named heartbeats', () => {
     assert.match(events, /ssePing = "event: ping\\ndata: \{\}\\n\\n"/);
     assert.match(events, /sseRetryPreamble = "retry: 3000\\n: ready\\n\\n"/);
     assert.match(events, /if !write\(sseRetryPreamble \+ ssePing\) \{/);
-    assert.match(chat, /const STREAM_EVENTS = Object\.freeze\(\['ping', 'msg', 'conv'\]\);/);
+    assert.match(live, /const STREAM_EVENTS = Object\.freeze\(\['ping', 'msg', 'conv'\]\);/);
 });
