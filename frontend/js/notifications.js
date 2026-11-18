@@ -5,6 +5,8 @@
 // How long a notification stays, how soon after it is added it slides in, and how long its
 // slide-out runs before it is removed (the stylesheet's .notification transition)
 const NOTIFICATION_SHOWN_MS = 4000;
+// A duration that never ends: the notification goes only when its close control is pressed
+const NOTIFICATION_STAYS = 0;
 const NOTIFICATION_ENTER_DELAY_MS = 10;
 const NOTIFICATION_EXIT_MS = 300;
 const NOTIFICATION_CLOSE_LABEL = '×';
@@ -63,10 +65,15 @@ function showSuccess(message) {
     showNotification(message, 'success');
 }
 
-function showError(message) {
-    showNotification(message, 'error');
+// standing (errors.js): the notification stays until the user closes it
+function shownFor(standing) {
+    return standing === true ? NOTIFICATION_STAYS : NOTIFICATION_SHOWN_MS;
 }
 
-function showWarning(message) {
-    showNotification(message, 'warning');
+function showError(message, standing = false) {
+    showNotification(message, 'error', shownFor(standing));
+}
+
+function showWarning(message, standing = false) {
+    showNotification(message, 'warning', shownFor(standing));
 }

@@ -12,8 +12,11 @@ const Errors = (() => {
     const ERROR = 'error';
     const WARNING = 'warning';
 
-    const e = (text) => Object.freeze({ severity: ERROR, text: text });
-    const w = (text) => Object.freeze({ severity: WARNING, text: text });
+    // Every entry says whether its notification stays until the user closes it (standing): one
+    // shown once, at a moment the user may not be looking, must not vanish by itself
+    const e = (text) => Object.freeze({ severity: ERROR, text: text, standing: false });
+    const w = (text) => Object.freeze({ severity: WARNING, text: text, standing: false });
+    const standingWarning = (text) => Object.freeze({ severity: WARNING, text: text, standing: true });
 
     // Shown when a code or its parameters are wrong: a programming error, logged as such
     const GENERIC = 'something went wrong — reload the page and try again';
@@ -128,8 +131,8 @@ const Errors = (() => {
         W_IDENTITY_NOT_KEPT: w('this browser cannot keep your identity — you will need your account number after a reload'),
         // A stored identity record gave no identity at load (an engine that cannot read its key
         // back, a record an older build stored, a damaged record): the record alone is removed
-        // and the main menu says so once (keystore.js load, app.js)
-        W_IDENTITY_UNREADABLE: w('your key could not be read back in this browser — log in once with your account number; nothing is lost'),
+        // and the main menu says so once, until the user closes it (keystore.js load, app.js)
+        W_IDENTITY_UNREADABLE: standingWarning('your key could not be read back in this browser — log in once with your account number; nothing is lost'),
         E_CONVERSATION_NOT_BURNED: e('could not burn conversation'),
         W_COPY_MANUALLY: w('copy it manually'),
         // A clear of the clipboard (utils.js clearClipboardOrWarn) was refused or did not settle
@@ -437,12 +440,12 @@ const Errors = (() => {
     // Never throws: a wrong code or missing parameter becomes the generic sentence under its own code
     function resolve(code, params) {
         if (!isCode(code)) {
-            return { code: CODES.E_UNKNOWN_CODE, severity: ERROR, text: REGISTRY.E_UNKNOWN_CODE.text };
+            return { code: CODES.E_UNKNOWN_CODE, severity: ERROR, text: REGISTRY.E_UNKNOWN_CODE.text, standing: false };
         }
         try {
-            return { code: code, severity: REGISTRY[code].severity, text: format(code, params) };
+            return { code: code, severity: REGISTRY[code].severity, text: format(code, params), standing: REGISTRY[code].standing };
         } catch (error) {
-            return { code: CODES.E_BAD_PARAMS, severity: ERROR, text: REGISTRY.E_BAD_PARAMS.text };
+            return { code: CODES.E_BAD_PARAMS, severity: ERROR, text: REGISTRY.E_BAD_PARAMS.text, standing: false };
         }
     }
 
@@ -457,13 +460,13 @@ const Errors = (() => {
         return resolved;
     }
 
-    // Shows the sentence as a notification
+    // Shows the sentence as a notification; a standing one stays until the user closes it
     function report(code, params, cause) {
         const resolved = logged(code, params, cause);
         if (resolved.severity === WARNING) {
-            showWarning(resolved.text);
+            showWarning(resolved.text, resolved.standing);
         } else {
-            showError(resolved.text);
+            showError(resolved.text, resolved.standing);
         }
     }
 

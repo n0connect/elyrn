@@ -346,3 +346,20 @@ test('18 Nov: the server\'s new refusals and the trust warnings have codes that 
     }
     assert.equal(Object.prototype.hasOwnProperty.call(Errors.INTERNAL, 'W_CLIPBOARD_NOT_CLEARED'), false);
 });
+
+test('a standing message stays until closed: W_IDENTITY_UNREADABLE is one, and report and the toast carry it', () => {
+    // Every entry declares it, in the one place messages are declared
+    for (const [code, entry] of Object.entries(Errors.REGISTRY)) assert.equal(typeof entry.standing, 'boolean', code);
+    assert.equal(Errors.REGISTRY.W_IDENTITY_UNREADABLE.standing, true);
+    assert.equal(Errors.REGISTRY.W_IDENTITY_NOT_KEPT.standing, false);
+    // report hands it to the toast, and the toast gives a standing message no timer
+    const errors = readFileSync(new URL('../js/errors.js', import.meta.url), 'utf8');
+    assert.match(errors, /showWarning\(resolved\.text, resolved\.standing\);/);
+    assert.match(errors, /showError\(resolved\.text, resolved\.standing\);/);
+    assert.match(errors, /standing: REGISTRY\[code\]\.standing \}/);
+    const toast = readFileSync(new URL('../js/notifications.js', import.meta.url), 'utf8');
+    assert.match(toast, /const NOTIFICATION_STAYS = 0;/);
+    assert.match(toast, /return standing === true \? NOTIFICATION_STAYS : NOTIFICATION_SHOWN_MS;/);
+    assert.match(toast, /function showWarning\(message, standing = false\) \{\n\s*showNotification\(message, 'warning', shownFor\(standing\)\);/);
+    assert.match(toast, /if \(duration > 0\) \{\n\s*setTimeout\(\(\) => \{\n\s*closeNotification/);
+});
