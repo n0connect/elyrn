@@ -284,7 +284,21 @@ function login() {
     return once('login', loginNow);
 }
 
+// The account number typed in the login field, read without ever showing it. The eye's hover
+// effect (eye-hover-animation.js) may be drawing scrambled or partly revealed text in the field
+// as clear text: it is held (no frame of it is drawn while a login runs) and the field goes back
+// to type=password before its value is touched, so no frame shows a character of the number.
+// The pointer path and the Enter path both pass here and reveal the same: nothing.
+function takeLoginNumber(field) {
+    const eye = window.eyeAnimation;
+    if (!eye) return field.value;
+    return eye.holdMasked();
+}
+
 async function loginNow() {
+    // Taken before the first await: a leave (leaveLogin raises loginRun) at any later point is seen
+    const run = loginRun;
+    const alive = () => run === loginRun && isShown('loginContainer');
     const accountNumberInputElement = document.getElementById('accountNumberInput');
     const errorElement = document.getElementById('loginError');
     const successElement = document.getElementById('loginSuccess');
@@ -293,37 +307,22 @@ async function loginNow() {
     errorElement.textContent = '';
     successElement.textContent = '';
 
-    // Check if eye animation is active and mask smoothly if needed
-    if (window.eyeAnimation && window.eyeAnimation.currentZone !== 'none') {
-        // Stop animation and get original value
-        const originalValue = window.eyeAnimation.originalValue || accountNumberInputElement.value;
-        window.eyeAnimation.stopAnimation();
-        window.eyeAnimation.currentZone = 'none';
-        window.eyeAnimation.resetToMasked();
-
-        // Smoothly mask the input using existing animation
-        await animateInputToMask(accountNumberInputElement, originalValue);
-
-        // Restore original value after masking
-        accountNumberInputElement.value = originalValue;
-        accountNumberInputElement.type = 'password';
-    }
-
     // NFKC, trimmed, an invite or room code named as such (validation.js parseAccountNumber)
-    const parsed = parseAccountNumber(accountNumberInputElement.value);
+    const parsed = parseAccountNumber(takeLoginNumber(accountNumberInputElement));
     if (!parsed.valid) {
+        releaseLoginNumber();
         Errors.inline(errorElement, parsed.error);
         return;
     }
 
-    const run = loginRun;
     loginBtn.disabled = true;
     try {
         // ZERO-KNOWLEDGE: only HKDF(AccountNumber, "noaddx/auth") goes over the wire
         const authKey = await ElyrnCrypto.deriveAuthKey(parsed.value);
+        if (!alive()) return;
+        // After every wait: the login screen left meanwhile shows nothing and opens nothing
         const result = await apiCall('POST', '/login', { auth_key: authKey });
-        // The login screen was left meanwhile: nothing is shown and the app is not opened
-        if (run !== loginRun) return;
+        if (!alive()) return;
         if (!result.ok || !result.data || !result.data.success) {
             // SECURITY: the server's own text is never shown (Errors.fromResult maps it)
             Errors.inline(errorElement, Errors.fromResult(result), null, result);
@@ -332,12 +331,13 @@ async function loginNow() {
 
         successElement.textContent = Errors.NOTICE.DERIVING_KEYS;
         const identity = await deriveSession(parsed.value);
-        if (run !== loginRun) return;
-        const opened = await enterApp(identity, true);
+        if (!alive()) return;
+        const opened = await enterApp(identity, true, alive);
+        if (opened.entry === ENTRY.LEFT || !alive()) return;
         successElement.textContent = '';
         if (opened.entry === ENTRY.UNREACHABLE) {
             // The number stays in the field: pressing login again retries
-            Errors.inline(errorElement, Errors.fromResult(opened.result), null, opened.result);
+            Errors.inline(errorElement, opened.code, null, opened.result);
             return;
         }
         clearLoginField();
@@ -346,10 +346,16 @@ async function loginNow() {
             showMainMenu();
         }
     } catch (error) {
-        Errors.inline(errorElement, Errors.CODES.E_REQUEST_FAILED, null, error);
+        if (alive()) Errors.inline(errorElement, Errors.CODES.E_REQUEST_FAILED, null, error);
     } finally {
         loginBtn.disabled = false;
+        releaseLoginNumber();
     }
+}
+
+// The eye's hover effect may draw again once a login has ended
+function releaseLoginNumber() {
+    if (window.eyeAnimation) window.eyeAnimation.release();
 }
 
 // Global variables for registration state
@@ -540,35 +546,6 @@ async function copyIssuedAccountNumber(accountNumber) {
     } catch (error) {
         Errors.inline(document.getElementById('registerError'), Errors.CODES.W_ACCOUNT_NUMBER_NOT_COPIED, null, error);
     }
-}
-
-// Animate input field to all asterisks (for input elements)
-function animateInputToMask(inputElement, originalValue) {
-    return new Promise((resolve) => {
-        const currentValue = inputElement.value || originalValue;
-        let masked = currentValue.split('');
-        let step = 0;
-        
-        // Show as text during animation
-        inputElement.type = 'text';
-        
-        const maskInterval = setInterval(() => {
-            // Mask 2-3 random characters per step
-            for (let i = 0; i < MASK_CHARS_PER_STEP; i++) {
-                const randomIndex = Math.floor(Math.random() * masked.length);
-                masked[randomIndex] = MASK_CHAR;
-            }
-            inputElement.value = masked.join('');
-            step++;
-            
-            // Check if all masked
-            if (masked.every(c => c === MASK_CHAR) || step > MASK_MAX_STEPS) {
-                clearInterval(maskInterval);
-                inputElement.value = MASK_CHAR.repeat(masked.length);
-                resolve();
-            }
-        }, MASK_STEP_MS);
-    });
 }
 
 // Phase 2 never leaves the page. The account number on screen is already saved by the user,
