@@ -48,7 +48,7 @@ func randomFile(tb testing.TB, name string, size int64) e2e.File {
 
 func openOnePage(fx *roomFixture, dto models.MessageDTO) []Message {
 	st := fx.state()
-	return st.openPage([]models.MessageDTO{dto}, st.forwardWindow(0, newLedger(st.counters))).messages
+	return st.openPage([]models.MessageDTO{dto}, st.forwardWindow(0, st.forwardLedger())).messages
 }
 
 func TestFileMessage_ShowsTextNameAndSizeOnly(t *testing.T) {

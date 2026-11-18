@@ -137,7 +137,11 @@ This is the design of record. Decisions are dated and final unless the owner rev
   recorded and displaces the off-list entry recorded longest ago; the agent's own entry and the
   list's are never displaced. The record keeps the order senders were first recorded in
   (`"order"` in `agent.counters.json`; a record written before it has none and is read in key
-  order). Remaining differences from the browser: the bound (256 against 4096), and a record above
+  order). One loaded sequence (a read, or a counter sync) tracks its senders under the same keep
+  set: the agent itself and the current list are always tracked, so a flood of made-up senders
+  early in a sequence never stops a member from being judged; a sender that is neither and
+  arrives once 256 are tracked is not, and is reported like a refused one (`unrecorded: true`,
+  `E_AGENT_SENDER_UNRECORDED`). Remaining differences from the browser: the bound (256 against 4096), and a record above
   the bound fails the file closed (`E_AGENT_STATE_FILE`) where the browser trims it, since no agent
   ever writes one.
 
