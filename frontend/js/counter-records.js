@@ -73,12 +73,11 @@ const CounterRecords = (() => {
     // Counters.MAX_UNRECORDED senders, and the bound may only make the answer more conservative:
     // a sender that finds it full sets conv.unrecordedOverflow, under which isUnrecorded calls
     // every sender neither kept nor in the record unrecorded. Senders recorded since leave the
-    // set first; the flag clears only when that brings the set below the bound (a sender still
-    // unrecorded in the loaded sequence is refused again by this same write, and sets it again).
+    // set; the flag never clears for the life of the conversation in this tab: the senders the
+    // full set could not hold are forgotten, so clearing it would show them as recorded.
     function trackUnrecorded(conv, kept) {
         const recorded = new Map(kept.record.senders);
         for (const key of conv.unrecorded) if (recorded.has(key)) conv.unrecorded.delete(key);
-        if (conv.unrecorded.size < Counters.MAX_UNRECORDED) conv.unrecordedOverflow = false;
         for (const key of [...kept.refused, ...kept.displaced]) {
             if (conv.unrecorded.has(key)) continue;
             if (conv.unrecorded.size < Counters.MAX_UNRECORDED) conv.unrecorded.add(key);

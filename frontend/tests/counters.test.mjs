@@ -391,7 +391,7 @@ test('conv.unrecorded holds at most MAX_UNRECORDED senders; past it every unknow
     assert.equal(CounterRecords.isUnrecorded(conv, overflowed), true);
 });
 
-test('the overflow clears only when a sender recorded since brings conv.unrecorded below its bound; the sender it displaced is unrecorded', () => {
+test('the overflow never clears, even when a sender recorded since brings conv.unrecorded below its bound; the sender it displaced is unrecorded', () => {
     const conv = roomConv([BOB]);
     conv.mark = Counters.parse({ seq: 1, mine: 1, senders: [[FORMER, 5], [OWN, 1],
         ...Array.from({ length: Counters.MAX_SENDERS - 2 }, (_, i) => [mintedKey(i), 1])] });
@@ -404,8 +404,10 @@ test('the overflow clears only when a sender recorded since brings conv.unrecord
     const kept = written(conv, Counters.merge(conv.mark, raisedBy(conv.mark, [joined])), [OWN, BOB, joined]);
     const latest = mintedKey(Counters.MAX_SENDERS - 3);
     assert.deepEqual([...kept.displaced], [latest]);
-    assert.equal(conv.unrecordedOverflow, false, 'the set went below its bound');
+    assert.equal(conv.unrecordedOverflow, true, 'the flag is sticky: the forgotten senders stay unrecorded');
+    assert.equal(CounterRecords.isUnrecorded(conv, flood[flood.length - 1]), true, 'a sender the full set could not hold never shows as recorded');
     assert.equal(CounterRecords.isUnrecorded(conv, joined), false);
+    assert.equal(CounterRecords.isUnrecorded(conv, BOB), false);
     assert.equal(CounterRecords.isUnrecorded(conv, latest), true, 'the displaced sender is marked unrecorded');
     assert.equal(conv.unrecorded.size, Counters.MAX_UNRECORDED);
     assert.equal(CounterRecords.isUnrecorded(conv, FORMER), false);
