@@ -239,18 +239,21 @@ const Keystore = (() => {
         };
     }
 
-    // { present, identity }: whether a record is stored (counted, so one this engine cannot read
-    // back still counts), and the identity it gives, or null
+    // { present, identity }: whether a record is stored, and the identity it gives, or null. The
+    // record is counted in a transaction of its own: a get this engine fails on (a key the
+    // released build stored, read back in WebKit) aborts only its own transaction, so the record
+    // still counts as present instead of the whole store as unavailable.
     async function readIdentity() {
-        const read = { present: false, record: null };
-        await run(STORE, 'readonly', tx => {
-            const keys = tx.objectStore(STORE);
-            const count = keys.count(RECORD);
-            count.onsuccess = () => { read.present = count.result > 0; };
-            const record = keys.get(RECORD);
-            record.onsuccess = () => { read.record = record.result; };
-        });
-        return { present: read.present, identity: await identityFrom(read.record) };
+        const present = (await run(STORE, 'readonly', tx => tx.objectStore(STORE).count(RECORD))) > 0;
+        if (!present) return { present: false, identity: null };
+        let record = null;
+        try {
+            record = await run(STORE, 'readonly', tx => tx.objectStore(STORE).get(RECORD));
+        } catch (e) {
+            // The cause is kept in the log; the page says W_IDENTITY_UNREADABLE (app.js)
+            Log.warn(Errors.CODES.W_IDENTITY_UNREADABLE, e);
+        }
+        return { present: true, identity: await identityFrom(record) };
     }
 
     // The identity a stored record gives, or null. A record from before rooms has no rooms root:
@@ -272,16 +275,17 @@ const Keystore = (() => {
         return { privateKey: privateKey, publicKey: record.publicKey, roomsRoot: record.roomsRoot };
     }
 
+    // { identity, unreadable }: the stored identity, or null; unreadable when a record is stored
+    // but gives no identity (an engine that cannot read its key back, a damaged record, one the
+    // released build wrote in a form WebKit cannot read). The main menu says so once
+    // (app.js, W_IDENTITY_UNREADABLE); the next login replaces the record.
     async function load() {
         try {
             const read = await readIdentity();
-            // Stored but unusable (an engine that cannot read its key back, a damaged record):
-            // logged, then treated as no identity; the next login replaces it
-            if (!read.identity && read.present) Log.warn(Errors.INTERNAL.W_IDENTITY_UNREADABLE);
-            return read.identity;
+            return { identity: read.identity, unreadable: read.present && !read.identity };
         } catch (e) {
             unavailable(Errors.INTERNAL.W_KEYSTORE_UNAVAILABLE, e);
-            return null;
+            return { identity: null, unreadable: false };
         }
     }
 

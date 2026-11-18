@@ -121,11 +121,16 @@ test('wave 2 codes exist with the severity they are reported at', () => {
     for (const code of ['W_RESPONSE_TOO_LARGE', 'W_COUNTER_LOCK_UNAVAILABLE', 'W_COUNTER_RECORDS_EVICTED']) {
         assert.equal(Errors.INTERNAL[code], code);
     }
-    // The identity kept on this device (keystore.js): one told, one logged
+    // The identity kept on this device (keystore.js): both told; one that is stored but cannot be
+    // read back says that logging in once restores it, never that anything is gone
     assert.equal(C.W_IDENTITY_NOT_KEPT, 'W_IDENTITY_NOT_KEPT');
     assert.equal(Errors.REGISTRY.W_IDENTITY_NOT_KEPT.severity, 'warning');
     assert.match(Errors.REGISTRY.W_IDENTITY_NOT_KEPT.text, /account number/);
-    assert.equal(Errors.INTERNAL.W_IDENTITY_UNREADABLE, 'W_IDENTITY_UNREADABLE');
+    assert.equal(C.W_IDENTITY_UNREADABLE, 'W_IDENTITY_UNREADABLE');
+    assert.equal(Errors.REGISTRY.W_IDENTITY_UNREADABLE.severity, 'warning');
+    assert.equal(Errors.REGISTRY.W_IDENTITY_UNREADABLE.text,
+        'your key could not be read back in this browser — log in once with your account number; nothing is lost');
+    assert.equal(Object.hasOwn(Errors.INTERNAL, 'W_IDENTITY_UNREADABLE'), false);
     assert.equal(Errors.INTERNAL.W_KEY_PROBE_FAILED, 'W_KEY_PROBE_FAILED');
     // An authentic message a newer elyrn wrote is named as such, never as tampered with
     assert.equal(Errors.REGISTRY.W_MESSAGE_FROM_NEWER.severity, 'warning');

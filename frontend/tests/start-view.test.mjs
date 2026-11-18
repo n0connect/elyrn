@@ -46,3 +46,19 @@ test('start view: without scripting the stylesheet hides it and shows the main m
     assert.match(block, /#startView \{\s*display: none;\s*\}/);
     assert.match(block, /#mainMenu \{\s*display: block;\s*\}/);
 });
+
+// Reading IndexedDB needs a browser (the drill); what decides the path is pinned from the sources
+test('a stored identity that cannot be read back opens the main menu with W_IDENTITY_UNREADABLE, never silently', () => {
+    const app = read('../js/app.js');
+    const keystore = read('../js/keystore.js');
+    const resume = app.slice(app.indexOf('async function resumeSession'), app.indexOf('\n}\n', app.indexOf('async function resumeSession')));
+    assert.match(resume, /if \(!identity\) \{\n\s*showMainMenu\(\);\n\s*if \(stored\.unreadable\) Errors\.report\(Errors\.CODES\.W_IDENTITY_UNREADABLE\);\n\s*return;/);
+    // The record is counted in a transaction of its own, before and apart from the get, so a get
+    // that fails (a record the released build wrote, in WebKit) still leaves it present
+    const readId = keystore.slice(keystore.indexOf('async function readIdentity'), keystore.indexOf('async function identityFrom'));
+    assert.match(readId, /const present = \(await run\(STORE, 'readonly', tx => tx\.objectStore\(STORE\)\.count\(RECORD\)\)\) > 0;/);
+    assert.match(readId, /try \{\n\s*record = await run\(STORE, 'readonly', tx => tx\.objectStore\(STORE\)\.get\(RECORD\)\);\n\s*\} catch/);
+    assert.match(readId, /return \{ present: true, identity: await identityFrom\(record\) \};/);
+    const load = keystore.slice(keystore.indexOf('    async function load()'));
+    assert.match(load.slice(0, load.indexOf('\n    }\n')), /return \{ identity: read\.identity, unreadable: read\.present && !read\.identity \};/);
+});

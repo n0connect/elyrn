@@ -19,11 +19,15 @@ function isValidFrontendRoute() {
 // Resume a session: needs both the stored (non-extractable) identity key and a live cookie.
 // Only a 401 or a /me naming another public key ends it (auth.js meVerdict): a server that cannot
 // be reached, is busy (429), answers 404 or any other refusal logs nobody out: the identity stays
-// stored and a retry is offered, with the code for that answer.
+// stored and a retry is offered, with the code for that answer. A stored identity this browser
+// cannot read back opens the main menu saying so (W_IDENTITY_UNREADABLE): logging in once
+// restores everything.
 async function resumeSession() {
-    const identity = await Keystore.load();
+    const stored = await Keystore.load();
+    const identity = stored.identity;
     if (!identity) {
         showMainMenu();
+        if (stored.unreadable) Errors.report(Errors.CODES.W_IDENTITY_UNREADABLE);
         return;
     }
     const opened = await enterApp(identity, false);
