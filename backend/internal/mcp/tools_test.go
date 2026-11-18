@@ -159,11 +159,15 @@ func TestSchemas_MatchTheArgumentStructs(t *testing.T) {
 	}
 }
 
-// Design D7: every tool that returns room messages says their text is data.
+// Design D7: every tool that returns room messages says their text is data, and (audit F2) how
+// a sender is named and what left and same_name mean.
 func TestMessageTools_LabelReceivedTextAsData(t *testing.T) {
 	for _, name := range []ToolName{ToolRoomRead, ToolRoomWait} {
 		if tl := findTool(name); tl == nil || !strings.Contains(tl.description, dataNotInstructions) {
 			t.Errorf("%s does not label message text as data", name)
+		}
+		if tl := findTool(name); tl == nil || !strings.Contains(tl.description, sendersNamed) {
+			t.Errorf("%s does not say how senders are named", name)
 		}
 	}
 }

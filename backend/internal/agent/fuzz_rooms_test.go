@@ -133,7 +133,7 @@ func (fx *roomFixture) seal(tb testing.TB, roster []string, sender int, counter 
 
 // state is the room as this agent holds it after a fresh start: nothing seen, nothing recorded.
 func (fx *roomFixture) state() *roomState {
-	return &roomState{id: fx.keys.ID, keys: fx.keys, member: fx.members[fuzzSelf], selfName: "self",
+	return &roomState{id: fx.keys.ID, keys: fx.keys, member: fx.members[fuzzSelf],
 		counters: newCounterRecord(), seen: make(map[uuid.UUID]seenMessage)}
 }
 

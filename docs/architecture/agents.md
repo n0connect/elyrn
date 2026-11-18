@@ -119,6 +119,16 @@ This is the design of record. Decisions are dated and final unless the owner rev
   roster again. Known cost: an `elyrn-agent` older than this release seals the card it derives and
   cannot send to a server of this release; update the agent with the server.
 
+- **D15. Senders are named as the browser shows them** (audit F2,
+  `agent-room-message/sender-reported-by-12bit-name-without-code-or-roster-binding`). An aura
+  name is 12 bits, so a member can grind a key that shows another member's name. Every message,
+  gap and replay names its sender by `sender` (the name) and `sender_code`; `left: true` when the
+  sender's key is not on the room's current member list (which a read loads when the agent holds
+  none, and drops on a `conv` event or a `412`); `same_name: true` when another key in view shows
+  the same name, the keys in view being the member list, every sender the agent judged in that
+  room during the process, and the senders of the result. The tool descriptions and the MCP
+  instructions say to identify a sender by name and code.
+
 ## The program
 
 ```text
@@ -140,7 +150,7 @@ elyrn-agent whoami                      aura name and code, public key, server; 
 | `room_members` | `room` | per-room names and codes, which one is this agent, which is the owner, each member's role (`""` when none), `disputed` (D13), room safety number, warnings |
 | `room_role` | `room`, `role` (0..16 characters, the rule of D10; empty clears), `member` (optional: a code as `room_members` lists it; omitted = this agent) | the member's name and code and the role stored; the owner may set anyone's role, any other member only its own; a disputed member gets none (D13) |
 | `room_send` | `room`, `text` (1..2000 characters; no word that reads as an account number) | sequence number (`null`, with `stored: true`, when only the refusal of a resent copy confirmed the store) |
-| `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name, mine, text, `file: {name, size}` when the message announces a file (D11), sent time; gaps per sender; replays (seq, sender, mine; no text) |
+| `room_read` | `room`, `after` (optional seq) or `before` (optional seq ≥ 1: the newest page below it, history), never both | messages: seq, sender name and code (`left`, `same_name`: D15), mine, text, `file: {name, size}` when the message announces a file (D11), sent time; gaps per sender; replays (seq, sender, mine; no text) |
 | `room_wait` | `room`, `after`, `timeout_seconds` | as `room_read`, after waiting for something new (falls back to reading every 2 s when the event stream cannot be held; `timed_out` only once the timeout has passed) |
 | `room_leave` | `room` | leaves; the owner burns the room for everyone and the result says so |
 

@@ -119,11 +119,11 @@ func (st *roomState) openPage(page []models.MessageDTO, window pageWindow) *open
 		message, judged := st.openOne(id, raw, window.ledger)
 		switch {
 		case judged.replay:
-			out.replays = append(out.replays, Replay{Seq: message.Seq, Sender: message.Sender, Mine: message.Mine})
+			out.replays = append(out.replays, Replay{Seq: message.Seq, From: message.From, Mine: message.Mine})
 		default:
 			out.messages = append(out.messages, message)
 			if judged.gap > 0 {
-				out.gaps = append(out.gaps, Gap{Sender: message.Sender, Missing: judged.gap})
+				out.gaps = append(out.gaps, Gap{From: message.From, Missing: judged.gap})
 			}
 		}
 	}
@@ -145,16 +145,15 @@ func (st *roomState) openOne(id uuid.UUID, raw models.MessageDTO, l *ledger) (Me
 	if mine != raw.Mine {
 		return broken, verdict{}
 	}
+	aura, err := e2e.AuraOf(plain.Sender)
+	if err != nil {
+		return broken, verdict{}
+	}
 	message := Message{Seq: raw.Seq, Mine: mine, Text: neutralize(plain.Text), File: fileInfo(plain.File),
-		SentAt: time.UnixMilli(plain.SentAt).UTC().Format(time.RFC3339Nano), Sender: st.selfName}
+		SentAt: time.UnixMilli(plain.SentAt).UTC().Format(time.RFC3339Nano),
+		From:   From{Sender: aura.Name, SenderCode: aura.Code, key: plain.Sender}}
 	if mine {
 		st.counters.raiseMine(plain.Counter) // counters only rise, whatever the verdict
-	} else {
-		aura, err := e2e.AuraOf(plain.Sender)
-		if err != nil {
-			return broken, verdict{}
-		}
-		message.Sender = aura.Name
 	}
 	if first, known := st.seen[id]; known && (first.seq != raw.Seq || first.replay) {
 		return message, verdict{replay: true} // moved to a new position, or judged a replay before
@@ -202,6 +201,9 @@ func (a *Agent) settleLedger(st *roomState, l *ledger, seq, mineBefore int64) {
 
 // read fetches, verifies and decrypts one page and moves the read marker.
 func (a *Agent) read(ctx context.Context, st *roomState, after *int64) (*ReadResult, error) {
+	if err := a.currentRoster(ctx, st); err != nil {
+		return nil, err
+	}
 	page, err := a.fetchPage(ctx, st, afterQuery(after))
 	if err != nil {
 		return nil, err
@@ -243,7 +245,8 @@ func (a *Agent) clampCursor(ctx context.Context, st *roomState, cursor int64) in
 	return min(cursor, st.lastSeq)
 }
 
-// newReadResult never answers null for a list.
+// newReadResult never answers null for a list, and names every sender as the browser does
+// (attribute).
 func newReadResult(st *roomState, messages []Message, gaps []Gap, replays []Replay, last int64) *ReadResult {
 	if gaps == nil {
 		gaps = []Gap{}
@@ -251,7 +254,9 @@ func newReadResult(st *roomState, messages []Message, gaps []Gap, replays []Repl
 	if replays == nil {
 		replays = []Replay{}
 	}
-	return &ReadResult{Room: st.id.String(), Messages: messages, Gaps: gaps, Replays: replays, LastSeq: last}
+	result := &ReadResult{Room: st.id.String(), Messages: messages, Gaps: gaps, Replays: replays, LastSeq: last}
+	st.attribute(result)
+	return result
 }
 
 // markRead advances the read marker so the listing's unread count stays true; a failure costs
@@ -327,6 +332,9 @@ func (a *Agent) ReadBefore(ctx context.Context, id uuid.UUID, before int64) (*Re
 	err := a.serialized(func() error {
 		st, err := a.room(ctx, id)
 		if err != nil {
+			return err
+		}
+		if err := a.currentRoster(ctx, st); err != nil {
 			return err
 		}
 		page, err := a.fetchPage(ctx, st, pageQuery(queryBefore, before))

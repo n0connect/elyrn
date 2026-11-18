@@ -16,7 +16,6 @@ import (
 type roomState struct {
 	id         uuid.UUID
 	name       string
-	selfName   string
 	vault      string
 	keys       *e2e.Room
 	member     *e2e.RoomMember
@@ -86,12 +85,8 @@ func (a *Agent) roomFromCode(id uuid.UUID, code *e2e.RoomCode, vault string, ite
 	if err != nil {
 		return nil, fail(CodeInternal, err)
 	}
-	self, err := e2e.AuraOf(member.Public)
-	if err != nil {
-		return nil, fail(CodeInternal, err)
-	}
 	st := &roomState{
-		id: id, name: roomAura.Name, selfName: self.Name, vault: vault, keys: keys, member: member,
+		id: id, name: roomAura.Name, vault: vault, keys: keys, member: member,
 		maxMembers: code.MaxMembers, expiresAt: time.Unix(code.ExpiresAt(), 0),
 		counters: a.counters.record(id, code.ExpiresAt()), seen: make(map[uuid.UUID]seenMessage),
 	}
