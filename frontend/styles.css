@@ -650,7 +650,7 @@ header {
     transform: none;
 }
 
-.burn-btn[data-caption]::after {
+.danger-tile[data-caption]::after {
     color: var(--danger);
 }
 
@@ -731,18 +731,19 @@ header {
     translate: 0 var(--icon-px);
 }
 
-/* Burning keeps its red: the tile turns red, the word too */
+/* Burning stands apart from the other actions */
 .burn-btn {
     margin-left: var(--tile-gap);
 }
 
-.icon-btn.burn-btn:hover,
-.icon-btn.burn-btn:focus-visible {
+/* A destructive tile (burn, delete identity) keeps its red: the tile turns red, the word too */
+.icon-btn.danger-tile:hover,
+.icon-btn.danger-tile:focus-visible {
     color: var(--danger);
 }
 
-.icon-btn.burn-btn:hover .icon-tile,
-.icon-btn.burn-btn:focus-visible .icon-tile {
+.icon-btn.danger-tile:hover .icon-tile,
+.icon-btn.danger-tile:focus-visible .icon-tile {
     background: var(--danger);
     border-color: var(--danger);
     color: var(--bg);
@@ -1202,7 +1203,8 @@ header {
     text-transform: none;
 }
 
-/* The identity panel: glyph, name and code on one line; deleting the identity set apart below */
+/* The identity panel: glyph, name and code on one line; deleting the identity set apart below,
+   a member row (.member-item) under a rule, its tile at the right edge */
 .identity-aura {
     display: flex;
     flex-wrap: wrap;
@@ -1211,16 +1213,10 @@ header {
     margin-bottom: 12px;
 }
 
-.identity-end {
+.member-item.identity-end {
     margin-top: 16px;
-    padding-top: 4px;
     border-top: 1px solid var(--border);
-}
-
-.pair-panel .identity-delete:hover,
-.pair-panel .identity-delete:focus-visible {
-    color: var(--danger);
-    background: var(--danger-bg);
+    border-bottom: none;
 }
 
 /* ========================================
