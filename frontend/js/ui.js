@@ -923,12 +923,24 @@ function markSenders(keys, tagClass, makeTag) {
 
 // keys: public keys whose name another key shares; tags (or untags) every message from them
 function markLookalikes(keys) {
-    markSenders(keys, 'lookalike-tag:not(.disputed-tag)', lookalikeTag);
+    markSenders(keys, 'lookalike-tag:not(.disputed-tag):not(.unrecorded-tag)', lookalikeTag);
 }
 
 // keys: public keys more than one seat claims; tags (or untags) every message from them
 function markDisputed(keys) {
     markSenders(keys, 'disputed-tag', disputedTag);
+}
+
+// The tag on each message from a sender the full counter record did not take
+function unrecordedTag() {
+    const tag = memberTag(Errors.message(Errors.CODES.W_SENDER_NOT_RECORDED));
+    tag.classList.add('lookalike-tag', 'unrecorded-tag');
+    return tag;
+}
+
+// keys: senders the room's counter record did not take; tags (or untags) every message from them
+function markUnrecorded(keys) {
+    markSenders(keys, 'unrecorded-tag', unrecordedTag);
 }
 
 // entries: verified roster (one entry per key); skipped: cards that failed to open (shown, never

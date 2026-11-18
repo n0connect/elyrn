@@ -22,7 +22,8 @@ const CounterRecords = (() => {
     }
 
     // A record as stored, read within the sender bound; a stored record above it (written by an
-    // older build) keeps this device's own entry and as many others as the bound allows
+    // older build) keeps this device's own entry, the roster's, then the earliest-recorded others
+    // up to the bound (Counters.trim)
     async function readMark(conv) {
         const read = Counters.parseBounded(await Keystore.loadCounters(conv.id), keptSenders(conv));
         if (read.evicted > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
@@ -41,7 +42,8 @@ const CounterRecords = (() => {
         const raised = Counters.merge(await conv.markLoad, Counters.snapshot(conv.ledger, conv.maxSeq, conv.myMaxN));
         await Keystore.withCounterLock(conv.id, async () => {
             const stored = await storedMark(conv);
-            await writeMark(conv, stored, Counters.merge(Counters.merge(stored, conv.mark), raised));
+            const earlier = Counters.merge(stored, conv.mark);
+            await writeMark(conv, stored, earlier, Counters.merge(earlier, raised));
         });
     }
 
@@ -50,13 +52,19 @@ const CounterRecords = (() => {
         return readMark(conv);
     }
 
-    // Keeps record, within the sender bound (Counters.bound: off-roster senders first, oldest
-    // first, never this device's own entry or the roster's; logged when any goes), as this tab's
-    // last one (it stands in when storage fails) and stores it unless the stored one already says
-    // the same. Every record this device writes therefore reads back whole.
-    async function writeMark(conv, stored, record) {
-        const kept = Counters.bound(record, keptSenders(conv));
-        if (kept.evicted > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
+    // Keeps next within the sender bound (Counters.bound: what earlier recorded is never given up
+    // to a made-up sender; a new off-roster sender at the bound is not recorded, a new roster
+    // member displaces the off-roster entry recorded longest ago, logged), as this tab's last one
+    // (it stands in when storage fails), and stores it unless the stored one already says the
+    // same. Every record this device writes therefore reads back whole. The senders not recorded
+    // are kept in conv.unrecorded, which the page shows (chat.js markUnrecorded); one recorded
+    // since (it joined the roster) leaves it.
+    async function writeMark(conv, stored, earlier, next) {
+        const kept = Counters.bound(earlier, next, keptSenders(conv));
+        if (kept.displaced > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
+        const recorded = new Map(kept.record.senders);
+        for (const key of conv.unrecorded) if (recorded.has(key)) conv.unrecorded.delete(key);
+        for (const key of kept.refused) conv.unrecorded.add(key);
         conv.mark = kept.record;
         if (!Counters.same(kept.record, stored)) {
             await Keystore.saveCounters(conv.id, kept.record, conv.room ? conv.room.expiresAt : 0);
@@ -77,7 +85,7 @@ const CounterRecords = (() => {
             const counter = conv.spare > 0 && conv.spare === top ? top : top + 1;
             conv.spare = 0;
             conv.myMaxN = counter;
-            await writeMark(conv, stored, Counters.merge(known, Counters.parse({ seq: 0, mine: counter, senders: [] })));
+            await writeMark(conv, stored, known, Counters.merge(known, Counters.parse({ seq: 0, mine: counter, senders: [] })));
             return counter;
         });
     }

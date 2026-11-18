@@ -331,7 +331,10 @@ test('18 Nov: the server\'s new refusals and the trust warnings have codes that 
         ['W_OWN_SEAT_DISPUTED', 'warning', /claims to be you/],
         // A4
         ['E_FRIEND_REQUEST_RELAYED', 'error', /did not come from the member who sent it/],
-        ['W_FRIEND_REQUEST_OUTDATED', 'warning', /ask them to send a new request/]
+        ['W_FRIEND_REQUEST_OUTDATED', 'warning', /ask them to send a new request/],
+        // C2: a sender the full counter record did not take, and the room's record full
+        ['W_SENDER_NOT_RECORDED', 'warning', /replay protection is not kept for this sender/],
+        ['W_COUNTER_RECORD_FULL', 'warning', /record on this device is full/]
     ]) {
         assert.equal(Errors.REGISTRY[code].severity, severity, code);
         assert.match(Errors.REGISTRY[code].text, words, code);

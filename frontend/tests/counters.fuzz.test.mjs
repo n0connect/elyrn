@@ -121,64 +121,113 @@ test('parse / merge / same: never throw on stored values; parse is a fixed point
     });
 });
 
-// THE SENDER BOUND (fix-spec C2), against a model written apart from counters.js: past
-// MAX_SENDERS the first senders not kept go, in the record's order, and nothing else changes
-const BOUND_ITERATIONS = 150;
-const MAX_OVER_BOUND = 64;
-const MAX_KEPT = 48;
+// THE SENDER BOUND (fix-spec C2 as revised 18 Nov), against a model written apart from
+// counters.js: what earlier recorded keeps its place; a new sender is recorded while there is
+// room; at the bound a kept one (own key, roster) displaces the earliest off-roster entry and
+// any other is refused. Reading above the bound keeps the kept, then the earliest others.
+const BOUND_ITERATIONS = 120;
+const MAX_NEW = 96;
+const MAX_KEPT = 40;
 const KEY_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
-function boundModel(entries, keep, limit) {
-    const excess = entries.length - limit;
-    if (excess <= 0) return { senders: entries, evicted: 0 };
-    let evicted = 0;
-    const senders = [];
-    for (const entry of entries) {
-        if (evicted < excess && !keep.has(entry[0])) {
-            evicted++;
-            continue;
+function boundModel(earlier, next, keep, limit) {
+    const counters = new Map(next);
+    let out = earlier.map(([key, counter]) => [key, Math.max(counter, counters.get(key) || 0)]);
+    const present = new Set(out.map(([k]) => k));
+    const refused = [];
+    let displaced = 0;
+    for (const [key, counter] of next) {
+        if (present.has(key)) continue;
+        if (out.length >= limit) {
+            if (!keep.has(key)) {
+                refused.push(key);
+                continue;
+            }
+            const at = out.findIndex(([k]) => !keep.has(k));
+            if (at >= 0) {
+                present.delete(out[at][0]);
+                out = out.slice(0, at).concat(out.slice(at + 1));
+                displaced++;
+            }
         }
-        senders.push(entry);
+        out.push([key, counter]);
+        present.add(key);
     }
-    return { senders, evicted };
+    return { senders: out, refused, displaced };
 }
 
-test('the sender bound: evicts exactly the model\'s senders, never a kept one, and reads back whole', async () => {
+function trimModel(entries, keep, limit) {
+    if (entries.length <= limit) return entries;
+    let room = limit - entries.filter(([k]) => keep.has(k)).length;
+    return entries.filter(([k]) => keep.has(k) || room-- > 0);
+}
+
+const key = (r, prefix) => prefix + r.from(KEY_ALPHABET, 42);
+
+test('the sender bound: bound and trim match the model, a kept or earlier entry is never lost to a made-up sender', async () => {
     const limit = Counters.MAX_SENDERS;
     await fuzz(SEED + 2, BOUND_ITERATIONS, (r) => {
-        const n = r.int(Math.max(0, limit - 4), limit + MAX_OVER_BOUND);
-        const keys = new Set();
-        while (keys.size < n) keys.add('k' + r.from(KEY_ALPHABET, 42));
-        const entries = [...keys].map((key) => [key, r.int(1, 1000)]);
-        const all = r.bool(0.05);
-        const keep = new Set(all ? keys : Array.from({ length: r.int(0, MAX_KEPT) }, () => (r.bool(0.8) && n > 0 ? r.pick(entries)[0] : 'z' + r.from(KEY_ALPHABET, 42))));
-        const seq = r.int(0, 1e6);
-        const mine = r.int(0, 1e6);
-        // Built unbounded, as a sync's snapshot is
-        const state = Counters.ledger(Counters.EMPTY);
-        for (const [key, counter] of entries) Counters.admit(state, key, counter);
-        const record = Counters.snapshot(state, seq, mine);
-        assert.equal(record.senders.length, n);
+        // An earlier record near or at the bound (as written before), its kept part random
+        const size = r.pick([r.int(0, 8), r.int(limit - MAX_NEW, limit)]);
+        const earlierKeys = new Set();
+        while (earlierKeys.size < size) earlierKeys.add(key(r, 'e'));
+        const earlierEntries = [...earlierKeys].map((k) => [k, r.int(1, 1000)]);
+        const keep = new Set();
+        for (let n = r.int(0, MAX_KEPT); n > 0 && earlierEntries.length > 0; n--) keep.add(r.pick(earlierEntries)[0]);
+        // New senders: made-up ones, and sometimes roster members new to the record
+        const fresh = [];
+        for (let n = r.int(0, MAX_NEW); n > 0; n--) {
+            const k = key(r, 'n');
+            if (r.bool(0.1)) keep.add(k);
+            fresh.push(k);
+        }
+        const earlier = Counters.parse({ seq: r.int(0, 1e6), mine: r.int(0, 1e6), senders: earlierEntries });
+        const state = Counters.ledger(earlier);
+        for (const [k] of earlierEntries) if (r.bool(0.05)) Counters.admit(state, k, r.int(1, 2000));
+        for (const k of fresh) Counters.admit(state, k, r.int(1, 1000));
+        const next = Counters.merge(earlier, Counters.snapshot(state, earlier.seq + 1, earlier.mine));
 
-        const got = Counters.bound(record, keep);
-        const want = boundModel(entries, keep, limit);
-        assert.equal(got.evicted, want.evicted);
+        const got = Counters.bound(earlier, next, keep);
+        const want = boundModel(plain(earlier.senders), plain(next.senders), keep, limit);
         assert.deepEqual(plain(got.record.senders), want.senders);
-        assert.equal(got.record.seq, seq);
-        assert.equal(got.record.mine, mine);
-        const kept = new Map(got.record.senders);
-        for (const key of keep) if (keys.has(key)) assert.ok(kept.has(key), 'a kept sender was evicted');
-        assert.ok(got.record.senders.length <= Math.max(limit, [...keys].filter((key) => keep.has(key)).length));
-        // What the write side stores, the read side gives back unchanged
-        // (compared as plain data in order: Counters.same is quadratic, too slow at this size)
+        assert.deepEqual(plain(got.refused), want.refused);
+        assert.equal(got.displaced, want.displaced);
+        assert.equal(got.record.seq, next.seq);
+        assert.equal(got.record.mine, next.mine);
+        const written = new Map(got.record.senders);
+        // Every kept sender of next is recorded; an earlier entry goes only to a kept newcomer
+        for (const [k] of next.senders) if (keep.has(k)) assert.ok(written.has(k), 'a kept sender was not recorded');
+        const lost = earlierEntries.filter(([k]) => !written.has(k));
+        assert.ok(lost.length === got.displaced && lost.every(([k]) => !keep.has(k)), 'an earlier entry was lost to a made-up sender');
+        assert.ok(got.record.senders.length <= Math.max(limit, keep.size));
+        // What is written reads back whole, and an unbounded record reads as the model trims it
         const read = Counters.parseBounded(plain(got.record), keep);
         assert.equal(read.evicted, 0);
         assert.deepEqual(plain(read.record), plain(got.record));
-        // A record an older build stored unbounded is read as the write side would have bounded it
-        const old = Counters.parseBounded(plain(record), keep);
-        assert.deepEqual(plain(old.record), plain(got.record));
-        assert.equal(old.evicted, got.evicted);
-        // Never thrown away whole while it is well formed
-        if (n > 0) assert.notEqual(old.record, Counters.EMPTY);
+        const old = Counters.parseBounded(plain(next), keep);
+        assert.deepEqual(plain(old.record.senders), trimModel(plain(next.senders), keep, limit));
+        if (next.senders.length > 0) assert.notEqual(old.record, Counters.EMPTY);
+    });
+});
+
+test('the sender bound under attack: made-up senders well past the bound leave a former member untouched', async () => {
+    const limit = Counters.MAX_SENDERS;
+    await fuzz(SEED + 3, 6, (r) => {
+        const former = key(r, 'f');
+        const own = key(r, 'o');
+        const formerCounter = r.int(1, 1e6);
+        let record = Counters.parse({ seq: 5, mine: 3, senders: [[own, 3], [former, formerCounter]] });
+        const keep = [own];  // the former member left: it is on no roster
+        for (let wave = r.int(2, 4); wave > 0; wave--) {
+            const state = Counters.ledger(record);
+            for (let n = limit; n > 0; n--) Counters.admit(state, key(r, 'm'), r.int(1, 50));
+            const written = Counters.bound(record, Counters.merge(record, Counters.snapshot(state, record.seq + limit, record.mine)), keep);
+            const kept = new Map(written.record.senders);
+            assert.equal(kept.get(former), formerCounter);
+            assert.equal(kept.get(own), 3);
+            assert.equal(written.displaced, 0);
+            assert.ok(written.record.senders.length <= limit);
+            record = written.record;
+        }
     });
 });

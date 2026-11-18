@@ -144,6 +144,11 @@ const Errors = (() => {
         // Shown where a sender's counter skipped (counters.js): the server withheld, delayed or
         // deleted their messages. The count comes from the sender's own counter and is repeated
         // only up to a bound (ui.js MAX_GAP_SHOWN); past it the uncounted sentence is shown
+        // A room's counter record is full (counters.js THE SENDER BOUND): a sender new to it and
+        // not on the roster is not recorded. The tag on each of its messages, and the room's
+        // warning, once per session
+        W_SENDER_NOT_RECORDED: w('replay protection is not kept for this sender on this device'),
+        W_COUNTER_RECORD_FULL: w('this room\'s replay record on this device is full — new senders who are not members are shown without replay protection after a reload'),
         W_MESSAGE_MISSING: w('⚠ 1 message from {who} never arrived'),
         W_MESSAGES_MISSING: w('⚠ {count} messages from {who} never arrived'),
         W_MESSAGES_MISSING_UNCOUNTED: w('⚠ messages from {who} never arrived'),
@@ -265,8 +270,9 @@ const Errors = (() => {
         W_COUNTER_LOCK_UNAVAILABLE: 'W_COUNTER_LOCK_UNAVAILABLE',
         // More counter records than Counters.MAX_RECORDS: the least recently used were dropped,
         // so those conversations are judged from their visible messages only (once per page load).
-        // Also: a record held more senders than Counters.MAX_SENDERS, and the oldest senders off
-        // the roster were dropped from it (Counters.bound; once per write or read that dropped any)
+        // Also: a record read above Counters.MAX_SENDERS was trimmed (Counters.trim), or a roster
+        // member new to a full record displaced the off-roster entry recorded longest ago
+        // (Counters.bound); once per read or write that dropped any
         W_COUNTER_RECORDS_EVICTED: 'W_COUNTER_RECORDS_EVICTED',
         // The event stream delivered no event within its silence limit (a proxy buffering or
         // holding it): updates are fetched on an interval until it delivers one again (live-updates.js)

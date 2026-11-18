@@ -40,15 +40,20 @@
 // browser cannot: counter-records.js takes each counter under a lock they share, from the record as stored
 // at that moment, and stores the raised record before the message is posted.
 //
-// THE SENDER BOUND. A record names at most MAX_SENDERS senders. A room member can send under
-// keys of its own making (a message's header card only has to open under the room's code), so the
-// senders a room's record sees are not limited by its seats. The bound is kept where a record is
-// built and written (bound(), called by counter-records.js before every write): past it the
-// senders that are neither this device's own key nor on the current roster are evicted first,
-// oldest first (the order a record lists its senders in is the order they were first recorded,
-// merge() keeps it); this device's own entry and the roster's are never evicted. A record above
-// the bound (an older build wrote it) is read the same way (parse() with the keys to keep): never
-// thrown away whole, which would forget this device's own counter and the remembered seq.
+// THE SENDER BOUND. A record names at most MAX_SENDERS senders. A room member could send under
+// keys of its own making (until the server refuses a header card that is not the sender's stored
+// card), so the senders a room's record sees are not bounded by its seats. The bound is kept where
+// a record is written (bound(), called by counter-records.js before every write), and an entry
+// recorded earlier is never given up to a made-up sender:
+//   - a new sender that is not on the current roster is recorded only while there is room; at
+//     the bound it is not recorded (bound() names it: its messages are shown with a warning that
+//     replay protection is not kept for it on this device);
+//   - a new sender on the current roster is always recorded: it displaces the off-roster entry
+//     recorded longest ago (the order a record lists its senders in is the order they were first
+//     recorded, merge() keeps it). This device's own entry and the roster's are never displaced.
+// A record above the bound (an older build wrote it) is read keeping this device's own entry, the
+// roster's, then the earliest-recorded others up to the bound (trim()): never thrown away whole,
+// which would forget this device's own counter and the remembered seq.
 //
 // KEEPING RECORDS (zero trust; the agent's rule, backend/internal/agent/state.go). The server
 // may omit a conversation from one listing, or answer 404 for it, and list it again later: a
@@ -65,7 +70,7 @@ const Counters = (() => {
 
     const PUBLIC_KEY_SHAPE = /^[A-Za-z0-9_-]{43}$/;
     // The most senders one record names (THE SENDER BOUND): a room has at most 32 seats at a time,
-    // so honest churn stays far below it; senders minted past it evict the oldest off-roster ones
+    // so honest churn stays far below it; made-up senders past it are not recorded
     const MAX_SENDERS = 4096;
     // The most counter records one device keeps (the agent keeps as many, maxStateRooms)
     const MAX_RECORDS = 1024;
@@ -94,9 +99,9 @@ const Counters = (() => {
     }
 
     // A stored record, checked: anything malformed counts as no record. One naming more than
-    // MAX_SENDERS senders (an older build wrote it) is bounded as a write is (bound(), keeping the
-    // keys in `keep`: this device's own and the roster's), never discarded whole. Returns the
-    // record; parseBounded also says how many senders were evicted.
+    // MAX_SENDERS senders (an older build wrote it) is trimmed (trim(), keeping the keys in `keep`:
+    // this device's own and the roster's), never discarded whole. Returns the record;
+    // parseBounded also says how many senders were dropped.
     function parse(raw, keep) {
         return parseBounded(raw, keep).record;
     }
@@ -106,25 +111,75 @@ const Counters = (() => {
             !Array.isArray(raw.senders) || !raw.senders.every(isEntry)) {
             return { record: EMPTY, evicted: 0 };
         }
-        return bound(freeze(raw.seq, raw.mine, new Map(raw.senders)), keep);
+        return trim(freeze(raw.seq, raw.mine, new Map(raw.senders)), keep);
     }
 
-    // record with at most MAX_SENDERS senders (THE SENDER BOUND): { record, evicted }. Senders not
-    // in keep (an iterable of public keys) go first, in the order the record lists them (oldest
-    // first); a sender in keep is never evicted, so a record whose kept senders alone pass the
-    // bound keeps them all (keep is this device's own key and a roster of at most 32 members).
-    // seq and mine are never touched. A record within the bound is returned as it is.
-    function bound(record, keep) {
-        const excess = record.senders.length - MAX_SENDERS;
-        if (excess <= 0) return { record: record, evicted: 0 };
+    // record with at most MAX_SENDERS senders, for reading one above the bound: { record, evicted }.
+    // Every sender in keep (an iterable of public keys) stays; the others stay in the order the
+    // record lists them (earliest recorded first) while there is room, and the later ones go. The
+    // kept senders alone may pass the bound (keep is this device's own key and a roster of at most
+    // 32 members): they all stay. Order, seq and mine are unchanged; a record within the bound is
+    // returned as it is.
+    function trim(record, keep) {
+        if (record.senders.length <= MAX_SENDERS) return { record: record, evicted: 0 };
         const kept = new Set(keep || []);
-        let evicted = 0;
+        let room = MAX_SENDERS - record.senders.filter(([key]) => kept.has(key)).length;
         const senders = record.senders.filter(([key]) => {
-            if (evicted >= excess || kept.has(key)) return true;
-            evicted++;
-            return false;
+            if (kept.has(key)) return true;
+            if (room <= 0) return false;
+            room--;
+            return true;
         });
-        return { record: freeze(record.seq, record.mine, senders), evicted: evicted };
+        return { record: freeze(record.seq, record.mine, senders), evicted: record.senders.length - senders.length };
+    }
+
+    // The record to write (THE SENDER BOUND): next (the record raised by what was just seen; it
+    // holds every sender of earlier) brought within the bound without giving up what earlier
+    // recorded. earlier is the record as recorded before (stored and this tab's last write),
+    // trimmed first should it be above the bound. Senders of earlier keep their place and take
+    // next's counters; next's new senders follow in next's order: each is recorded while there is
+    // room; at the bound one in keep (this device's own key, the roster) displaces the off-roster
+    // entry recorded longest ago, and one not in keep is refused. Returns { record, refused (the
+    // senders not recorded), displaced (how many entries gave way to a roster member) }.
+    function bound(earlier, next, keep) {
+        const kept = new Set(keep || []);
+        const counters = new Map(next.senders);
+        const out = new Map();
+        for (const [key, counter] of trim(earlier, kept).record.senders) {
+            out.set(key, Math.max(counter, counters.get(key) || 0));
+        }
+        const refused = [];
+        let displaced = 0;
+        let oldest = out.keys();  // walks the entries recorded longest ago, for displacement
+        for (const [key, counter] of next.senders) {
+            if (out.has(key)) continue;
+            if (out.size >= MAX_SENDERS) {
+                if (!kept.has(key)) {
+                    refused.push(key);
+                    continue;
+                }
+                const victim = firstOffRoster(oldest, out, kept);
+                if (victim !== null) {
+                    out.delete(victim);
+                    displaced++;
+                } else {
+                    oldest = out.keys();
+                }
+            }
+            out.set(key, counter);
+        }
+        return {
+            record: freeze(Math.max(earlier.seq, next.seq), Math.max(earlier.mine, next.mine), out),
+            refused: refused, displaced: displaced
+        };
+    }
+
+    // The first key the iterator still yields that is in out and not kept, or null
+    function firstOffRoster(iterator, out, kept) {
+        for (let step = iterator.next(); !step.done; step = iterator.next()) {
+            if (out.has(step.value) && !kept.has(step.value)) return step.value;
+        }
+        return null;
     }
 
     // Every field is a high-water mark, so two records combine by taking the higher of each:
@@ -225,7 +280,7 @@ const Counters = (() => {
     }
 
     return Object.freeze({
-        EMPTY, MAX_RECORDS, MAX_SENDERS, EXPIRED_ROOM_GRACE_MS, parse, parseBounded, bound, merge, same, ledger, history,
+        EMPTY, MAX_RECORDS, MAX_SENDERS, EXPIRED_ROOM_GRACE_MS, parse, parseBounded, trim, bound, merge, same, ledger, history,
         lowest, judge, admit, snapshot, expiredLongAgo, retentionEntry, retention
     });
 })();

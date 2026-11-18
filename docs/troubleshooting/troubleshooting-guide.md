@@ -250,6 +250,9 @@ Sessions saved before rooms existed do not hold the rooms key; logging in once m
 ### "two seats claim this identity"
 Two cards of the member list open to one member's key: someone holding the room code took a seat with a card carrying that member's key ([rooms](../architecture/rooms.md#disputed-seats)). The member is shown once, with no role, and cannot be befriended or given a role until one seat leaves; the room says so once per session (*"two seats in this room claim one identity — …"*), and the member whose key it is reads *"another seat in this room claims to be you — …"*. Compare the room safety number with the others on another channel; the owner can burn the room and open a new one with a fresh code.
 
+### "replay protection is not kept for this sender on this device"
+This device's replay record for the room is full (4096 senders, far more than a room's seats): a sender new to it who is not a member is not recorded, so a replay of its messages after a reload would not be caught on this device. The room says so once per session (*"this room's replay record on this device is full — …"*). Members, your own messages and every sender recorded earlier stay protected. So many senders mean someone sent under keys of their own making; a server of this release refuses that (`400 Sender card mismatch`).
+
 ### Friend requests
 - *"this request did not come from the member who sent it — the conversation it opened was burned"*: the request's binder did not match the account that created its invite: another member relayed someone else's invite. The conversation it opened was burned at once and the request removed.
 - *"sent by an older elyrn and cannot be checked — ignore it and ask them to send a new request"*: the request has no binder (its sender's page is older than binders). Only **ignore** is offered; ask them to reload and send it again.

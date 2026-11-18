@@ -231,7 +231,7 @@ test('bound: past the most records kept, the least recently used go first and th
     assert.deepEqual(dropped(records), { drop: ['n2', 'n3'], evicted: false });
 });
 
-// ---------- the sender bound (fix-spec C2) ----------
+// ---------- the sender bound (fix-spec C2, as revised by the lead on 18 Nov) ----------
 
 // A 43-character key per index, from the base64url alphabet, as a member could mint them (never
 // one of ALICE, BOB or OWN: those start with another letter)
@@ -242,56 +242,84 @@ function mintedKey(i) {
     return out;
 }
 
-test('a stored record past the sender bound is read bounded, never as no record: own counter and seq kept', () => {
-    const OWN = 'O'.repeat(43);
+const OWN = 'O'.repeat(43);
+const FORMER = 'F'.repeat(43);  // a member who left: off the roster, recorded before the flood
+
+// A ledger raised from record by messages from each of senders (counter 1), as a sync builds it,
+// unbounded; returns its snapshot
+function raisedBy(record, senders) {
+    const state = Counters.ledger(record);
+    for (const key of senders) Counters.admit(state, key, 1);
+    return Counters.snapshot(state, record.seq + senders.length, record.mine);
+}
+
+test('a stored record past the sender bound is read trimmed, never as no record: own counter, roster and earliest kept', () => {
     const flood = Array.from({ length: Counters.MAX_SENDERS + 1 }, (_, i) => [mintedKey(i), 1]);
-    // What a build before the bound wrote: the device's own entry last, the flood before it
-    const raw = { seq: 9000, mine: 50, senders: [...flood, [OWN, 50]] };
+    // What a build before the bound wrote: the device's own entry and a member last, after the flood
+    const raw = { seq: 9000, mine: 50, senders: [[FORMER, 7], ...flood, [ALICE, 3], [OWN, 50]] };
     const read = Counters.parseBounded(raw, [OWN, ALICE]);
     assert.notEqual(read.record, Counters.EMPTY);
     assert.equal(read.record.seq, 9000);
     assert.equal(read.record.mine, 50);
     assert.equal(read.record.senders.length, Counters.MAX_SENDERS);
-    assert.equal(new Map(read.record.senders).get(OWN), 50, 'the device\'s own entry is never evicted');
-    assert.equal(read.evicted, 2);
-    // the oldest go first: the first two minted keys
     const kept = new Map(read.record.senders);
-    assert.equal(kept.has(mintedKey(0)), false);
-    assert.equal(kept.has(mintedKey(1)), false);
-    assert.equal(kept.has(mintedKey(2)), true);
-    // parse() is parseBounded's record
-    assert.ok(Counters.same(Counters.parse(raw, [OWN]), read.record));
+    assert.equal(kept.get(OWN), 50, 'the device\'s own entry is never dropped');
+    assert.equal(kept.get(ALICE), 3, 'a roster member is never dropped');
+    assert.equal(kept.get(FORMER), 7, 'the earliest-recorded others stay');
+    assert.equal(kept.has(mintedKey(0)), true);
+    // the latest-recorded others go
+    assert.equal(kept.has(mintedKey(Counters.MAX_SENDERS)), false);
+    assert.equal(read.evicted, raw.senders.length - Counters.MAX_SENDERS);
+    assert.ok(Counters.same(Counters.parse(raw, [OWN, ALICE]), read.record));
 });
 
-test('the write side keeps the bound: what bound() gives back reads back whole', () => {
-    const OWN = 'O'.repeat(43);
-    const roster = [ALICE, BOB];
-    // The roster's and the device's own entries come first (oldest), the minted ones after
-    const state = Counters.ledger(Counters.parse({ seq: 1, mine: 3, senders: [[ALICE, 2], [BOB, 4], [OWN, 3]] }));
-    for (let i = 0; i < Counters.MAX_SENDERS + 10; i++) Counters.admit(state, mintedKey(i), 1);
-    // A snapshot is built unbounded (as a sync builds it); the bound is the write's
-    const record = Counters.snapshot(state, 2, 3);
-    assert.ok(record.senders.length > Counters.MAX_SENDERS);
-    const bounded = Counters.bound(record, [OWN, ...roster]);
-    assert.equal(bounded.record.senders.length, Counters.MAX_SENDERS);
-    assert.equal(bounded.evicted, record.senders.length - Counters.MAX_SENDERS);
-    const kept = new Map(bounded.record.senders);
-    for (const key of [OWN, ...roster]) assert.ok(kept.has(key), 'a kept sender was evicted');
-    assert.equal(bounded.record.mine, 3);
-    // Stored and read back as Keystore does, with nothing more to evict
-    const again = Counters.parseBounded(JSON.parse(JSON.stringify(bounded.record)), [OWN, ...roster]);
-    assert.equal(again.evicted, 0);
-    assert.ok(Counters.same(again.record, bounded.record));
-    // A record within the bound is the same object
-    const small = Counters.parse({ seq: 1, mine: 1, senders: [[ALICE, 1]] });
-    assert.equal(Counters.bound(small, []).record, small);
+test('an attacker\'s made-up senders never displace what was recorded before them, however many', () => {
+    // An honest former member recorded first, then the device's own and a member's entries
+    let earlier = Counters.parse({ seq: 10, mine: 4, senders: [[FORMER, 9], [OWN, 4], [ALICE, 2]] });
+    const keep = [OWN, ALICE];
+    const refusedAll = new Set();
+    // Floods well above the bound, written save after save as a sync writes them
+    for (let wave = 0; wave < 3; wave++) {
+        const fresh = Array.from({ length: Counters.MAX_SENDERS }, (_, i) => mintedKey(wave * Counters.MAX_SENDERS + i));
+        const next = Counters.merge(earlier, raisedBy(earlier, fresh));
+        const written = Counters.bound(earlier, next, keep);
+        assert.ok(written.record.senders.length <= Counters.MAX_SENDERS);
+        assert.equal(written.displaced, 0, 'nothing on the roster was new: nothing gave way');
+        for (const key of written.refused) refusedAll.add(key);
+        const kept = new Map(written.record.senders);
+        assert.equal(kept.get(FORMER), 9, 'the former member\'s entry and counter are untouched');
+        assert.equal(kept.get(OWN), 4);
+        assert.equal(kept.get(ALICE), 2);
+        assert.equal(written.record.mine, 4);
+        earlier = written.record;
+    }
+    assert.equal(refusedAll.size, 3 * Counters.MAX_SENDERS - (Counters.MAX_SENDERS - 3), 'every made-up sender past the room is refused');
 });
 
-test('counter-records.js bounds every record it writes and every record it reads (one home: Counters.bound)', () => {
+test('a roster member new to a full record is recorded: it displaces the off-roster entry recorded longest ago', () => {
+    const full = Counters.parse({ seq: 1, mine: 1, senders: [[FORMER, 5], [OWN, 1],
+        ...Array.from({ length: Counters.MAX_SENDERS - 2 }, (_, i) => [mintedKey(i), 1])] });
+    assert.equal(full.senders.length, Counters.MAX_SENDERS);
+    const next = Counters.merge(full, raisedBy(full, [mintedKey(999999), BOB]));
+    const written = Counters.bound(full, next, [OWN, BOB]);
+    const kept = new Map(written.record.senders);
+    assert.equal(kept.has(BOB), true, 'a member is always recorded');
+    assert.equal(kept.has(FORMER), false, 'the off-roster entry recorded longest ago gave way');
+    assert.equal(kept.get(OWN), 1);
+    assert.deepEqual([...written.refused], [mintedKey(999999)]);
+    assert.equal(written.displaced, 1);
+    assert.equal(written.record.senders.length, Counters.MAX_SENDERS);
+});
+
+test('counter-records.js bounds every record it writes and every record it reads (one home: counters.js)', () => {
     const source = readFileSync(new URL('../js/counter-records.js', import.meta.url), 'utf8');
     const write = source.slice(source.indexOf('async function writeMark'));
-    assert.match(write.slice(0, write.indexOf('\n    }\n')), /Counters\.bound\(record, keptSenders\(conv\)\)[\s\S]*saveCounters\(conv\.id, kept\.record/);
+    assert.match(write.slice(0, write.indexOf('\n    }\n')), /Counters\.bound\(earlier, next, keptSenders\(conv\)\)[\s\S]*saveCounters\(conv\.id, kept\.record/);
     assert.match(source, /Counters\.parseBounded\(await Keystore\.loadCounters\(conv\.id\), keptSenders\(conv\)\)/);
     // No other read of a stored record bypasses the bound
     assert.equal((source.match(/Keystore\.loadCounters\(/g) || []).length, 1);
+    // What was not recorded is shown: the chat tags the senders and warns once
+    const chat = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
+    assert.match(chat, /markUnrecorded\(conv\.unrecorded\)/);
+    assert.match(chat, /Errors\.CODES\.W_COUNTER_RECORD_FULL/);
 });

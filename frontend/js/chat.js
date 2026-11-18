@@ -319,6 +319,8 @@ const Chat = (() => {
             myMaxN: 0,                  // this device's highest counter here: never spent twice
             spare: 0,                   // a counter taken for a send the server refused: taken again next
             ledger: Counters.ledger(Counters.EMPTY),  // senders' counters in the loaded sequence
+            unrecorded: new Set(),      // senders the full counter record did not take (counter-records.js)
+            recordFullWarned: false,    // that the record is full was said this session
             // the last record saved (kept in memory when storage fails), or the one kept when this
             // conversation was dropped from the session earlier (parked)
             mark: CounterRecords.parkedMark(item.id) || Counters.EMPTY,
@@ -543,6 +545,7 @@ const Chat = (() => {
         if (conv.room) {
             checkLookalikes(conv);
             checkDisputes(conv);
+            checkUnrecorded(conv);
         }
         noteNewer(conv, conv.maxSeq);
         conv.lastSeq = Math.max(conv.lastSeq, conv.maxSeq);
@@ -630,6 +633,7 @@ const Chat = (() => {
         if (conv.room) {
             checkLookalikes(conv);
             checkDisputes(conv);
+            checkUnrecorded(conv);
         }
         setEarlierControl(conv.earlier, false);
     }
@@ -1025,6 +1029,16 @@ const Chat = (() => {
             RoleControl.markBubbles(new Map(conv.room.roster.map(entry => [entry.publicKey, Rooms.roleShown(entry)])));
         }
         return true;
+    }
+
+    // Senders the full counter record did not take (counters.js THE SENDER BOUND): each of their
+    // messages is tagged, and the room says once per session that its record is full
+    function checkUnrecorded(conv) {
+        if (activeId !== conv.id) return;
+        markUnrecorded(conv.unrecorded);
+        if (conv.unrecorded.size === 0 || conv.recordFullWarned) return;
+        conv.recordFullWarned = true;
+        Errors.report(Errors.CODES.W_COUNTER_RECORD_FULL);
     }
 
     // Keys more than one seat claims (Rooms.disputed): tagged wherever shown; the room warns once
