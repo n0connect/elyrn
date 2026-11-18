@@ -60,6 +60,7 @@ const (
 	IDTaken
 	RoomFull
 	RosterChanged
+	SenderCardMismatch
 	IdentityUnset
 	Forbidden
 	RoleNotAllowed
@@ -101,6 +102,7 @@ const (
 	sayIDTaken            = "Id taken"
 	sayRoomFull           = "Room full"
 	sayRosterChanged      = "Roster changed"
+	saySenderCardMismatch = "Sender card mismatch"
 	sayRoleNotAllowed     = "Role not allowed"
 	sayFilePartOutOfOrder = "File part out of order"
 	sayFileQuotaReached   = "File quota reached"
@@ -195,6 +197,10 @@ var registry = map[Code]entry{
 	IDTaken:       {"E_ID_TAKEN", http.StatusConflict, sayIDTaken, utils.LogLevelWARN, shapeJSON},
 	RoomFull:      {"E_ROOM_FULL", http.StatusConflict, sayRoomFull, utils.LogLevelINFO, shapeText},
 	RosterChanged: {"E_ROSTER_CHANGED", http.StatusPreconditionFailed, sayRosterChanged, utils.LogLevelINFO, shapeText},
+	// SenderCardMismatch: a room message or note whose header card is not the sending member's
+	// stored card. JSON for the reason IDTaken is: it shares 400 with the send's "Invalid
+	// request", and a client must tell "use your stored card" from a malformed send
+	SenderCardMismatch: {"E_SENDER_CARD_MISMATCH", http.StatusBadRequest, saySenderCardMismatch, utils.LogLevelWARN, shapeJSON},
 	// MERGE: an account without an identity key and an action the caller may not take
 	IdentityUnset: {"E_IDENTITY_UNSET", http.StatusForbidden, sayForbidden, utils.LogLevelWARN, shapeText},
 	Forbidden:     {"E_FORBIDDEN", http.StatusForbidden, sayForbidden, utils.LogLevelWARN, shapeText},

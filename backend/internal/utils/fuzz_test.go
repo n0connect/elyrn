@@ -374,7 +374,7 @@ func roomBlobSeed(magic string, wraps, frame int) string {
 var roomMagics = [...]string{RoomMessageMagic, RoomNoteMagic}
 
 // FuzzParseRoomBlob: an accepted blob is canonical, has the asked magic and version, 1..maxWraps
-// wraps, a padded frame, and the digest it reports is the header's; acceptance is monotonic in
+// wraps, a padded frame, and the card and digest it reports are the header's; acceptance is monotonic in
 // maxWraps (a blob a smaller room takes, a larger one takes too).
 func FuzzParseRoomBlob(f *testing.F) {
 	for _, seed := range []struct {
@@ -403,7 +403,8 @@ func FuzzParseRoomBlob(f *testing.F) {
 		frame := len(raw) - RoomHeaderBytes - blob.Wraps*RoomWrapBytes - cryptoengine.GCMTagSize
 		if string(raw[:len(magic)]) != magic || raw[len(magic)] != RoomVersion || blob.Wraps != int(raw[RoomHeaderBytes-1]) ||
 			blob.Wraps < 1 || blob.Wraps > maxWraps || !isPaddedFrame(frame) ||
-			string(blob.Digest) != string(raw[RoomDigestOffset:RoomHeaderBytes-1]) {
+			string(blob.Digest) != string(raw[RoomDigestOffset:RoomHeaderBytes-1]) ||
+			string(blob.Card) != string(raw[RoomCardOffset:RoomCardOffset+RoomCardBytes]) {
 			t.Fatalf("accepted a malformed blob (%d wraps, frame %d)", blob.Wraps, frame)
 		}
 		for larger := maxWraps; larger <= config.MaxRoomMembersBound; larger++ {

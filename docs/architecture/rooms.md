@@ -134,7 +134,7 @@ Why each piece is there:
 - **The wrap's AAD hashes the whole header and body**, so a member who holds `mk` cannot keep a genuine wrap and swap the body underneath it.
 - **The commitment** stops a malicious sender from building a body that decrypts to different texts under different keys (AES-GCM is not key-committing): every recipient checks that the `mk` it unwrapped matches the one the header commits to.
 - **Nonces are zero** because every AES-GCM key here encrypts exactly one plaintext: `mk` is fresh per message and each `KEK_r` mixes a fresh ephemeral key and the unique message id.
-- **The card in every message** lets members verify messages from people who have since left: the sender's key comes from a card only a code holder could make.
+- **The card in every message** lets members verify messages from people who have since left: the sender's key comes from a card only a code holder could make. Every member is a code holder, so the server also binds it: the header card of a message or a note must be, byte for byte, the card the sending member stored when it joined, or the send is refused with `400 Sender card mismatch` (`E_SENDER_CARD_MISMATCH`) and nothing is stored. A member therefore sends under exactly one identity, the one on the roster. A card is sealed under a random nonce, so a client must send the card the server holds for it (the roster entry flagged `mine`), never one it sealed again itself.
 
 ### Roster digest
 
@@ -169,7 +169,7 @@ A client accepts a message only if every check passes, in this order: the size i
 |---|---|
 | Create | Costs a proof of work (as invites do). The client sends the derived id, `L`, the limit, the hour-aligned expiry (1 hour to `ROOM_MAX_TTL_HOURS` ahead), its card and its vault. |
 | Join | The room must exist, be unexpired, have a free seat, `HMAC(L)` must match in constant time, and the `max_members` and `expires_at` the client read from its code must equal the stored room's; otherwise `404`, without saying which. The limits are checked before any seat is taken or vault replaced: the room id and `L` derive from `S` alone, so a code whose limit bytes were edited would otherwise pass and store a vault that can never verify, hiding the room from that account. A full room answers `409`. Joining again with the same account and the same code refreshes the vault and is harmless; the browser and the agent refuse to send a join for a room they are in when the pasted code carries other limits (`E_ROOM_CODE_INVALID`, `E_AGENT_ROOM_CODE_ALTERED`). The member can read messages sent after it joined (`joined_seq`), and paging back (`?before=seq`) stops there too; leaving and joining again starts from the new join. |
-| Send | As in one-to-one conversations, plus the structure check and the roster digest check (`412`). |
+| Send | As in one-to-one conversations, plus the structure check, the roster digest check (`412`) and, judged last, the sender card check: the header card must be the sender's stored card (`400 Sender card mismatch`). A note is checked the same way after its addressee. An `elyrn-agent` built before this check seals a fresh card every session and cannot send to a server that has it. |
 | Leave | Any member except the owner leaves: their membership goes, their messages stay readable to the others. |
 | Burn | The owner burns the room for everyone, as in one-to-one conversations. |
 | Expire | At `expires_at` the room stops answering at once; the retention task deletes it and everything in it within five minutes. |

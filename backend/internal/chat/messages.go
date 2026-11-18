@@ -136,7 +136,7 @@ func (s *Service) SendMessage(me *Member, conversationID uuid.UUID, rawID, ciphe
 			return err
 		}
 		if blob != nil {
-			if err := checkRoomMessage(tx, conversationID, blob); err != nil {
+			if err := checkRoomMessage(tx, conversationID, member, blob); err != nil {
 				return err
 			}
 		}

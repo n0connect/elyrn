@@ -28,6 +28,7 @@ an expired session from none). Three shapes reach the wire:
 |---|---|---|---|
 | 400 | `Invalid request` | `E_INVALID_REQUEST`, `E_INVALID_INPUT`, `E_LOGIN_BODY_INVALID` (JSON) | the input contract or the service refused the input |
 | 400 | `Pending token required` | `E_PENDING_TOKEN_REQUIRED` | registration phase 2 without its token |
+| 400 | `Sender card mismatch` (JSON) | `E_SENDER_CARD_MISMATCH` | a room message or note whose header card is not the sender's stored card |
 | 401 | `Unauthorized` | `E_NO_SESSION`, `E_SESSION_CONTEXT_MISSING`, `E_MEMBER_NOT_FOUND`, `E_PENDING_TOKEN_INVALID`, `E_ACCOUNT_EXISTS` | no session, a revoked or expired one, an account that is gone, a spent or expired pending token |
 | 401 | `Invalid credentials` (JSON) | `E_LOGIN_KEY_MALFORMED`, `E_LOGIN_NO_ACCOUNT`, `E_LOGIN_LEGACY_ACCOUNT` | login: no account for this key, whatever the reason |
 | 403 | `Forbidden` | `E_CROSS_ORIGIN`, `E_IDENTITY_UNSET`, `E_FORBIDDEN` | a cross-origin write, or an action the caller may not take |
@@ -426,7 +427,7 @@ Sends an end-to-end encrypted message ciphertext.
 
 *Both are answered only to a member of the conversation, after the membership check (a non-member gets `404` first), and the split reveals only whether the holder is the caller's own identical send; that some message holds the id was already told by any `409` (`backend/internal/chat/duplicates.go`).*
 
-A conversation the caller is not a member of (or that does not exist, expired or was burned) answers `404` before the ciphertext is judged against its format, so the answer never tells a non-member whether the id is a room, or how large. In a room the ciphertext must have the room format (`NADR`, docs/architecture/rooms.md), with at most one wrap per member, and its roster digest must match the current members. A member who joined or left since the sender fetched the roster makes it `412 Precondition Failed`: fetch `/members` again, re-encrypt under the same `id`, and send again.
+A conversation the caller is not a member of (or that does not exist, expired or was burned) answers `404` before the ciphertext is judged against its format, so the answer never tells a non-member whether the id is a room, or how large. In a room the ciphertext must have the room format (`NADR`, docs/architecture/rooms.md), with at most one wrap per member, and its roster digest must match the current members. A member who joined or left since the sender fetched the roster makes it `412 Precondition Failed`: fetch `/members` again, re-encrypt under the same `id`, and send again. Last, the card in the header must be byte for byte the card the sender stored when it joined (its `/members` entry flagged `mine`); any other card, a fresh sealing of the sender's own key included, answers `400` `{"success":false,"message":"Sender card mismatch"}` (`E_SENDER_CARD_MISMATCH`) and nothing is stored: seal again under the stored card.
 
 ---
 
@@ -532,7 +533,7 @@ Delivers a sealed note (a friend request carrying an invite) to the one member w
   "blob": "NADN note: exactly one wrap, roster digest over the addressee's card"
 }
 ```
-- **Errors:** `400` malformed, sealed for someone else, or addressed to the caller; `404` no member has that card; `409 Conflict` a note from the caller already waits for them (or this very note, same `id` and `blob`, is the one waiting); `409` `{"success":false,"message":"Id taken"}` the `id` is held by another note (another room, sender, addressee or `blob`): nothing stored, seal again under a fresh `id`.
+- **Errors:** `400` malformed, sealed for someone else, or addressed to the caller; `404` no member has that card; `400` `{"success":false,"message":"Sender card mismatch"}` (`E_SENDER_CARD_MISMATCH`, judged after the addressee) the note's header card is not the caller's stored card; `409 Conflict` a note from the caller already waits for them (or this very note, same `id` and `blob`, is the one waiting); `409` `{"success":false,"message":"Id taken"}` the `id` is held by another note (another room, sender, addressee or `blob`): nothing stored, seal again under a fresh `id`.
 - **Response:** `201 Created`. The addressee gets a `conv` event.
 
 ### `GET /api/v2/conversations/{id}/notes`

@@ -33,6 +33,7 @@ var sentinels = []struct {
 	{chat.ErrIDTaken, IDTaken},
 	{chat.ErrRoomFull, RoomFull},
 	{chat.ErrStale, RosterChanged}, // the roster changed since the sender fetched it: refetch, re-encrypt
+	{chat.ErrSenderCardMismatch, SenderCardMismatch},
 	{chat.ErrRoleNotAllowed, RoleNotAllowed},
 	{chat.ErrFilePartOutOfOrder, FilePartOutOfOrder},
 	{chat.ErrFileQuotaReached, FileQuotaReached},

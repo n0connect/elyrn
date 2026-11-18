@@ -218,6 +218,7 @@ const (
 	// RoomHeaderBytes: magic, version(1), card, ephemeral key, commitment, digest, n
 	RoomHeaderBytes  = len(RoomMessageMagic) + 1 + RoomCardBytes + 3*roomKeyBytes + roomCountBytes
 	RoomWrapBytes    = roomKeyBytes + cryptoengine.GCMTagSize
+	RoomCardOffset   = len(RoomMessageMagic) + 1 // the sender's card follows magic and version
 	RoomDigestOffset = RoomHeaderBytes - roomCountBytes - roomKeyBytes
 
 	// roomRoleTextBytes: a role's UTF-8 form is at most this long; its sealed plaintext is a
@@ -256,6 +257,7 @@ func DecodeExact(encoded string, size int) ([]byte, bool) {
 // RoomBlob is what the server can check of a room message or note without any key.
 type RoomBlob struct {
 	Wraps  int
+	Card   []byte // the sender's card as the header carries it (raw, RoomCardBytes)
 	Digest []byte // the roster digest the sender encrypted for
 }
 
@@ -268,7 +270,9 @@ func RoomMaxBlobBytes(maxMembers int) int {
 }
 
 // ParseRoomBlob whitelists a room message or note by structure: magic, version, 1..maxWraps
-// wraps, and a body of one of the padded frame sizes (so its length says nothing more).
+// wraps, and a body of one of the padded frame sizes (so its length says nothing more). It
+// returns the header's sender card and roster digest, which the chat service compares with the
+// sending member's stored card and the current roster.
 func ParseRoomBlob(encoded, magic string, maxWraps int) (*RoomBlob, bool) {
 	if maxWraps < 1 || maxWraps > config.MaxRoomMembersBound || len(encoded) > base64.RawURLEncoding.EncodedLen(RoomMaxBlobBytes(maxWraps)) ||
 		!accountNumberPattern.MatchString(encoded) {
@@ -282,7 +286,8 @@ func ParseRoomBlob(encoded, magic string, maxWraps int) (*RoomBlob, bool) {
 	if wraps < 1 || wraps > maxWraps || !isPaddedFrame(len(raw)-RoomHeaderBytes-wraps*RoomWrapBytes-cryptoengine.GCMTagSize) {
 		return nil, false
 	}
-	return &RoomBlob{Wraps: wraps, Digest: append([]byte(nil), raw[RoomDigestOffset:RoomHeaderBytes-1]...)}, true
+	return &RoomBlob{Wraps: wraps, Card: append([]byte(nil), raw[RoomCardOffset:RoomCardOffset+RoomCardBytes]...),
+		Digest: append([]byte(nil), raw[RoomDigestOffset:RoomHeaderBytes-1]...)}, true
 }
 
 func isPaddedFrame(n int) bool {

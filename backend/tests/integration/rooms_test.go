@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/chat"
 	"elyrn/internal/config"
 	"elyrn/internal/database"
@@ -834,5 +835,64 @@ func TestRoomNotes_AreAddressedStrictly(t *testing.T) {
 	database.DB.Model(&models.RoomNote{}).Where("conversation_id = ?", a.room.ID).Count(&n)
 	if n != 0 {
 		t.Fatalf("%d notes survived their addressee leaving", n)
+	}
+}
+
+// A member's room message and note carry, in their header, the card the server stored when it
+// joined, byte for byte: a card sealed afresh for its own key (as a client deriving its card per
+// session does) or one sealed for a key it made up is refused with 400 "Sender card mismatch"
+// and nothing is stored. Before the check both were stored (201), so one code holder could send
+// under any number of identities nobody sees on the roster.
+func TestRooms_SenderCardMustBeTheStoredOne(t *testing.T) {
+	mux := setup(t)
+	a, b := roomOfTwo(t, mux)
+	stored := b.member
+	fresh, err := b.room.Member(b.root) // the same key, its card sealed again under a new nonce
+	if err != nil {
+		t.Fatalf("Member: %v", err)
+	}
+	if fresh.Card == stored.Card || !bytes.Equal(fresh.Public, stored.Public) {
+		t.Fatal("a fresh sealing of bob's card must differ in bytes and open to his key")
+	}
+	invented := sideOf(t, register(t, mux), a.code).member // a key that never joined, under the room's code
+
+	b.member = fresh
+	id := newMessageID()
+	expectAnswer(t, b.post(id, b.sealTo(t, b.roster(t), id, "under a fresh card", 1)), apperr.SenderCardMismatch,
+		"a message under a fresh card of the sender's own key")
+	noteID, note := b.note(t, a, "noaddx:fresh")
+	expectAnswer(t, b.postNote(noteID, a.member.Card, note), apperr.SenderCardMismatch, "a note under a fresh card")
+
+	recipients, digest, err := b.room.Recipients(stored, b.roster(t))
+	if err != nil {
+		t.Fatalf("Recipients: %v", err)
+	}
+	forged, err := b.room.SealMessage(invented, uuid.MustParse(id), recipients, digest, "under an invented key", time.Now().UnixMilli(), 1)
+	if err != nil {
+		t.Fatalf("SealMessage: %v", err)
+	}
+	expectAnswer(t, b.post(id, forged), apperr.SenderCardMismatch, "a message under a card for an invented key")
+	b.member = invented
+	inventedNoteID, inventedNote := b.note(t, a, "noaddx:invented")
+	expectAnswer(t, b.postNote(inventedNoteID, a.member.Card, inventedNote), apperr.SenderCardMismatch,
+		"a note under a card for an invented key")
+	if got := a.read(t); len(got) != 0 {
+		t.Fatalf("a refused message was stored: %+v", got)
+	}
+	if got := a.notes(t); len(got) != 0 {
+		t.Fatalf("a refused note was stored: %+v", got)
+	}
+
+	// The stored card goes through, under the same ids nothing was stored for
+	b.member = stored
+	expectStatus(t, b.post(id, b.sealTo(t, b.roster(t), id, "under the stored card", 1)), http.StatusCreated,
+		"a message under the stored card")
+	storedNote, err := b.room.SealNote(stored, uuid.MustParse(noteID), a.member.Card, "noaddx:stored", time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("SealNote: %v", err)
+	}
+	expectStatus(t, b.postNote(noteID, a.member.Card, storedNote), http.StatusCreated, "a note under the stored card")
+	if got := a.read(t); len(got) != 1 || got[0].text != "under the stored card" || !bytes.Equal(got[0].sender, stored.Public) {
+		t.Fatalf("alice reads %+v", got)
 	}
 }

@@ -85,7 +85,11 @@ It cannot read messages, forge a member's message (every message key is wrapped 
 `X25519(sender, recipient)`), add a member to a room without its code, or make one client accept a
 peer key that the safety number does not confirm. Every message also carries a roster digest the
 server checks (`412` on a stale roster), which keeps honest senders from encrypting for an outdated
-member list; it is a consistency check, not a defence against the server.
+member list; it is a consistency check, not a defence against the server. The server also checks
+that the card in a room message's or note's header is, byte for byte, the sending member's stored
+card (`400 Sender card mismatch`): every member holds the code and could seal cards for keys of its
+own making, and this keeps each member to the one identity on the roster. It guards members
+against each other, not against the server, which stores whatever card a member joined with.
 
 ## Conditions of the Design
 
