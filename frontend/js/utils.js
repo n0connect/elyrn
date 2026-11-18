@@ -45,6 +45,12 @@ const OFFSCREEN_LEFT = '-999999px';
 // A room or invite code is copied for the user to paste elsewhere: after this long it is cleared
 // from the clipboard (clearClipboardLater), if the clipboard still holds it
 const CLIPBOARD_CLEAR_DELAY_MS = 120000;
+// The longest a Clipboard API write may take: one in an unfocused tab can wait forever, which
+// would hold every step after a copy (registration's continue among them). Past it the write
+// counts as failed and the selection fallback (copyBySelection) is tried.
+const CLIPBOARD_WRITE_TIMEOUT_MS = 3000;
+// The error name of a write that did not settle in time, like TimeoutError for a request
+const CLIPBOARD_TIMEOUT = 'ClipboardTimeout';
 
 // What this page last put in the clipboard, as far as the page can tell: a copy it made, or the
 // text the user copied or cut in it (noteUserCopy). Anything copied in another app is unseen.
@@ -52,13 +58,34 @@ let lastCopied = null;
 
 // Copies text to the clipboard. Resolves only when the copy happened and rejects otherwise, so
 // every caller's catch tells the user to copy by hand instead of announcing a copy that failed.
+// The Clipboard API goes first; one that refuses or does not settle within
+// CLIPBOARD_WRITE_TIMEOUT_MS gives way to the selection fallback, and only when that fails too
+// does the copy fail: always within the time limit, never left waiting.
 async function copyToClipboard(text) {
     if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-    } else {
-        await copyBySelection(text);
+        try {
+            await withinTime(navigator.clipboard.writeText(text), CLIPBOARD_WRITE_TIMEOUT_MS);
+            lastCopied = text;
+            return;
+        } catch (error) {
+            Log.warn(Errors.INTERNAL.W_CLIPBOARD_WRITE_FAILED, error);
+        }
     }
+    await copyBySelection(text);
     lastCopied = text;
+}
+
+// promise, or a rejection named CLIPBOARD_TIMEOUT once ms passed without it settling
+function withinTime(promise, ms) {
+    let timer = null;
+    const late = new Promise((resolve, reject) => {
+        timer = setTimeout(() => {
+            const error = new Error('did not settle in time');
+            error.name = CLIPBOARD_TIMEOUT;
+            reject(error);
+        }, ms);
+    });
+    return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
 // Copies text and confirms with notice, or asks the user to copy it by hand. clearLater: text is
@@ -176,8 +203,9 @@ function provenWithin(now, at, limitMs) {
         limitMs > 0 && at <= now && now - at < limitMs;
 }
 
-// Fallback for older browsers and insecure contexts: execCommand reports failure by returning
-// false or by throwing, depending on the browser; both reject
+// Fallback for older browsers, insecure contexts and a Clipboard API write that failed or never
+// settled: execCommand reports failure by returning false or by throwing, depending on the
+// browser; both reject
 function copyBySelection(text) {
     const textArea = document.createElement('textarea');
     textArea.value = text;

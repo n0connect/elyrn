@@ -231,11 +231,13 @@ function goFileNameValid(name) {
 
 test('isFileName agrees with the Go rule, and every chosen name is sent under one it accepts', async () => {
     const isFileName = get('isFileName');
-    const forSending = get('fileNameForSending');
+    const outgoing = get('outgoingFileName');
     await fuzz(SEED + 8, NAME_ITERATIONS, (r) => {
         const input = r.bool(0.9) ? (r.bool(0.5) ? r.string(r.int(0, 140)) : r.mutate('report 2026.pdf')) : r.value();
         assert.equal(isFileName(input), goFileNameValid(input), JSON.stringify(input));
-        const sent = forSending(input);
+        const sent = outgoing(input, r.bytes(4));
         assert.equal(goFileNameValid(sent), true, JSON.stringify([input, sent]));
+        // Nothing of the chosen name but a short plain extension is ever sent
+        assert.match(sent, /^file-[0-9a-f]{8}(\.[a-z0-9]{1,8})?$/, JSON.stringify([input, sent]));
     });
 });

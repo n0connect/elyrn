@@ -85,16 +85,16 @@ make test-all
 
 **Requirements:** Node.js 20+ (utilizes native `node:crypto` and built-in test runner, zero npm dependencies).
 
-`frontend/tests/` holds 28 test files with 233 tests: sixteen unit files (`crypto`, `room-crypto`,
+`frontend/tests/` holds 26 test files with 229 tests: fifteen unit files (`crypto`, `room-crypto`,
 `rooms`, `counters`, `errors`, `utils`, `validation`, `pow-worker`, `robot-door`, `start-view`,
-`alerts`, `role-control`, `file-crypto`, `file-transfer`, `image-clean`, `file-ui`) and the three
-negative-use files (Option E), plus nine seeded fuzz files (`*.fuzz.test.mjs`, Option D);
-`file-names.mjs` holds the file names shared with the Go side. `file-transfer.test.mjs` runs the
+`alerts`, `role-control`, `file-crypto`, `file-transfer`, `file-ui`) and the three
+negative-use files (Option E), plus eight seeded fuzz files (`*.fuzz.test.mjs`, Option D);
+`file-names.mjs` holds the file names shared with the Go side (accepted, refused, and the names chosen files are sent under). `file-transfer.test.mjs` runs the
 real transfer against a real `node:http` server that keeps parts by the server's rules and then
 loses answers and refuses with every status. What only a real browser shows is driven by hand,
 never faked: the IndexedDB round trip of `Keystore.keepsKeys` (which form an engine keeps), the
 permission prompt and the notification of `alerts.js`, typing in the role control, and for files
-choosing, pasting and dropping, the canvas re-encoding that removes image metadata, view and save.
+choosing, pasting and dropping, and save.
 `crypto.test.mjs` alone checks, among others:
 - `auth key matches Go derivation`
 - `identity public key matches Go derivation; private key is not extractable`
@@ -113,7 +113,7 @@ choosing, pasting and dropping, the canvas re-encoding that removes image metada
 |---|---|---|
 | Go test functions | 380 (137 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
 | Go fuzz targets | 76 | `python3 -I scripts/check-fuzz-targets.py --list \| wc -l` |
-| Frontend tests | 233 in 28 files (18 Nov 2026) | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
+| Frontend tests | 229 in 26 files (18 Nov 2026) | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
 
 ---
 
@@ -185,7 +185,6 @@ Each browser module that judges untrusted input has a seeded fuzz file under `fr
 | `validation.fuzz.test.mjs` | `validation.js`: accepted message text is clean, bounded, trimmed of exactly `MESSAGE_TRIM_CHARS` (equal to the agent's `messageTrimChars`, read from the Go source) and re-validates to itself; codes and ids are never laxer than the server's patterns; the role rule agrees with an independent model; the file name rule agrees with an independent model of the Go rule, and every chosen name is sent under one it accepts |
 | `room-crypto.fuzz.test.mjs` | `crypto.js`, `room-crypto.js`: codes round-trip; tampered cards, vaults, messages, notes and roles never open to anything but their genuine plaintext; a role moved to another card or room never opens |
 | `file-crypto.fuzz.test.mjs` | `file-crypto.js`: a mutated part, or one served at another place, for another file, conversation or length, opens to the genuine bytes or not at all, and writes nothing when it does not |
-| `image-clean.fuzz.test.mjs` | `image-clean.js`: recognising images and reading their header size are total on any bytes |
 | `counters.fuzz.test.mjs` | `counters.js`: the replay judgement agrees with an independent model (the invariants `FuzzRoomPages` asserts for the agent) |
 | `errors.fuzz.test.mjs` | `errors.js`: arbitrary answers always yield a registered code and a registry sentence, never the server's text |
 | `utils.fuzz.test.mjs` | `utils.js`: `apiCall` reads answers of random status, type, size and chunking from a real local server; `once` and `singleFlight` hold under random interleavings; `streamNeedsPolling` (visible and hidden pages) agrees with an independent model |

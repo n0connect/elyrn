@@ -260,13 +260,17 @@ const MAX_FILE_NAME_CHARS = 128;
 const MAX_FILE_NAME_BYTES = 512;
 const FILE_NAME_HIDDEN_PREFIX = '.';
 const FILE_NAME_REFUSED = /[\p{Cc}\/\\\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
-const FILE_NAME_REFUSED_ALL = new RegExp(FILE_NAME_REFUSED.source, 'gu');
 // A lone surrogate is no Unicode text and has no UTF-8 form
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-const LONE_SURROGATE_ALL = new RegExp(LONE_SURROGATE.source, 'g');
-// What stands in for a refused character, and the name of a file whose name keeps nothing
-const FILE_NAME_FILLER = '_';
-const FILE_NAME_FALLBACK = 'file';
+// The name every file is sent under (outgoingFileName): file-<OUTGOING_NAME_RANDOM_BYTES as hex>,
+// plus the chosen file's extension when it is 1 to MAX_OUTGOING_EXTENSION_CHARS of [a-z0-9] once
+// lowercased. The chosen name itself never leaves the device.
+const OUTGOING_NAME_PREFIX = 'file-';
+const OUTGOING_NAME_RANDOM_BYTES = 4;
+const MAX_OUTGOING_EXTENSION_CHARS = 8;
+const OUTGOING_EXTENSION = new RegExp('^[a-z0-9]{1,' + MAX_OUTGOING_EXTENSION_CHARS + '}$');
+// What stands in for a character common file systems refuse, in the name a file is saved under
+const SAVE_NAME_FILLER = '_';
 // Characters common file systems refuse in a name: replaced in the name a file is saved under
 const SAVE_NAME_REFUSED = /[<>:"|?*]/g;
 const fileNameEncoder = new TextEncoder();
@@ -284,24 +288,22 @@ function isFileName(name) {
 }
 
 /**
- * The name a chosen file is sent under: NFC, every refused character replaced, leading dots
- * dropped, cut to the bounds keeping its extension where it can. Always passes isFileName.
- * @param {any} raw - the name the browser gives the chosen file
+ * The name a chosen file is sent under: file-<8 hex digits> plus the chosen name's extension
+ * (after its last dot, not a leading one) when that extension, lowercased, is 1 to 8 characters
+ * of [a-z0-9]; otherwise no extension. Always passes isFileName.
+ * @param {any} chosenName - the name the browser gives the chosen file (never sent)
+ * @param {Uint8Array} random - OUTGOING_NAME_RANDOM_BYTES random bytes
  * @returns {string}
  */
-function fileNameForSending(raw) {
-    let name = (typeof raw === 'string' ? raw : '').replace(LONE_SURROGATE_ALL, FILE_NAME_FILLER).normalize('NFC')
-        .replace(FILE_NAME_REFUSED_ALL, FILE_NAME_FILLER);
-    while (name.startsWith(FILE_NAME_HIDDEN_PREFIX)) name = name.slice(FILE_NAME_HIDDEN_PREFIX.length);
-    const dot = name.lastIndexOf('.');
-    const ext = dot > 0 ? [...name.slice(dot)] : [];
-    let kept = [...name];
-    if (kept.length > MAX_FILE_NAME_CHARS) kept = kept.slice(0, Math.max(0, MAX_FILE_NAME_CHARS - ext.length)).concat(ext).slice(0, MAX_FILE_NAME_CHARS);
-    while (kept.length > 0 && fileNameEncoder.encode(kept.join('')).length > MAX_FILE_NAME_BYTES) {
-        kept.splice(Math.max(0, kept.length - ext.length - 1), 1);
+function outgoingFileName(chosenName, random) {
+    if (Object.prototype.toString.call(random) !== '[object Uint8Array]' || random.length !== OUTGOING_NAME_RANDOM_BYTES) {
+        throw new Error('invalid random bytes');
     }
-    const sent = kept.join('').normalize('NFC');
-    return isFileName(sent) ? sent : FILE_NAME_FALLBACK;
+    const stem = OUTGOING_NAME_PREFIX + Array.from(random, b => b.toString(16).padStart(2, '0')).join('');
+    const name = typeof chosenName === 'string' ? chosenName : '';
+    const dot = name.lastIndexOf('.');
+    const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+    return OUTGOING_EXTENSION.test(extension) ? stem + '.' + extension : stem;
 }
 
 /**
@@ -311,7 +313,7 @@ function fileNameForSending(raw) {
  * @returns {string}
  */
 function saveName(name) {
-    return name.replace(SAVE_NAME_REFUSED, FILE_NAME_FILLER);
+    return name.replace(SAVE_NAME_REFUSED, SAVE_NAME_FILLER);
 }
 
 /**

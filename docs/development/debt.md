@@ -220,8 +220,13 @@ maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 - D-2026-11-17-f: file sharing. A file is sealed in the browser into equal 256 KiB parts; its
   key travels inside an ordinary message. Limits: 10 MiB per file, 100 MiB per conversation,
   100 MiB per account per day (held in memory only, so nothing about an account's volume is
-  stored), 2 GiB in total; a full store refuses uploads and nothing else. Images are re-encoded
-  before they leave, which removes their metadata. No CSP change: images are drawn on a canvas.
+  stored), 2 GiB in total; a full store refuses uploads and nothing else. elyrn. delivers a file
+  exactly as it is and never reads, interprets, cleans or displays its content; the only thing it
+  sets is the name a file is sent under (`file-<8 random hex>` plus a short plain extension), and
+  the sender is told at every chosen file that the file goes with whatever it carries. No CSP
+  change. (18 Nov 2026: the owner decided delivery only, replacing the re-encoding of images:
+  decoding files in the page is attack surface, and cleaning a few formats teaches people to
+  trust it with the ones it does not clean.)
   Not in this round: deleting an uploaded file, download by the Go agent.
 - D-2026-11-17-g: the per-account file budget evicts the fullest budget when its table is full
   rather than refusing new accounts. Many accounts can fill the store either way (each costs

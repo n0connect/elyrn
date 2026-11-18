@@ -493,13 +493,16 @@ async function revealAccountNumber(accountNumberElement, successElement, account
     successElement.textContent = Errors.NOTICE.ACCOUNT_NUMBER_READY;
 }
 
-// Copy to clipboard for the user to save; a refused copy asks them to copy it by hand
+// Copy to clipboard for the user to save. A copy that failed, or did not settle in time
+// (copyToClipboard bounds it), asks them, in the form itself, to select the number on screen and
+// copy it by hand before pressing continue: continue is their word that they kept it. Either way
+// the number has been shown before continue is offered.
 async function copyIssuedAccountNumber(accountNumber) {
     try {
         await copyToClipboard(accountNumber);
         showSuccess(Errors.NOTICE.ACCOUNT_NUMBER_COPIED);
-    } catch (e) {
-        Errors.report(Errors.CODES.W_ACCOUNT_NUMBER_NOT_COPIED);
+    } catch (error) {
+        Errors.inline(document.getElementById('registerError'), Errors.CODES.W_ACCOUNT_NUMBER_NOT_COPIED, null, error);
     }
 }
 
