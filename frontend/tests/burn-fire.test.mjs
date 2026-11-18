@@ -18,97 +18,129 @@ const SEEDS = [1, 7, 0xdecade, 0xf1e];
 const COLS = 40;
 const ROWS = 30;
 
-// A bottom row of the hottest sources, and one of none
-const full = (heat) => new Uint16Array(COLS).fill(heat);
 const none = () => new Uint16Array(COLS);
+// A window's grid for the frames that matter
+const PEAK_COLS = 160;
+const PEAK_ROWS = 100;
 
-function run(grid, sources, steps, random, cooling = 0) {
-    for (let i = 0; i < steps; i++) grid = BurnFire.step(grid, sources, random, cooling);
+function run(grid, bottom, steps, random, cooling = 0) {
+    for (let i = 0; i < steps; i++) grid = BurnFire.step(grid, bottom, random, cooling);
     return grid;
 }
 
-test('the sources: hot clusters with cooler gaps, never above the source heat, drawn again differently', () => {
-    const heat = BurnFire.sourceHeat(ROWS);
+// Plays the seeded fire as play() does, up to frame `until` (exclusive)
+function playTo(seed, until, cols = PEAK_COLS, rows = PEAK_ROWS) {
+    const random = rng(seed).next;
+    const heat = BurnFire.sourceHeat(rows);
+    let grid = BurnFire.createGrid(cols, rows);
+    let sources = BurnFire.placeSources(cols, random);
+    for (let frame = 0; frame < until; frame++) {
+        for (const { share, cooling } of BurnFire.frameSteps(frame, rows, heat)) {
+            assert.ok(share >= 0 && share <= 1 && cooling >= 0);
+            grid = BurnFire.step(grid, BurnFire.sourceRow(cols, sources, heat, share), random, cooling);
+        }
+        sources = BurnFire.swaySources(sources, random);
+    }
+    return { grid, heat };
+}
+const PEAK = BurnFire.RISE_FRAMES + BurnFire.HOLD_FRAMES - 1;
+
+test('the sources: one per 12 to 20 cells, unevenly spaced, strengths that differ and change slowly, places that sway a cell', () => {
     for (const seed of SEEDS) {
         const random = rng(seed).next;
-        const row = BurnFire.sourceRow(COLS, heat, random);
-        assert.equal(row.length, COLS);
-        const values = new Set(row);
-        assert.ok(values.has(heat) && values.size === 2, `seed ${seed}: ${[...values]}`);
-        assert.ok([...row].every(value => value > 0 && value <= heat));
-        assert.notDeepEqual(plain([...BurnFire.sourceRow(COLS, heat, random)]), plain([...row]));
+        const sources = BurnFire.placeSources(PEAK_COLS, random);
+        const gaps = sources.slice(1).map((s, i) => s.x - sources[i].x);
+        assert.ok(gaps.every(gap => gap >= 12 && gap <= 20), `seed ${seed}: ${gaps}`);
+        assert.ok(new Set(gaps).size > 1);
+        assert.ok(sources.every(s => s.strength >= 0.45 && s.strength <= 1 && s.half >= 5 && s.half <= 9));
+        const later = BurnFire.swaySources(sources, random);
+        later.forEach((s, i) => {
+            assert.ok(Math.abs(s.x - sources[i].x) <= 1);
+            assert.ok(Math.abs(s.strength - sources[i].strength) <= 0.06 + 1e-9);
+        });
+        // each source makes one tongue: heat falls off with the distance from it
+        const heat = BurnFire.sourceHeat(PEAK_ROWS);
+        const row = BurnFire.sourceRow(PEAK_COLS, [{ x: 50, half: 8, strength: 1 }], heat, 1);
+        for (let dx = 0; dx < 8; dx++) assert.ok(row[50 + dx] > row[51 + dx] && row[50 - dx] > row[49 - dx]);
+        assert.equal(row[59], 0);
+        assert.equal(row[41], 0);
     }
 });
 
-test('a step keeps the grid size, never rises above its sources and never goes below zero', () => {
+test('a step keeps the grid size, never rises above its bottom row and never goes below zero', () => {
     const heat = BurnFire.sourceHeat(ROWS);
     for (const seed of SEEDS) {
         const random = rng(seed).next;
         let grid = BurnFire.createGrid(COLS, ROWS);
-        let sources = BurnFire.sourceRow(COLS, heat, random);
         for (let i = 0; i < ROWS * 3; i++) {
-            if (i % 5 === 0) sources = BurnFire.sourceRow(COLS, heat, random);
-            grid = BurnFire.step(grid, sources, random, i % 7 === 0 ? 2 : 0);
+            const bottom = BurnFire.sourceRow(COLS, BurnFire.placeSources(COLS, random), heat, 1);
+            grid = BurnFire.step(grid, bottom, random, i % 7 === 0 ? 2 : 0);
             assert.equal(grid.cols, COLS);
             assert.equal(grid.rows, ROWS);
             assert.equal(grid.heat.length, COLS * ROWS);
-            for (const value of grid.heat) {
-                assert.ok(value >= 0 && value <= heat, `seed ${seed} step ${i}: ${value}`);
-            }
+            for (const value of grid.heat) assert.ok(value >= 0 && value <= heat, `seed ${seed} step ${i}: ${value}`);
         }
     }
 });
 
-test('tongues, not bands: under clustered sources the flame tips stand at different heights', () => {
-    const heat = BurnFire.sourceHeat(ROWS);
-    const random = rng(SEEDS[0]).next;
-    // a short source so the tips stand inside the grid: the top lit row of every column
-    let grid = BurnFire.createGrid(COLS, ROWS);
-    const sources = BurnFire.scaled(BurnFire.sourceRow(COLS, heat, random), 0.4);
-    grid = run(grid, sources, ROWS * 2, random);
-    const tips = Array.from({ length: COLS }, (_, x) => {
-        for (let y = 0; y < ROWS; y++) if (grid.heat[y * COLS + x] > 0) return y;
-        return ROWS;
-    });
-    assert.ok(Math.max(...tips) - Math.min(...tips) >= 4, `tips ${tips}`);
-});
-
-test('with the sources off, every column dies out within the grid height plus the source heat (a heat moves up a row or loses one every step)', () => {
+test('with the sources off, every column dies out within the grid height', () => {
     const heat = BurnFire.sourceHeat(ROWS);
     for (const seed of SEEDS) {
         const random = rng(seed).next;
-        const lit = run(BurnFire.createGrid(COLS, ROWS), full(heat), ROWS * 2, random);
+        const lit = run(BurnFire.createGrid(COLS, ROWS), new Uint16Array(COLS).fill(heat), ROWS * 2, random);
         assert.ok(lit.heat.some(value => value > 0));
-        const out = run(lit, none(), ROWS + heat, random);
-        assert.ok(out.heat.every(value => value === 0), `seed ${seed}`);
+        assert.ok(run(lit, none(), ROWS, random).heat.every(value => value === 0), `seed ${seed}`);
     }
 });
 
-test('the whole play: shares and cooling in range, the window covered when the rise ends, nothing left at the end', () => {
-    const heat = BurnFire.sourceHeat(ROWS);
+test('the whole play leaves nothing after the last frame', () => {
     for (const seed of SEEDS) {
-        const random = rng(seed).next;
-        let grid = BurnFire.createGrid(COLS, ROWS);
-        let sources = null;
-        for (let frame = 0; frame < BurnFire.TOTAL_FRAMES; frame++) {
-            if (frame % BurnFire.SOURCE_FRAMES === 0) sources = BurnFire.sourceRow(COLS, heat, random);
-            const steps = BurnFire.frameSteps(frame, ROWS, heat);
-            assert.ok(steps.length > 0);
-            for (const { share, cooling } of steps) {
-                assert.ok(share >= 0 && share <= 1 && cooling >= 0);
-                grid = BurnFire.step(grid, BurnFire.scaled(sources, share), random, cooling);
-            }
-            if (frame === BurnFire.RISE_FRAMES - 1) {
-                const lit = grid.heat.filter(value => value > 0).length;
-                assert.ok(lit > COLS * ROWS * 0.8, `seed ${seed}: ${lit} lit at cover`);
-            }
-        }
+        const { grid } = playTo(seed, BurnFire.TOTAL_FRAMES);
         assert.ok(grid.heat.every(value => value === 0), `seed ${seed}: embers left`);
     }
 });
 
-test('the palette: zero heat is no paint, every other heat maps to one of exactly three steps, cooler never above hotter', () => {
-    assert.deepEqual(plain(BurnFire.PALETTE), ['--fire-flame', '--fire-glow', '--fire-core']);
+test('tongues, not one body: at the peak at least three gaps of page reach from the top past a third of the height', () => {
+    for (const seed of SEEDS) {
+        const { grid } = playTo(seed, PEAK + 1);
+        const third = Math.ceil(PEAK_ROWS / 3);
+        const clear = Array.from({ length: PEAK_COLS }, (_, x) => {
+            for (let y = 0; y <= third; y++) if (grid.heat[y * PEAK_COLS + x] > 0) return false;
+            return true;
+        });
+        const gaps = clear.filter((c, x) => c && !clear[x - 1]).length;
+        assert.ok(gaps >= 3, `seed ${seed}: ${gaps} gaps`);
+        // and flames: the tallest pass the top, most of the bottom row burns
+        assert.ok(clear.some(c => !c));
+        assert.ok(Array.from({ length: PEAK_COLS }, (_, x) => grid.heat[(PEAK_ROWS - 1) * PEAK_COLS + x] > 0).filter(Boolean).length > PEAK_COLS / 2);
+        assert.ok(Array.from({ length: PEAK_COLS }, (_, x) => grid.heat[x] > 0).some(Boolean), `seed ${seed}: no tongue reaches the top`);
+    }
+});
+
+// Shapes, not static: fewer than ISOLATED_MAX of the painted cells have no painted neighbour of
+// their own colour among their four neighbours
+const ISOLATED_MAX = 0.1;
+
+test('the peak is shapes, not static: few painted cells stand alone in their colour', () => {
+    for (const seed of SEEDS) {
+        const { grid, heat } = playTo(seed, PEAK + 1);
+        const colour = (x, y) => (x < 0 || y < 0 || x >= PEAK_COLS || y >= PEAK_ROWS ? -2 : BurnFire.paletteStep(grid.heat[y * PEAK_COLS + x], heat));
+        let painted = 0;
+        let alone = 0;
+        for (let y = 0; y < PEAK_ROWS; y++) {
+            for (let x = 0; x < PEAK_COLS; x++) {
+                const own = colour(x, y);
+                if (own === BurnFire.NO_PAINT) continue;
+                painted++;
+                if (![[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => colour(x + dx, y + dy) === own)) alone++;
+            }
+        }
+        assert.ok(alone / painted < ISOLATED_MAX, `seed ${seed}: ${alone} of ${painted} alone`);
+    }
+});
+
+test('the palette: zero heat paints nothing, then the black fringe, the red body, the yellow core; no white', () => {
+    assert.deepEqual(plain(BurnFire.PALETTE), ['--fire-fringe', '--fire-flame', '--fire-glow']);
     const max = BurnFire.sourceHeat(ROWS);
     assert.equal(BurnFire.NO_PAINT, -1);
     assert.equal(BurnFire.paletteStep(0, max), BurnFire.NO_PAINT);
@@ -122,12 +154,28 @@ test('the palette: zero heat is no paint, every other heat maps to one of exactl
         seen.add(index);
     }
     assert.equal(seen.size, 3);
-    // the steps are custom properties of the stylesheet, not colours of the module; no black
     for (const name of BurnFire.PALETTE) assert.match(css, new RegExp(`^\\s*${name}:`, 'm'));
-    assert.doesNotMatch(css, /--fire-smoke/);
+    assert.match(css, /--fire-fringe: #000000;\n\s*--fire-flame: var\(--danger\);\n\s*--fire-glow: var\(--warning\);/);
+    assert.doesNotMatch(css, /--fire-smoke|--fire-core/);
     assert.doesNotMatch(source, /#[0-9a-fA-F]{3,6}\b|rgba?\(/);
     // the draw paints only the palette's steps: a cell with no heat is skipped
     assert.match(source, /if \(paletteStep\(heat\[i\], maxHeat\) !== index\) continue;/);
+});
+
+test('one frame clock: the fire steps at the stylesheet\'s --frame-ms, the hover frames and the caption too', () => {
+    assert.equal(BurnFire.FRAME_PROPERTY, '--frame-ms');
+    assert.match(css, /--frame-ms: 120ms;/);
+    // the hover frames are three of them, the caption's three steps too
+    assert.match(css, /--icon-steps-ms: calc\(var\(--frame-ms\) \* 3\);/);
+    assert.match(css, /--caption-steps-ms: calc\(var\(--frame-ms\) \* 3\);/);
+    assert.match(css, /steps\(3, end\)/);
+    // the module holds no frame duration of its own: it reads the property and steps at it
+    assert.match(source, /frameMs: parseFloat\(style\.getPropertyValue\(FRAME_PROPERTY\)\)/);
+    assert.match(source, /timer = setTimeout\(tick, look\.frameMs\);/);
+    assert.doesNotMatch(source, /FRAME_MS|\b83\b|\b120\b/);
+    // without a readable clock the fire does not play
+    assert.equal(BurnFire.shouldPlay(false, false, NaN), false);
+    assert.equal(BurnFire.shouldPlay(false, false, 0), false);
 });
 
 test('the fire plays only on a visible page without reduced motion; play resolves at once otherwise', async () => {
@@ -148,12 +196,13 @@ test('the fire plays only on a visible page without reduced motion; play resolve
     }
 });
 
-test('the grid is the window divided by the cell, the cell growing past the cap; the length is bounded', () => {
+test('the grid is the window divided by the cell, the cell growing past the cap; about 1.6 s on the clock', () => {
     assert.deepEqual(plain(BurnFire.gridSize(1280, 800)), { cell: 8, cols: 160, rows: 100 });
     const big = BurnFire.gridSize(3840, 2160);
     assert.ok(big.cell > 8 && big.cols <= 240 && big.rows <= 135);
-    assert.ok(BurnFire.TOTAL_FRAMES * BurnFire.FRAME_MS <= BurnFire.HARD_STOP_MS);
-    assert.ok(BurnFire.HARD_STOP_MS <= 1400);
+    assert.equal(BurnFire.TOTAL_FRAMES, 13);
+    assert.equal(BurnFire.hardStopMs(120), 1680);
+    assert.ok(BurnFire.hardStopMs(120) > BurnFire.TOTAL_FRAMES * 120);
 });
 
 test('the module makes one canvas by element and attribute: no markup string, no inline style', () => {

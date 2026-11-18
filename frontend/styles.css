@@ -47,11 +47,12 @@
     --danger-bg: #fff5f5;
     /* The warning yellow (a warning notification's frame) */
     --warning: #ffc107;
-    /* The burn fire's three steps, coolest to hottest (burn-fire.js reads them): the
-       destructive red, the warning yellow, white; a cell with no heat is not painted */
+    /* The burn fire's three steps, coolest to hottest (burn-fire.js reads them): a black fringe
+       at a tongue's edge, the destructive red, the warning yellow; no white (the page is), and a
+       cell with no heat is not painted */
+    --fire-fringe: #000000;
     --fire-flame: var(--danger);
     --fire-glow: var(--warning);
-    --fire-core: #ffffff;
     /* The smallest hit area a control gets on a touch-width screen */
     --touch-min: 40px;
     /* Pixel glyphs: the aura's 5x5 and every icon's 10x10 fill this one box, inside a tile of
@@ -61,8 +62,11 @@
     /* An icon pixel: an icon's 10 pixels fill --glyph-size */
     --icon-px: 2px;
     /* An icon's three frames on hover, played once; a caption types itself in three steps */
-    --icon-steps-ms: 360ms;
-    --caption-steps-ms: 180ms;
+    /* The app's one frame clock: every stepped animation steps at it (the icon frames, the
+       caption, the burn fire, which reads it at start) */
+    --frame-ms: 120ms;
+    --icon-steps-ms: calc(var(--frame-ms) * 3);
+    --caption-steps-ms: calc(var(--frame-ms) * 3);
     /* A caption under a tile: its gap from the tile, its type, and how far below the tile it
        reaches; a header keeps that room between its tiles and its rule, so a caption never
        covers the rule (--header-pad: at least --row-gap, more when the caption needs it) */
