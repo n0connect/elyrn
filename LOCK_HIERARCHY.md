@@ -15,7 +15,11 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
   `globalRateLimiter.mu`. An upload takes and gives back a part inside its transaction, under
   the conversation row lock, each as one short hold (with the budget's `TokenBucket.mu` inside
   it); nothing else is acquired while it is held
-- `rateLimiterMutex` - PoW per-client limiters map (never held together with `spentMutex`)
+- `rateLimiterMutex` - PoW per-client limiters map (never held together with `spentMutex`).
+  Held only to find, create or choose a limiter (`limiterFor`); the chosen limiter's own lock is
+  taken after it is released. The shared overflow bucket (`overflowLimiter`, serving untracked
+  clients while the map is at its bound) is one more `RateLimiter` with its own per-bucket lock
+  (Priority Level 2), taken the same way
 - `spentMutex` - PoW spent (solved, unexpired) challenges map; leaf lock. Issued challenges are
   no longer stored (S-03)
 - `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map and the per-client (network) stream

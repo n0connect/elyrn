@@ -318,6 +318,147 @@ func TestCleanup_EvictsLimitersIdleForOneWindow(t *testing.T) {
 	}
 }
 
+// resetLimiters empties the client table and refills the shared bucket now and after the test,
+// so a table seeded to its bound never leaks into another test.
+func resetLimiters(t *testing.T) {
+	t.Helper()
+	empty := func() {
+		rateLimiterMutex.Lock()
+		challengeRateLimiters = make(map[string]*RateLimiter)
+		overflowLimiter = NewRateLimiter(overflowChallengesPerWindow, challengeWindow)
+		rateLimiterMutex.Unlock()
+	}
+	empty()
+	t.Cleanup(empty)
+}
+
+// fillClientTable seeds the table to maxTrackedClients with fresh, live limiters (filling it for
+// real would take 50,000 distinct client keys within one window) and returns one tracked key.
+func fillClientTable(t *testing.T) string {
+	t.Helper()
+	resetLimiters(t)
+	tracked := newClientKey(t)
+	rateLimiterMutex.Lock()
+	defer rateLimiterMutex.Unlock()
+	challengeRateLimiters[tracked] = NewRateLimiter(challengesPerWindow, challengeWindow)
+	for i := 1; i < maxTrackedClients; i++ {
+		challengeRateLimiters[strconv.Itoa(i)] = NewRateLimiter(challengesPerWindow, challengeWindow)
+	}
+	return tracked
+}
+
+func trackedClients() int {
+	rateLimiterMutex.RLock()
+	defer rateLimiterMutex.RUnlock()
+	return len(challengeRateLimiters)
+}
+
+// E2 (pow.go:admitClient:tracked-client-cap-fail-closed): a table held full by live clients
+// used to refuse every untracked client (ErrCapacity, 503). Now an untracked client is served
+// from the shared bucket, which the table does not grow for.
+func TestGenerateChallenge_UntrackedClientServedAtTheClientBound(t *testing.T) {
+	t.Setenv("POW_DIFFICULTY", "18")
+	fillClientTable(t)
+	for i := 0; i < challengesPerWindow+1; i++ {
+		// More than one client's own budget: each request is a new, untracked client key
+		if _, err := GenerateChallenge(newClientKey(t)); err != nil {
+			t.Fatalf("untracked client %d at the bound = %v, want a challenge", i, err)
+		}
+	}
+	if n := trackedClients(); n != maxTrackedClients {
+		t.Fatalf("table holds %d clients at the bound, want %d", n, maxTrackedClients)
+	}
+}
+
+// The shared bucket has its own rate: overflowChallengesPerWindow challenges per window for every
+// untracked client together, then ErrRateLimited (429), never ErrCapacity.
+func TestGenerateChallenge_SharedBucketHasItsOwnRate(t *testing.T) {
+	t.Setenv("POW_DIFFICULTY", "18")
+	fillClientTable(t)
+	for i := 0; i < overflowChallengesPerWindow; i++ {
+		if _, err := GenerateChallenge(newClientKey(t)); err != nil {
+			t.Fatalf("shared bucket request %d = %v, want a challenge", i, err)
+		}
+	}
+	if _, err := GenerateChallenge(newClientKey(t)); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("shared bucket past its rate = %v, want ErrRateLimited", err)
+	}
+}
+
+// A tracked client keeps its own budget at the bound: its limit is its own (not the shared
+// bucket's), and a spent shared bucket does not touch it.
+func TestGenerateChallenge_TrackedClientKeepsItsOwnBudgetAtTheBound(t *testing.T) {
+	t.Setenv("POW_DIFFICULTY", "18")
+	tracked := fillClientTable(t)
+	overflowLimiter.mutex.Lock()
+	overflowLimiter.tokens = 0
+	overflowLimiter.refillTime = time.Now().Add(time.Hour)
+	overflowLimiter.mutex.Unlock()
+	for i := 0; i < challengesPerWindow; i++ {
+		if _, err := GenerateChallenge(tracked); err != nil {
+			t.Fatalf("tracked client request %d with the shared bucket spent = %v", i, err)
+		}
+	}
+	if _, err := GenerateChallenge(tracked); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("tracked client past its own budget = %v, want ErrRateLimited", err)
+	}
+}
+
+// A refused request does not refresh its limiter's last access: refusals alone no longer keep a
+// client in the table (each kept entry used to cost one cheap refused GET per minute).
+func TestRateLimiter_RefusedRequestDoesNotRefreshLastAccess(t *testing.T) {
+	limiter := NewRateLimiter(challengesPerWindow, challengeWindow)
+	for i := 0; i < challengesPerWindow; i++ {
+		if !limiter.Allow() {
+			t.Fatalf("request %d within the budget refused", i)
+		}
+	}
+	idle := time.Now().Add(-limiterIdleTimeout / 2)
+	limiter.mutex.Lock()
+	limiter.lastAccess = idle
+	limiter.mutex.Unlock()
+	if limiter.Allow() {
+		t.Fatal("request past the budget admitted")
+	}
+	limiter.mutex.Lock()
+	got := limiter.lastAccess
+	limiter.mutex.Unlock()
+	if !got.Equal(idle) {
+		t.Fatalf("a refused request moved lastAccess from %v to %v", idle, got)
+	}
+}
+
+// Seen through cleanup: a client that only collects refusals is evicted once a window has passed
+// since its last admitted request. The last admission is dated half a window back, so a refusal
+// that refreshed the clock (the old Allow) would keep the entry past that cleanup instant.
+func TestCleanup_EvictsClientRefusedForAWholeWindow(t *testing.T) {
+	t.Setenv("POW_DIFFICULTY", "18")
+	resetLimiters(t)
+	client := newClientKey(t)
+	for i := 0; i < challengesPerWindow; i++ {
+		if _, err := GenerateChallenge(client); err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+	rateLimiterMutex.RLock()
+	limiter := challengeRateLimiters[client]
+	rateLimiterMutex.RUnlock()
+	admittedAt := time.Now().Add(-limiterIdleTimeout / 2)
+	limiter.mutex.Lock()
+	limiter.lastAccess = admittedAt
+	limiter.mutex.Unlock()
+	if _, err := GenerateChallenge(client); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("request past the budget = %v, want ErrRateLimited", err)
+	}
+	cleanupInactiveRateLimiters(admittedAt.Add(limiterIdleTimeout + time.Second))
+	rateLimiterMutex.RLock()
+	_, kept := challengeRateLimiters[client]
+	rateLimiterMutex.RUnlock()
+	if kept {
+		t.Fatal("a client kept only by refused requests survived a window past its last admission")
+	}
+}
+
 // ---- S-03: stateless issuing ----
 
 // searchFrom returns the first nonce at or after from that meets the challenge's difficulty.

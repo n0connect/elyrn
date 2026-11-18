@@ -128,7 +128,7 @@ per-boot secret, so a solution must echo all five fields exactly as issued (see
 forged, expired, already used, or issued before a server restart, and 503 while the set of used,
 unexpired challenges is full.
 
-- **Rate Limit:** 5 requests per minute per client key (an IPv4 address, an IPv6 /64, or one Tor circuit on the onion service), shared by every proof of work (registration, invites, rooms): `429` beyond it; `503` while the server tracks its maximum of clients.
+- **Rate Limit:** 5 requests per minute per client key (an IPv4 address, an IPv6 /64, or one Tor circuit on the onion service), shared by every proof of work (registration, invites, rooms): `429` beyond it. The server tracks at most 50,000 clients; while that table is full, clients not in it share one bucket of 500 challenges per minute (`429` beyond it), and tracked clients keep their own limit.
 - **Response (200 OK):**
 ```json
 {
