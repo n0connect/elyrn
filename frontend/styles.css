@@ -45,6 +45,14 @@
     /* One red for everything destructive or failed: deep enough to sit with the monochrome UI */
     --danger: #cc0000;
     --danger-bg: #fff5f5;
+    /* The warning yellow (a warning notification's frame) */
+    --warning: #ffc107;
+    /* The burn fire's four steps, coolest to hottest (burn-fire.js reads them): black, the
+       destructive red, the warning yellow, white */
+    --fire-smoke: #000000;
+    --fire-flame: var(--danger);
+    --fire-glow: var(--warning);
+    --fire-core: #ffffff;
     /* The smallest hit area a control gets on a touch-width screen */
     --touch-min: 40px;
     /* Pixel glyphs: the aura's 5x5 and every icon's 10x10 fill this one box, inside a tile of
@@ -56,6 +64,14 @@
     /* An icon's three frames on hover, played once; a caption types itself in three steps */
     --icon-steps-ms: 360ms;
     --caption-steps-ms: 180ms;
+    /* A caption under a tile: its gap from the tile, its type, and how far below the tile it
+       reaches; a header keeps that room between its tiles and its rule, so a caption never
+       covers the rule (--header-pad: at least --row-gap, more when the caption needs it) */
+    --caption-gap: calc(var(--tile-pad) * 2);
+    --caption-size: 14px;
+    --caption-line: 1.4;
+    --caption-reach: calc(var(--caption-gap) + var(--caption-size) * var(--caption-line) + 1px);
+    --header-pad: max(var(--row-gap), calc(var(--caption-reach) - (var(--touch-min) - var(--tile-box)) / 2));
     /* A tile's outer box (glyph, padding, 1 px border), and the gap between sibling tiles: their
        40 px hit areas then meet without overlapping */
     --tile-box: calc(var(--glyph-size) + 2 * var(--tile-pad) + 2px);
@@ -540,9 +556,9 @@ header {
     flex-wrap: wrap;
     align-items: center;
     gap: var(--tile-gap);
-    min-height: calc(var(--touch-min) + var(--row-gap));
+    min-height: calc(var(--touch-min) + var(--header-pad));
     margin-bottom: var(--row-gap);
-    padding-bottom: var(--row-gap);
+    padding-bottom: var(--header-pad);
     border-bottom: 1px solid var(--border);
 }
 
@@ -611,16 +627,16 @@ header {
 [data-caption]::after {
     content: attr(data-caption);
     position: absolute;
-    top: calc(100% + var(--tile-pad) * 2);
+    top: calc(100% + var(--caption-gap));
     left: 50%;
     transform: translateX(-50%);
     z-index: 3;
     padding: 0 4px;
     background: var(--bg);
     color: var(--muted);
-    font-size: 14px;
+    font-size: var(--caption-size);
     letter-spacing: 1px;
-    line-height: 1.4;
+    line-height: var(--caption-line);
     white-space: nowrap;
     text-transform: lowercase;
     pointer-events: none;
@@ -634,7 +650,7 @@ header {
     transform: none;
 }
 
-.burn-btn[data-caption]::after {
+.danger-tile[data-caption]::after {
     color: var(--danger);
 }
 
@@ -715,18 +731,19 @@ header {
     translate: 0 var(--icon-px);
 }
 
-/* Burning keeps its red: the tile turns red, the word too */
+/* Burning stands apart from the other actions */
 .burn-btn {
     margin-left: var(--tile-gap);
 }
 
-.icon-btn.burn-btn:hover,
-.icon-btn.burn-btn:focus-visible {
+/* A destructive tile (burn, delete identity) keeps its red: the tile turns red, the word too */
+.icon-btn.danger-tile:hover,
+.icon-btn.danger-tile:focus-visible {
     color: var(--danger);
 }
 
-.icon-btn.burn-btn:hover .icon-tile,
-.icon-btn.burn-btn:focus-visible .icon-tile {
+.icon-btn.danger-tile:hover .icon-tile,
+.icon-btn.danger-tile:focus-visible .icon-tile {
     background: var(--danger);
     border-color: var(--danger);
     color: var(--bg);
@@ -1085,7 +1102,7 @@ header {
 
 .notification.warning {
     background: #fff3cd;
-    border-color: #ffc107;
+    border-color: var(--warning);
     color: #856404;
 }
 
@@ -1186,7 +1203,8 @@ header {
     text-transform: none;
 }
 
-/* The identity panel: glyph, name and code on one line; deleting the identity set apart below */
+/* The identity panel: glyph, name and code on one line; deleting the identity set apart below,
+   a member row (.member-item) under a rule, its tile at the right edge */
 .identity-aura {
     display: flex;
     flex-wrap: wrap;
@@ -1195,16 +1213,10 @@ header {
     margin-bottom: 12px;
 }
 
-.identity-end {
+.member-item.identity-end {
     margin-top: 16px;
-    padding-top: 4px;
     border-top: 1px solid var(--border);
-}
-
-.pair-panel .identity-delete:hover,
-.pair-panel .identity-delete:focus-visible {
-    color: var(--danger);
-    background: var(--danger-bg);
+    border-bottom: none;
 }
 
 /* ========================================
@@ -1331,8 +1343,8 @@ header {
     display: flex;
     align-items: center;
     gap: var(--tile-gap);
-    min-height: calc(var(--touch-min) + var(--row-gap));
-    padding-bottom: var(--row-gap);
+    min-height: calc(var(--touch-min) + var(--header-pad));
+    padding-bottom: var(--header-pad);
     margin-bottom: var(--row-gap);
     border-bottom: 1px solid var(--border);
 }
@@ -1926,4 +1938,16 @@ body.in-conversation #chatView > .message-list {
     flex: 1 1 0;
     height: auto;
     min-height: var(--list-min-height);
+}
+
+/* The burn fire (burn-fire.js): one canvas over the whole window for the length of the
+   animation, above everything, taking every pointer press so the page under it takes none; its
+   cells are square pixels, never smoothed */
+.burn-fire {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 2000;
+    image-rendering: pixelated;
+    pointer-events: auto;
 }

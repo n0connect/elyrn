@@ -228,8 +228,9 @@
                     <p class="account-number-label">your identity</p>
                     <p id="identityAura" class="identity-aura"></p>
                     <p class="pair-hint">your aura — derived from your public key</p>
-                    <div class="identity-end">
-                        <button type="button" id="deleteIdentityBtn" class="text-btn identity-delete">delete identity…</button>
+                    <div class="member-item identity-end">
+                        <span id="deleteIdentityText" class="member-tag"></span>
+                        <button type="button" id="deleteIdentityBtn" class="icon-btn danger-tile member-action"><span class="icon-tile" data-icon="erase"></span></button>
                     </div>
                 </div>
 
@@ -296,7 +297,7 @@
                         <button type="button" id="membersBtn" class="icon-btn" data-hidden><span class="icon-tile" data-icon="members"></span></button>
                         <button type="button" id="roomCodeBtn" class="icon-btn" data-hidden><span class="icon-tile" data-icon="code"></span></button>
                         <button type="button" id="verifyBtn" class="icon-btn"><span class="icon-tile" data-icon="verify"></span></button>
-                        <button type="button" id="burnBtn" class="icon-btn burn-btn"><span class="icon-tile" data-icon="burn"></span></button>
+                        <button type="button" id="burnBtn" class="icon-btn burn-btn danger-tile"><span class="icon-tile" data-icon="burn"></span></button>
                     </div>
                 </div>
 
@@ -382,6 +383,7 @@
     <script src="js/file-composer.js"></script>
     <script src="js/counter-records.js"></script>
     <script src="js/live-updates.js"></script>
+    <script src="js/burn-fire.js"></script>
     <script src="js/chat.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/app.js"></script>

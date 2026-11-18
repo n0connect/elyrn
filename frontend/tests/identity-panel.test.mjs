@@ -28,7 +28,7 @@ test('the header holds no delete control: the badge, the bell and logout only', 
     assert.deepEqual(ids, ['meBadge', 'alertsBtn', 'logoutBtn']);
     // one control with that id in the whole page, inside the identity panel
     assert.equal((html.match(/id="deleteIdentityBtn"/g) || []).length, 1);
-    assert.match(panelOf('identityPanel'), /<button type="button" id="deleteIdentityBtn" class="text-btn identity-delete">delete identity…<\/button>/);
+    assert.match(panelOf('identityPanel'), /<button type="button" id="deleteIdentityBtn" class="icon-btn danger-tile member-action"><span class="icon-tile" data-icon="erase"><\/span><\/button>/);
 });
 
 test('the identity badge is a real button that names and controls its panel', () => {
@@ -50,8 +50,8 @@ test('the identity badge is a real button that names and controls its panel', ()
 test('the identity panel is a pair panel: what it is, then delete set apart by a rule', () => {
     assert.match(html, /<div id="identityPanel" class="pair-panel" data-hidden>/);
     const panel = panelOf('identityPanel');
-    assert.match(panel, /<p class="account-number-label">your identity<\/p>\n\s*<p id="identityAura" class="identity-aura"><\/p>\n\s*<p class="pair-hint">your aura — derived from your public key<\/p>\n\s*<div class="identity-end">/);
-    assert.match(css, /\.identity-end \{[^}]*border-top: 1px solid var\(--border\);/);
+    assert.match(panel, /<p class="account-number-label">your identity<\/p>\n\s*<p id="identityAura" class="identity-aura"><\/p>\n\s*<p class="pair-hint">your aura — derived from your public key<\/p>\n\s*<div class="member-item identity-end">/);
+    assert.match(css, /\.member-item\.identity-end \{[^}]*border-top: 1px solid var\(--border\);/);
     // one list of pair panels, so opening one closes the others, the identity panel included
     assert.match(ui, /const PAIR_PANELS = \['identityPanel', 'invitePanel', 'roomPanel', 'joinPanel', 'deletePanel'\];/);
 });
@@ -81,4 +81,20 @@ test('wiring: badge toggles (home first from a conversation), Escape closes and 
     assert.match(app, /\} else if \(isChatShown\(\)\) \{\n\s*Chat\.backToList\(\);\n\s*\} else if \(isShown\(IDENTITY_PANEL\)\) \{\n\s*closeIdentityPanel\(\);\n\s*\}/);
     // the delete panel and its confirmation are as they were
     assert.match(panelOf('deletePanel'), /<input type="password" id="deleteAccountInput"[^>]*>\n\s*<button id="deleteConfirmBtn" class="menu-opt burn-yes">delete<\/button>/);
+});
+
+test('the delete row is a member row: muted words from UI_TEXT at the left, the erase tile at the right edge, red like burn', () => {
+    const panel = panelOf('identityPanel');
+    assert.match(panel, /<div class="member-item identity-end">\n\s*<span id="deleteIdentityText" class="member-tag"><\/span>\n\s*<button type="button" id="deleteIdentityBtn"/);
+    // no word in the markup: the row's words, the tile's name and caption are UI_TEXT's
+    assert.doesNotMatch(panel, /delete identity|there is no undo|title=/);
+    assert.match(ui, /DELETE: 'delete',\n\s*DELETE_IDENTITY: 'delete identity',\n\s*DELETE_IDENTITY_TITLE: 'Delete identity',\n\s*NO_UNDO: 'there is no undo',/);
+    assert.match(ui, /\['deleteIdentityBtn', UI_TEXT\.DELETE_IDENTITY_TITLE, UI_TEXT\.DELETE\],/);
+    assert.match(ui, /getElementById\('deleteIdentityText'\)\.textContent = UI_TEXT\.DELETE_IDENTITY \+ ' ' \+ UI_TEXT\.MARK\(UI_TEXT\.NO_UNDO\);/);
+    // burn and delete share one destructive tile rule; the pink block and the old control are gone
+    assert.match(html, /id="burnBtn" class="icon-btn burn-btn danger-tile"/);
+    assert.match(css, /\.icon-btn\.danger-tile:hover \.icon-tile,\n\.icon-btn\.danger-tile:focus-visible \.icon-tile \{[^}]*background: var\(--danger\);/);
+    assert.match(css, /\.danger-tile\[data-caption\]::after \{\n\s*color: var\(--danger\);/);
+    assert.doesNotMatch(css + html, /identity-delete/);
+    assert.match(css, /\.member-item\.identity-end \{[^}]*border-bottom: none;/);
 });
