@@ -46,10 +46,12 @@ const (
 
 var errNotExact = errors.New("e2e: payload JSON is not exact")
 
-// exactObject reads raw as exactly one JSON object and returns its members by their exact,
+// ExactObject reads raw as exactly one JSON object and returns its members by their exact,
 // unescaped keys (the last of a repeated key wins, as in JSON.parse). raw must be valid UTF-8
 // with no lone surrogate escape anywhere; anything else, trailing data included, is refused.
-func exactObject(raw []byte) (map[string]json.RawMessage, error) {
+// Exported for the one other reader that holds the same rule: the agent's counter file
+// (backend/internal/agent/state.go).
+func ExactObject(raw []byte) (map[string]json.RawMessage, error) {
 	if !utf8.Valid(raw) || hasLoneSurrogateEscape(raw) {
 		return nil, errNotExact
 	}

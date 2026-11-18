@@ -84,7 +84,7 @@ func FuzzExactObject(f *testing.F) {
 		f.Add([]byte(seed))
 	}
 	f.Fuzz(func(t *testing.T, raw []byte) {
-		members, err := exactObject(raw)
+		members, err := ExactObject(raw)
 		if err != nil {
 			return
 		}

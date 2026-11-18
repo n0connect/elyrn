@@ -217,14 +217,14 @@ func framePayload(p payload) ([]byte, error) {
 }
 
 // decodePayload accepts exactly {"t","ts","n"}, or exactly {"t","ts","n","f"} with a valid "f"
-// (decodeFile), nothing more, read exactly as the browser reads it (exactObject): keys byte for
+// (decodeFile), nothing more, read exactly as the browser reads it (ExactObject): keys byte for
 // byte, valid UTF-8, no lone surrogate escape, t a string, ts and n safe integers above zero.
 func decodePayload(framed []byte) (*Message, error) {
 	body, err := unframe(framed)
 	if err != nil {
 		return nil, err
 	}
-	fields, err := exactObject(body)
+	fields, err := ExactObject(body)
 	if err != nil {
 		return nil, ErrBadMessage
 	}

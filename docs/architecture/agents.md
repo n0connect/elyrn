@@ -92,7 +92,12 @@ This is the design of record. Decisions are dated and final unless the owner rev
   and unreadable to the agent. Known limits, Go being the stricter side: a number written with a
   fraction or an exponent (`1.0`, `1e3`) is refused although `JSON.parse` reads a whole number from
   it, and a lone surrogate escape in a message's text is refused although the browser would show
-  the text with a broken character.
+  the text with a broken character. The agent's own counter file (`agent.counters.json`) is held
+  to the same rule (`state.go` `exactKeys`, through `e2e.ExactObject`): valid UTF-8, no lone
+  surrogate escape, every key byte for byte (`"VERSION"` or `"ſeq"` no longer pass as
+  `version`, `seq`), before `encoding/json` fills the record; anything else fails closed with
+  `E_AGENT_STATE_FILE`. An empty `"order"` in a record without senders loads as none, as it
+  is written.
 
 - **D13. A key under two seats is disputed** (audit A2,
   `room-roster/duplicate-member-key-card-shadows-member`). A card proves the room code, not the key

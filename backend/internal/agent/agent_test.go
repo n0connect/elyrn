@@ -145,6 +145,10 @@ func TestCounterFile_Policy(t *testing.T) {
 		"a bad sender key": `{"version":1,"rooms":{"6f9619ff-8b86-4d11-b42d-00c04fc964ff":{"seq":1,"mine":0,"senders":{"x":1}}}}`,
 		"an unknown field": `{"version":1,"rooms":{},"extra":true}`,
 		"trailing content": `{"version":1,"rooms":{}} {}`,
+		// Read exactly (decodeCounterRooms, e2e.ExactObject): encoding/json alone binds both by
+		// case folding (U+017F, the long s, folds to s)
+		"a case-folded key":        `{"VERSION":1,"rooms":{}}`,
+		"a case-folded record key": `{"version":1,"rooms":{"6f9619ff-8b86-4d11-b42d-00c04fc964ff":{"ſeq":1,"mine":0,"senders":{}}}}`,
 	} {
 		if err := os.WriteFile(counterFile(path), []byte(content), 0o600); err != nil {
 			t.Fatalf("write counter file: %v", err)

@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"reflect"
 	"slices"
+	"strings"
 	"time"
 
+	"elyrn/internal/e2e"
 	"elyrn/internal/identity"
 	"elyrn/internal/utils"
 
@@ -87,8 +90,12 @@ func loadCounterState(path string, existed bool) (*counterState, error) {
 }
 
 // decodeCounterRooms parses the content of a counter file: one object of the current version,
-// no unknown field, at most maxStateRooms valid records under canonical room ids.
+// read exactly (exactKeys), no unknown field, at most maxStateRooms valid records under canonical
+// room ids.
 func decodeCounterRooms(raw []byte) (map[uuid.UUID]*counterRecord, error) {
+	if !exactKeys(raw, reflect.TypeFor[stateFile]()) {
+		return nil, fail(CodeStateFile, nil)
+	}
 	var file stateFile
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -104,6 +111,61 @@ func decodeCounterRooms(raw []byte) (map[uuid.UUID]*counterRecord, error) {
 		rooms[id] = record
 	}
 	return rooms, nil
+}
+
+// exactKeys holds the counter file to the rule of e2e's exact reader (e2e.ExactObject), before
+// encoding/json binds it: the whole file valid UTF-8 without a lone surrogate escape, and every
+// object that fills a struct keyed by its fields' JSON names byte for byte (encoding/json binds
+// "SEQ" or a Kelvin sign to a field by case folding). An object filling a map is read exactly too;
+// null is left to encoding/json, which reads it as empty. Scalars and arrays are left to it as well:
+// the bytes were checked as a whole by the outermost ExactObject.
+func exactKeys(raw json.RawMessage, t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Pointer:
+		return bytes.Equal(raw, jsonNull) || exactKeys(raw, t.Elem())
+	case reflect.Map:
+		if bytes.Equal(raw, jsonNull) {
+			return true
+		}
+		members, err := e2e.ExactObject(raw)
+		if err != nil {
+			return false
+		}
+		for _, value := range members {
+			if !exactKeys(value, t.Elem()) {
+				return false
+			}
+		}
+		return true
+	case reflect.Struct:
+		members, err := e2e.ExactObject(raw)
+		if err != nil {
+			return false
+		}
+		for key, value := range members {
+			field, ok := fieldByJSONName(t, key)
+			if !ok || !exactKeys(value, field.Type) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+// jsonNull is the JSON literal null.
+var jsonNull = []byte("null")
+
+// fieldByJSONName is t's field whose JSON name (its tag's first part) is exactly name.
+func fieldByJSONName(t reflect.Type, name string) (reflect.StructField, bool) {
+	for field := range t.Fields() {
+		tagName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if tagName == name {
+			return field, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 func validRecord(r *counterRecord) bool {
@@ -123,8 +185,13 @@ func validRecord(r *counterRecord) bool {
 
 // validOrder checks that Order lists every key of Senders once and nothing else. A record written
 // before Order was kept has none: its senders are taken as recorded in key order, so a later
-// displacement picks among them deterministically.
+// displacement picks among them deterministically. An empty order is no order: "order" is written
+// omitempty, so a record without senders always loads with none (and saves and loads back alike).
 func validOrder(r *counterRecord) bool {
+	if len(r.Order) == 0 && len(r.Senders) == 0 {
+		r.Order = nil
+		return true
+	}
 	if r.Order == nil {
 		r.Order = slices.Sorted(maps.Keys(r.Senders))
 		return true

@@ -245,7 +245,7 @@ nothing about it. If it is missing for an existing identity (first run of this r
 identity created before it, or a lost file) the agent logs `E_AGENT_STATE_REBUILT` once, writes
 it again at once and rebuilds from the visible messages; if it cannot be read, the agent logs the
 same code at every start until the file is readable again. If
-it is present but malformed, the agent refuses to start with `E_AGENT_STATE_FILE`: restore it
+it is present but malformed (keys are read exactly as written, in valid UTF-8), the agent refuses to start with `E_AGENT_STATE_FILE`: restore it
 from a backup, or move it away to rebuild.
 
 ---
