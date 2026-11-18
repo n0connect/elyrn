@@ -307,3 +307,34 @@ test('a send\'s 409 "Id taken" (JSON) is told from the 409 "Conflict" (text/plai
         assert.equal(Errors.idTaken(result), false, JSON.stringify(result));
     }
 });
+
+test('18 Nov: the server\'s new refusals and the trust warnings have codes that say what to do', () => {
+    const C = Errors.CODES;
+    // A1: a room message or note under a card that is not the sender's stored one (400)
+    assert.equal(Errors.fromResult({ status: 400, data: { success: false, message: 'Sender card mismatch' } }), C.E_SENDER_CARD_MISMATCH);
+    // E1: a member's own share of the conversation's files (507), told from the whole quota
+    assert.equal(Errors.fromResult({ status: 507, data: { success: false, message: 'File share reached' } }), C.E_FILE_SHARE_REACHED);
+    assert.equal(Errors.fromResult({ status: 507, data: { success: false, message: 'File quota reached' } }), C.E_FILE_QUOTA_REACHED);
+    // Both are the server's own sentences (backend/internal/apperr, from the server half of this release)
+    const apperr = readFileSync(new URL('../../backend/internal/apperr/apperr.go', import.meta.url), 'utf8');
+    for (const sentence of ['Sender card mismatch', 'File share reached']) {
+        assert.ok(apperr.includes(`"${sentence}"`), `${sentence} is not the server's sentence`);
+    }
+    for (const [code, severity, words] of [
+        ['E_SENDER_CARD_MISMATCH', 'error', /reload the page/],
+        ['E_FILE_SHARE_REACHED', 'error', /once some of yours have expired/],
+        // B1: a clear that failed is shown, with what to do, no longer only logged
+        ['W_CLIPBOARD_NOT_CLEARED', 'warning', /copy something else to overwrite it/],
+        // A2
+        ['W_MEMBER_DISPUTED', 'warning', /two seats claim this identity/],
+        ['W_ROOM_SEATS_DISPUTED', 'warning', /safety number/],
+        ['W_OWN_SEAT_DISPUTED', 'warning', /claims to be you/],
+        // A4
+        ['E_FRIEND_REQUEST_RELAYED', 'error', /did not come from the member who sent it/],
+        ['W_FRIEND_REQUEST_OUTDATED', 'warning', /ask them to send a new request/]
+    ]) {
+        assert.equal(Errors.REGISTRY[code].severity, severity, code);
+        assert.match(Errors.REGISTRY[code].text, words, code);
+    }
+    assert.equal(Object.prototype.hasOwnProperty.call(Errors.INTERNAL, 'W_CLIPBOARD_NOT_CLEARED'), false);
+});

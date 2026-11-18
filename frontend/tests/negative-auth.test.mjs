@@ -8,6 +8,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
 import { load } from './fuzz-helpers.mjs';
 import { ACCOUNT_A, ACCOUNT_B, MARKUP, startHostileServer, useServer } from './negative-helpers.mjs';
 
@@ -225,4 +226,152 @@ test('every guarded action pressed twice in a row runs once; a different key run
         await first;
         assert.equal(runs, 1, key);
     }
+});
+
+// ---------- a clipboard clear that fails is told (fix-spec B1) ----------
+
+test('a clear the clipboard refuses, or that never settles, comes back as a failure within the time limit', async () => {
+    const clear = get('clearClipboardIfHolds');
+    const limit = get('CLIPBOARD_WRITE_TIMEOUT_MS');
+    const write = clipboard.writeText;
+    try {
+        for (const [what, refuse] of [
+            ['refused', () => Promise.reject(new Error('Document is not focused'))],
+            // an unfocused tab's write (headless Chromium): it never settles
+            ['never settles', () => new Promise(() => {})]
+        ]) {
+            clipboard.writeText = write;
+            await get('copyToClipboard')(ACCOUNT_A);
+            clipboard.writeText = refuse;
+            const started = Date.now();
+            const failure = await clear(ACCOUNT_A);
+            assert.ok(failure, `${what}: a failed clear must say so`);
+            assert.ok(Date.now() - started < limit + 2000, `${what}: ${Date.now() - started} ms`);
+            assert.equal(clipboard.text, ACCOUNT_A, `${what}: the number is still in the clipboard`);
+        }
+        // A page with no Clipboard API to clear with cannot clear either
+        clipboard.writeText = write;
+        await get('copyToClipboard')(ACCOUNT_B);
+        const navigator = get('navigator');
+        const api = navigator.clipboard;
+        navigator.clipboard = undefined;
+        try {
+            assert.ok(await clear(ACCOUNT_B));
+        } finally {
+            navigator.clipboard = api;
+        }
+    } finally {
+        clipboard.writeText = write;
+    }
+    // A clear that works, or one with nothing left to clear (something else was copied since), is no failure
+    await get('copyToClipboard')(ACCOUNT_A);
+    assert.equal(await clear(ACCOUNT_A), null);
+    assert.equal(clipboard.text, '');
+    assert.equal(await clear(ACCOUNT_A), null);
+    // The failure is shown with what to do: the account number, invite and room codes alike
+    assert.equal(Errors.REGISTRY.W_CLIPBOARD_NOT_CLEARED.severity, 'warning');
+    const utils = readFileSync(new URL('../js/utils.js', import.meta.url), 'utf8');
+    assert.match(utils, /function clearClipboardLater\(value\) \{\n    setTimeout\(\(\) => clearClipboardOrWarn\(value\)/);
+    const auth = readFileSync(new URL('../js/auth.js', import.meta.url), 'utf8');
+    assert.match(auth, /clearClipboardOrWarn\(accountNumber\)/);
+    assert.doesNotMatch(auth + utils, /clearClipboardIfHolds\(accountNumber\)|=> clearClipboardIfHolds\(/);
+});
+
+// ---------- only a 401 or another key ends a session (fix-spec C1) ----------
+
+test('a /me answer ends the stored session only on a 401 or another public key; every other answer keeps it', async () => {
+    const meVerdict = get('meVerdict');
+    const ENTRY = get('ENTRY');
+    const mine = (await C.deriveIdentity(ACCOUNT_A)).publicKey;
+    const theirs = (await C.deriveIdentity(ACCOUNT_B)).publicKey;
+    const good = { public_key: mine, message_ttl_days: 30, room_max_members: 8, room_max_ttl_hours: 24, file_max_bytes: FILE_MAX };
+    const kept = [
+        [{ ok: false, status: 429, data: { code: 'E_EDGE_RATE_LIMITED' } }, CODES.E_API_TOO_MANY_REQUESTS],
+        [{ ok: false, status: 429, data: { success: false, message: 'Too many requests' } }, CODES.E_API_TOO_MANY_REQUESTS],
+        [{ ok: false, status: 404, data: { code: 'E_EDGE_NOT_FOUND' } }, CODES.E_API_ROUTE_UNKNOWN],
+        [{ ok: false, status: 404, data: null }, CODES.E_API_INVALID_REQUEST],
+        [{ ok: false, status: 405, data: null }, CODES.E_API_METHOD_NOT_ALLOWED],
+        [{ ok: false, status: 403, data: null }, CODES.E_API_FORBIDDEN],
+        [{ ok: false, status: 400, data: null }, CODES.E_API_INVALID_REQUEST],
+        [{ ok: false, status: 500, data: null }, CODES.E_API_INTERNAL],
+        [{ ok: false, status: 503, data: null }, CODES.E_API_UNAVAILABLE],
+        [{ ok: false, status: 0, data: null, timedOut: true }, CODES.E_REQUEST_TIMEOUT],
+        [{ ok: false, status: 0, data: null }, CODES.E_SERVER_UNREACHABLE],
+        // this key, settings this app refuses: refused, the identity kept
+        [{ ok: true, status: 200, data: { ...good, message_ttl_days: 0 } }, CODES.E_SERVER_LIMITS_INVALID]
+    ];
+    for (const [check, code] of kept) {
+        const verdict = meVerdict(check, mine);
+        assert.equal(verdict.entry, ENTRY.UNREACHABLE, JSON.stringify(check));
+        assert.equal(verdict.code, code, JSON.stringify(check));
+    }
+    assert.equal(meVerdict({ ok: false, status: 401, data: null }, mine).entry, ENTRY.REFUSED);
+    const swapped = meVerdict({ ok: true, status: 200, data: { ...good, public_key: theirs } }, mine);
+    assert.equal(swapped.entry, ENTRY.REFUSED);
+    assert.equal(swapped.code, CODES.E_IDENTITY_MISMATCH);
+    const entered = meVerdict({ ok: true, status: 200, data: good }, mine);
+    assert.equal(entered.entry, ENTRY.ENTERED);
+    assert.equal(entered.judged.ttlDays, 30);
+    // enterApp wipes only on REFUSED: the one Keystore.wipeIdentity in it is behind that branch
+    const auth = readFileSync(new URL('../js/auth.js', import.meta.url), 'utf8');
+    const enter = auth.slice(auth.indexOf('async function enterApp'), auth.indexOf('// Raised whenever the login screen is left'));
+    assert.equal((enter.match(/wipeIdentity/g) || []).length, 1);
+    assert.match(enter, /if \(verdict\.entry === ENTRY\.REFUSED\) \{\n\s+\/\/[^\n]*\n\s+await Keystore\.wipeIdentity\(\);/);
+});
+
+test('the same /me key comparison is made on a stream reconnect and on a return from the back-forward cache', () => {
+    const live = readFileSync(new URL('../js/live-updates.js', import.meta.url), 'utf8');
+    for (const name of ['async function reconnect', 'async function onRestored']) {
+        const body = live.slice(live.indexOf(name), live.indexOf('\n        }\n', live.indexOf(name)));
+        assert.match(body, /const check = await hooks\.api\('GET', '\/me'\);\n\s+if \(!meConfirms\(check\)\) return;/, name);
+    }
+    assert.match(live, /if \(!hooks\.sameIdentity\(check\.data\)\) \{\n\s+hooks\.identityLost\(\);/);
+    const chat = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
+    assert.match(chat, /sameIdentity: data => me !== null && sameIdentity\(data, me\.publicKey\), identityLost/);
+    // One comparison, in one place: judgeMe asks it too
+    const sameIdentity = get('sameIdentity');
+    assert.equal(sameIdentity({ public_key: 'k' }, 'k'), true);
+    for (const data of [null, 'k', { public_key: ['k'] }, { public_key: 'K' }, {}]) assert.equal(sameIdentity(data, 'k'), false);
+});
+
+// ---------- login never shows the number, never completes after a leave (fix-spec B2, B3) ----------
+// The page's own drill shows the rendered frames (docs/development/testing-and-contributing.md);
+// here every writer of the login field is read from the source.
+
+test('login: no writer puts the field into clear text or writes the number while a login runs', () => {
+    const auth = readFileSync(new URL('../js/auth.js', import.meta.url), 'utf8');
+    const eye = readFileSync(new URL('../eye-hover-animation.js', import.meta.url), 'utf8');
+    // auth.js never makes any field clear text, and its old unmasking animation is gone
+    assert.doesNotMatch(auth, /\.type\s*=\s*'text'/);
+    assert.doesNotMatch(auth, /animateInputToMask/);
+    // The only clear-text writer is the hover effect's own frame, and it draws nothing while held
+    assert.equal((eye.match(/\.type = 'text'/g) || []).length, 1);
+    assert.match(eye, /handleMouseMove\(e\) \{\n\s+if \(!this\.eyeIcon \|\| !this\.accountNumberInput \|\| this\.held\) return;/);
+    assert.match(eye, /startAnimation\(\) \{\n\s+if \(this\.animationFrame \|\| this\.held\) return;/);
+    // resetToMasked: back to password before the value is written (no frame shows it in clear)
+    const reset = eye.slice(eye.indexOf('    resetToMasked() {'), eye.indexOf('    }\n', eye.indexOf('    resetToMasked() {')));
+    assert.ok(reset.indexOf("type = 'password'") >= 0 && reset.indexOf("type = 'password'") < reset.indexOf('.value ='), reset);
+    // holdMasked holds first, stops the frame, then masks
+    const hold = eye.slice(eye.indexOf('    holdMasked() {'), eye.indexOf('    release() {'));
+    assert.ok(hold.indexOf('this.held = true') < hold.indexOf('this.stopAnimation()') &&
+        hold.indexOf('this.stopAnimation()') < hold.indexOf('this.resetToMasked()'), hold);
+});
+
+test('login: the run is taken before the first wait and every wait is followed by the leave check', () => {
+    const auth = readFileSync(new URL('../js/auth.js', import.meta.url), 'utf8');
+    const start = auth.indexOf('async function loginNow()');
+    const body = auth.slice(start, auth.indexOf('\n}\n', start));
+    const runAt = body.indexOf('const run = loginRun;');
+    assert.ok(runAt > 0 && runAt < body.indexOf('await'), 'the run is taken after a wait');
+    assert.match(body, /const alive = \(\) => run === loginRun && isShown\('loginContainer'\);/);
+    // Each wait inside the try is followed at once by the leave check (enterApp asks it itself)
+    const waits = body.split('\n').map((line, i, lines) => [line, lines[i + 1]]).filter(([line]) => /await /.test(line));
+    assert.ok(waits.length >= 4);
+    for (const [line, next] of waits) {
+        assert.ok(/alive\(\)/.test(next) || /enterApp\(identity, true, alive\)/.test(line), `no leave check after: ${line.trim()}`);
+    }
+    // enterApp asks alive() after /me and after saving, before opening anything
+    const enter = auth.slice(auth.indexOf('async function enterApp'), auth.indexOf('// Raised whenever the login screen is left'));
+    assert.match(enter, /const check = await apiCall\('GET', '\/me'\);\n\s+if \(!alive\(\)\) return/);
+    assert.match(enter, /await Keystore\.save\(identity\);\n\s+if \(!alive\(\)\) return/);
 });
