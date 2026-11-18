@@ -47,8 +47,10 @@ This is the design of record. Decisions are dated and final unless the owner rev
 - **D8. Stored and wire names keep the old protocol namespace** (see *Rename* below).
 - **D9. Onion servers over plain http, through Tor only** (D-2026-11-12-c). `http://*.onion` is
   accepted besides `https://` and loopback `http://`, because Tor encrypts and authenticates the
-  connection; the program refuses to start unless a proxy (in practice
-  `ALL_PROXY=socks5h://127.0.0.1:9050`) would carry it.
+  connection. Since 18 Nov (audit F1) "through Tor only" is enforced: for an onion origin the
+  agent's only proxy is the `socks5h://` URL in `ALL_PROXY` (or `all_proxy`), for every request;
+  `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` are not read for it, and the program refuses to start
+  (`E_AGENT_ONION_PROXY`) when that proxy is missing, malformed or of another scheme.
 
 ## Decisions (17 Nov 2026)
 

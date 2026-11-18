@@ -109,8 +109,13 @@ Use an absolute path: MCP clients do not start servers from your shell, so `PATH
 ### Onion servers
 
 A `.onion` server is reached over plain `http` (Tor encrypts and authenticates the connection)
-through the Tor SOCKS proxy named in `ALL_PROXY` (decision D-2026-11-12-c). Without a proxy the
-program refuses to start with `E_AGENT_ONION_PROXY`.
+through the Tor SOCKS proxy named in `ALL_PROXY` (decision D-2026-11-12-c), and through nothing
+else. For an onion server the agent uses `ALL_PROXY` (or `all_proxy` when `ALL_PROXY` is unset)
+only, it must be `socks5h://host:port`, and it carries every request; `HTTP_PROXY`,
+`HTTPS_PROXY` and `NO_PROXY` are not read at all, so an inherited ordinary forward proxy can
+never see the login or the session. Without `ALL_PROXY`, or with any other scheme (`socks5://`,
+`http://`, `https://`) or a malformed value, the program refuses to start with
+`E_AGENT_ONION_PROXY`.
 
 ```bash
 claude mcp add elyrn -e ALL_PROXY=socks5h://127.0.0.1:9050 -- /path/to/elyrn-agent mcp --server http://<address>.onion
@@ -121,7 +126,8 @@ Use `socks5h` so that Tor, not the local resolver, resolves the name.
 
 ### Proxies
 
-The proxy of each request is chosen as curl does, with one difference:
+For an `https://` or loopback server, the proxy of each request is chosen as curl does, with one
+difference (an onion server has its own rule, above):
 
 - When the variable of the request's scheme is set (`HTTPS_PROXY` for `https`, `HTTP_PROXY` for
   `http`, upper or lower case), Go's standard rules decide, `NO_PROXY` included.
@@ -399,7 +405,7 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_SERVER_URL` | The server address must be https://host[:port], or http:// for localhost, 127.0.0.1, ::1 or a .onion host, with no path, query or credentials; fix --server. |
 | `E_AGENT_SERVER_MISSING` | No identity exists yet, so the agent needs the server address; start it with --server URL. |
 | `E_AGENT_SERVER_MISMATCH` | This identity belongs to another server; start with that server's address, or restore the right identity file from a backup if this one replaced it. The file is the account's only copy: moving it away to create a new identity abandons the account and its rooms. |
-| `E_AGENT_ONION_PROXY` | A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again. |
+| `E_AGENT_ONION_PROXY` | A .onion server is reached only through Tor's SOCKS proxy: set ALL_PROXY to socks5h://host:port of your Tor SOCKS port (for example socks5h://127.0.0.1:9050; no other scheme is accepted) and start again. HTTP_PROXY, HTTPS_PROXY and NO_PROXY are ignored for it. |
 | `E_AGENT_PROXY` | The proxy configured in the environment (HTTPS_PROXY, HTTP_PROXY or ALL_PROXY) is malformed; fix or unset it and start again. |
 | `E_AGENT_CONFIG_DIR` | The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again. |
 | `E_AGENT_IDENTITY_MISSING` | No identity exists yet; run elyrn-agent init --server URL, or call the identity tool. |

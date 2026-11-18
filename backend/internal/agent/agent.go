@@ -110,11 +110,6 @@ func (a *Agent) load(origin string) error {
 	if err != nil {
 		return err
 	}
-	proxy, err := proxyFunc()
-	if err != nil {
-		return err
-	}
-	a.client = newHTTPClient(proxy)
 	if stored != nil {
 		if origin != "" && origin != stored.Server {
 			return fail(CodeServerMismatch, nil)
@@ -126,11 +121,12 @@ func (a *Agent) load(origin string) error {
 		a.pendingToken = stored.PendingToken
 	}
 	a.origin = origin
-	if origin != "" {
-		if err := requireProxyForOnion(origin, proxy); err != nil {
-			return err
-		}
+	// Chosen once the origin is known: an onion origin has a route of its own (proxyFor)
+	proxy, err := proxyFor(origin)
+	if err != nil {
+		return err
 	}
+	a.client = newHTTPClient(proxy)
 	if !a.readOnly {
 		if a.counters, err = loadCounterState(statePath(a.idPath), stored != nil); err != nil {
 			return err

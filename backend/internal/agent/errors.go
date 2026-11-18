@@ -101,7 +101,7 @@ var sentences = map[Code]string{
 	CodeServerURL:           "The server address must be https://host[:port], or http:// for localhost, 127.0.0.1, ::1 or a .onion host, with no path, query or credentials; fix --server.",
 	CodeServerMissing:       "No identity exists yet, so the agent needs the server address; start it with --server URL.",
 	CodeServerMismatch:      "This identity belongs to another server; start with that server's address, or restore the right identity file from a backup if this one replaced it. The file is the account's only copy: moving it away to create a new identity abandons the account and its rooms.",
-	CodeOnionProxy:          "A .onion server is reachable only through Tor; set ALL_PROXY to the Tor SOCKS address (for example socks5h://127.0.0.1:9050) and start again.",
+	CodeOnionProxy:          "A .onion server is reached only through Tor's SOCKS proxy: set ALL_PROXY to socks5h://host:port of your Tor SOCKS port (for example socks5h://127.0.0.1:9050; no other scheme is accepted) and start again. HTTP_PROXY, HTTPS_PROXY and NO_PROXY are ignored for it.",
 	CodeProxy:               "The proxy configured in the environment (HTTPS_PROXY, HTTP_PROXY or ALL_PROXY) is malformed; fix or unset it and start again.",
 	CodeConfigDir:           "The user configuration directory could not be determined; set HOME (or XDG_CONFIG_HOME on Linux, %AppData% on Windows) and start again.",
 	CodeIdentityMissing:     "No identity exists yet; run elyrn-agent init --server URL, or call the identity tool.",
