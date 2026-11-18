@@ -478,14 +478,14 @@ const ElyrnRoomCrypto = (() => {
         }
     }
 
-    function sealMessage({ room, me, id, recipients, digest, text, sentAt, counter }) {
-        return seal({ room, me, magic: MAGIC_MESSAGE, id, recipients, digest, framed: C.encodePayload(text, sentAt, counter) });
+    function sealMessage({ room, me, id, recipients, digest, text, sentAt, counter, file }) {
+        return seal({ room, me, magic: MAGIC_MESSAGE, id, recipients, digest, framed: C.encodePayload({ text, sentAt, counter, file }) });
     }
 
     async function sealNote({ room, me, id, toCard, text, sentAt }) {
         const recipient = await openCard(room, toCard);
         const digest = await rosterDigest([toCard]);
-        return seal({ room, me, magic: MAGIC_NOTE, id, recipients: [recipient], digest, framed: C.encodePayload(text, sentAt, NOTE_COUNTER) });
+        return seal({ room, me, magic: MAGIC_NOTE, id, recipients: [recipient], digest, framed: C.encodePayload({ text, sentAt, counter: NOTE_COUNTER }) });
     }
 
     // Structure: magic, version, 1..32 wraps (exactly one in a note), one padded frame size
@@ -554,6 +554,7 @@ const ElyrnRoomCrypto = (() => {
                 text: payload.text,
                 sentAt: payload.sentAt,
                 counter: payload.counter,
+                file: payload.file,
                 sender: C.b64urlEncode(sender),
                 digest: header.slice(OFFSET_DIGEST, HEADER_BYTES - 1)
             };
@@ -572,6 +573,10 @@ const ElyrnRoomCrypto = (() => {
         const note = await open(room, me, MAGIC_NOTE, id, blob);
         if (!bytesEqual(note.digest, await rosterDigest([me.card]))) {
             throw new Error('note addressed to someone else');
+        }
+        // A note carries an invite code, never a file
+        if (note.file) {
+            throw new Error('bad note');
         }
         return note;
     }

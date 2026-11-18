@@ -5,9 +5,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../js/crypto.js', import.meta.url), 'utf8');
 const context = vm.createContext({ crypto: globalThis.crypto, CryptoKey: globalThis.CryptoKey, TextEncoder, TextDecoder, atob, btoa });
-const C = vm.runInContext(source + '\n;ElyrnCrypto', context);
+// As the page's script tags load them: the file name rule (validation.js) is read by decodePayload
+for (const file of ['../js/log.js', '../js/errors.js', '../js/crypto.js', '../js/room-crypto.js', '../validation.js']) {
+    vm.runInContext(readFileSync(new URL(file, import.meta.url), 'utf8'), context);
+}
+const C = vm.runInContext('ElyrnCrypto', context);
 
 // Same vector as backend/tests/identity/identity_test.go
 const ACCOUNT = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
@@ -208,8 +211,13 @@ test('safety number and aura are symmetric and deterministic', async () => {
 test('payload limit is enforced before encryption', async () => {
     const { a, ab } = await peers();
     // 4094-byte payloads; payloadFits budgets 48 bytes of JSON for the longest ts and counter
-    assert.equal(C.payloadFits('x'.repeat(4046)), true);
-    assert.equal(C.payloadFits('x'.repeat(4047)), false);
+    assert.equal(C.payloadFits({ text: 'x'.repeat(4046) }), true);
+    assert.equal(C.payloadFits({ text: 'x'.repeat(4047) }), false);
+    // A file's description takes its share: the longest name leaves less room for the caption
+    const longName = 'é'.repeat(128);
+    assert.equal(C.payloadFits({ text: '', fileName: longName }), true);
+    assert.equal(C.payloadFits({ text: 'x'.repeat(4046), fileName: 'a' }), false);
+    assert.equal(C.payloadFits({ text: 'x', fileName: '.hidden' }), false);
     await assert.rejects(C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'x'.repeat(7000), sentAt: 1, counter: 1 }));
     await assert.rejects(C.encryptMessage({ key: ab, conversationId: CONV, messageId: C.newMessageId(), senderPublicKey: a.publicKey, text: 'hi', sentAt: 1, counter: 0 })); // counter must be >= 1
 });
@@ -228,6 +236,10 @@ function frameOf(json) {
 }
 
 const VALID = '"t":"hi","ts":1729700000000,"n":3';
+// A valid "f" (backend/internal/e2e/file.go): id, key, size, hash, name
+const FILE = { i: '6f1e2d3c-4b5a-4968-8776-655443322110', k: 'gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8', s: 19,
+    h: 'Qf1qQZSwVj77ObdHVoZ3fA9IjpCzJotXNZoKn9TrcbA', n: 'résumé ✓ 2026.pdf' };
+const FILE_JSON = JSON.stringify(FILE);
 
 // What decodePayload threw for one framed payload (null when it threw nothing)
 function decodeFailure(framed) {
@@ -240,12 +252,13 @@ function decodeFailure(framed) {
 }
 
 test('a payload with valid t, ts and n plus unknown keys is a newer elyrn\'s, told apart from tampering', () => {
-    for (const json of [`{${VALID},"f":{"i":"x"}}`, `{"z":1,${VALID}}`, `{${VALID},"__proto__":{}}`, `{${VALID},"f":null,"g":[]}`]) {
+    for (const json of [`{${VALID},"g":{"i":"x"}}`, `{"z":1,${VALID}}`, `{${VALID},"__proto__":{}}`, `{${VALID},"f":null,"g":[]}`,
+        `{${VALID},"f":${FILE_JSON},"x":1}`]) {
         const thrown = decodeFailure(frameOf(json));
         assert.ok(thrown, json);
         assert.equal(C.isNewerPayload(thrown), true, json);
     }
-    assert.deepEqual({ ...C.decodePayload(frameOf(`{${VALID}}`)) }, { text: 'hi', sentAt: 1729700000000, counter: 3 });
+    assert.deepEqual({ ...C.decodePayload(frameOf(`{${VALID}}`)) }, { text: 'hi', sentAt: 1729700000000, counter: 3, file: null });
 });
 
 test('everything else that fails stays a bad payload, never a newer one', () => {
@@ -284,10 +297,50 @@ test('a one-to-one message a newer elyrn sealed opens as newer, and as unreadabl
         await C.sha256(C.b64urlDecode(a.publicKey, 32)));
     const nonce = crypto.getRandomValues(new Uint8Array(12));
     const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad },
-        ab, frameOf(`{${VALID},"f":{"n":"later"}}`)));
+        ab, frameOf(`{${VALID},"g":{"n":"later"}}`)));
     const ciphertext = C.b64urlEncode(C.concat(nonce, sealed));
     await assert.rejects(C.decryptMessage(ba, CONV, id, a.publicKey, ciphertext), (e) => C.isNewerPayload(e));
     const altered = C.b64urlDecode(ciphertext);
     altered[20] ^= 1;
     await assert.rejects(C.decryptMessage(ba, CONV, id, a.publicKey, C.b64urlEncode(altered)), (e) => !C.isNewerPayload(e));
+});
+
+// ---------- the file field ----------
+
+test('a file message carries exactly {t, ts, n, f} with f exactly {i, k, s, h, n}; the caption may be empty', () => {
+    const opened = C.decodePayload(frameOf(`{"t":"","ts":1729700000000,"n":7,"f":${FILE_JSON}}`));
+    assert.equal(opened.text, '');
+    assert.deepEqual({ ...opened.file }, { id: FILE.i, key: FILE.k, size: FILE.s, hash: FILE.h, name: FILE.n });
+    // Written and read back by this build, in the order Go reads it
+    const file = { id: FILE.i, key: FILE.k, size: FILE.s, hash: FILE.h, name: FILE.n };
+    const framed = C.encodePayload({ text: 'caption', sentAt: 1729700000000, counter: 7, file });
+    const json = new TextDecoder().decode(framed.subarray(2, 2 + ((framed[0] << 8) | framed[1])));
+    assert.equal(json, `{"t":"caption","ts":1729700000000,"n":7,"f":${FILE_JSON}}`);
+    assert.deepEqual({ ...C.decodePayload(framed).file }, file);
+    for (const size of [1, 104857600]) {
+        assert.equal(C.decodePayload(frameOf(`{${VALID},"f":${JSON.stringify({ ...FILE, s: size })}}`)).file.size, size);
+    }
+});
+
+test('every field of f is checked, and an invalid f makes the whole payload bad (never newer)', () => {
+    const bad = [
+        null, [], 'x', 7, {}, { ...FILE, extra: 1 },
+        Object.fromEntries(Object.entries(FILE).filter(([k]) => k !== 'n')),
+        { i: FILE.i, k: FILE.k, s: FILE.s, h: FILE.h, x: FILE.n },
+        { ...FILE, i: FILE.i.toUpperCase() }, { ...FILE, i: '6f1e2d3c-4b5a-1968-8776-655443322110' }, { ...FILE, i: 7 },
+        { ...FILE, k: FILE.k + 'A' }, { ...FILE, k: FILE.k.slice(1) }, { ...FILE, k: FILE.k.replace(/.$/, '9') }, { ...FILE, k: 5 },
+        { ...FILE, h: FILE.h.slice(2) }, { ...FILE, h: null },
+        { ...FILE, s: 0 }, { ...FILE, s: -1 }, { ...FILE, s: 104857601 }, { ...FILE, s: 1.5 }, { ...FILE, s: '19' },
+        { ...FILE, n: '' }, { ...FILE, n: '.env' }, { ...FILE, n: 'a/b' }, { ...FILE, n: 'a\\b' }, { ...FILE, n: 'pay\u202etxt.exe' },
+        { ...FILE, n: 'a\u0000b' }, { ...FILE, n: 'x'.repeat(129) }, { ...FILE, n: 'e\u0301' }, { ...FILE, n: 7 }
+    ];
+    for (const f of bad) {
+        const thrown = decodeFailure(frameOf(`{${VALID},"f":${JSON.stringify(f)}}`));
+        assert.ok(thrown, JSON.stringify(f));
+        assert.equal(C.isNewerPayload(thrown), false, JSON.stringify(f));
+    }
+    // ...and this build never writes one
+    for (const f of bad.filter((v) => v && typeof v === 'object' && !Array.isArray(v) && 'i' in v && !('extra' in v))) {
+        assert.throws(() => C.encodePayload({ text: '', sentAt: 1, counter: 1, file: { id: f.i, key: f.k, size: f.s, hash: f.h, name: f.n } }));
+    }
 });

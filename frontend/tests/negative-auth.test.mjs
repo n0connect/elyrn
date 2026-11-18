@@ -20,8 +20,8 @@ const clipboard = {
 const { context, get } = load(
     { crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa, AbortSignal, DOMException, Response,
         window: { isSecureContext: true }, navigator: { clipboard } },
-    ['../js/log.js', '../js/errors.js', '../js/utils.js', '../js/crypto.js', '../js/room-crypto.js', '../validation.js',
-        '../js/auth.js']);
+    ['../js/log.js', '../js/errors.js', '../js/utils.js', '../js/crypto.js', '../js/room-crypto.js', '../js/file-crypto.js',
+        '../validation.js', '../js/auth.js']);
 const Errors = get('Errors');
 const CODES = Errors.CODES;
 const C = get('ElyrnCrypto');
@@ -32,6 +32,10 @@ const MAX_MESSAGE_TTL_DAYS = get('MAX_MESSAGE_TTL_DAYS');
 const MAX_ROOM_TTL_HOURS = get('MAX_ROOM_TTL_HOURS');
 const MAX_MESSAGE_PAGE_LIMIT = get('MAX_MESSAGE_PAGE_LIMIT');
 const R = get('ElyrnRoomCrypto');
+const FILE_PART = get('ElyrnFileCrypto').FILE_PART_BYTES;
+const FILE_BOUND = C.MAX_FILE_BYTES_BOUND;
+// The server's default MAX_FILE_BYTES (backend/internal/config)
+const FILE_MAX = 10485760;
 
 let server;
 before(async () => {
@@ -86,7 +90,8 @@ test('a /me answer that does not carry this device\'s key is E_IDENTITY_MISMATCH
     const judgeMe = get('judgeMe');
     const mine = (await C.deriveIdentity(ACCOUNT_A)).publicKey;
     const theirs = (await C.deriveIdentity(ACCOUNT_B)).publicKey;
-    const good = { public_key: mine, message_ttl_days: 30, room_max_members: 8, room_max_ttl_hours: 24, message_page_limit: 50 };
+    const good = { public_key: mine, message_ttl_days: 30, room_max_members: 8, room_max_ttl_hours: 24, message_page_limit: 50,
+        file_max_bytes: FILE_MAX };
     for (const data of [null, undefined, 'x', 7, [], {}, { ...good, public_key: theirs }, { ...good, public_key: MARKUP[0] },
         { ...good, public_key: { toString: () => mine } }, { ...good, public_key: [mine] }, { success: false, message: 'unauthorized' }]) {
         assert.equal(judgeMe(data, mine).code, CODES.E_IDENTITY_MISMATCH, JSON.stringify(data));
@@ -96,8 +101,11 @@ test('a /me answer that does not carry this device\'s key is E_IDENTITY_MISMATCH
 test('a /me answer with this key and settings of the wrong type or out of range is E_SERVER_LIMITS_INVALID', async () => {
     const judgeMe = get('judgeMe');
     const mine = (await C.deriveIdentity(ACCOUNT_A)).publicKey;
-    const good = { public_key: mine, message_ttl_days: 30, room_max_members: 8, room_max_ttl_hours: 24 };
+    const good = { public_key: mine, message_ttl_days: 30, room_max_members: 8, room_max_ttl_hours: 24, file_max_bytes: FILE_MAX };
     const changes = [
+        // the largest file: from one part to the bound any server may set (backend/internal/config)
+        { file_max_bytes: undefined }, { file_max_bytes: '10485760' }, { file_max_bytes: FILE_PART - 1 }, { file_max_bytes: 0 },
+        { file_max_bytes: FILE_BOUND + 1 }, { file_max_bytes: 1.5 * FILE_PART }, { file_max_bytes: null }, { file_max_bytes: -FILE_MAX },
         { message_ttl_days: '30' }, { message_ttl_days: 0 }, { message_ttl_days: MAX_MESSAGE_TTL_DAYS + 1 }, { message_ttl_days: 1.5 },
         { message_ttl_days: -1 }, { message_ttl_days: null }, { room_max_members: '8' }, { room_max_members: R.MIN_MEMBERS - 1 },
         { room_max_members: R.MAX_MEMBERS + 1 }, { room_max_ttl_hours: 0 }, { room_max_ttl_hours: MAX_ROOM_TTL_HOURS + 1 },
@@ -111,13 +119,16 @@ test('a /me answer with this key and settings of the wrong type or out of range 
 test('a /me answer with extra fields is taken for its known ones; a page size out of range turns paging off', async () => {
     const judgeMe = get('judgeMe');
     const mine = (await C.deriveIdentity(ACCOUNT_A)).publicKey;
-    const good = { public_key: mine, message_ttl_days: 30, room_max_members: 8, room_max_ttl_hours: 24,
+    const good = { public_key: mine, message_ttl_days: 30, room_max_members: 8, room_max_ttl_hours: 24, file_max_bytes: FILE_MAX,
         set_cookie: MARKUP[2], html: MARKUP[0], admin: true };
     for (const [limit, want] of [[50, 50], [undefined, 0], ['50', 0], [0, 0], [MAX_MESSAGE_PAGE_LIMIT + 1, 0], [MAX_MESSAGE_PAGE_LIMIT, MAX_MESSAGE_PAGE_LIMIT]]) {
         const judged = judgeMe({ ...good, message_page_limit: limit }, mine);
         assert.equal(judged.code, null);
         assert.equal(judged.ttlDays, 30);
-        assert.deepEqual({ ...judged.limits }, { maxMembers: 8, maxTTLHours: 24, pageLimit: want }, String(limit));
+        assert.deepEqual({ ...judged.limits }, { maxMembers: 8, maxTTLHours: 24, pageLimit: want, fileMaxBytes: FILE_MAX }, String(limit));
+    }
+    for (const bytes of [FILE_PART, FILE_BOUND]) {
+        assert.equal(judgeMe({ ...good, file_max_bytes: bytes }, mine).limits.fileMaxBytes, bytes);
     }
 });
 

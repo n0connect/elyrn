@@ -569,6 +569,64 @@ header {
     font-size: 24px;
 }
 
+/* The attach control sits before the text, quieter than send */
+.composer .attach-btn {
+    min-width: 44px;
+    padding: 16px 12px;
+    background: var(--bg);
+    color: var(--fg);
+}
+
+/* The chosen file, above the composer: name, size, progress, remove */
+.file-chip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    margin-top: 16px;
+    padding: 8px 12px;
+    border: 1px dashed var(--border);
+    font-size: 14px;
+    text-align: left;
+}
+
+.file-chip .file-remove {
+    margin: 0 0 0 auto;
+    padding: 4px 8px;
+}
+
+.file-name {
+    word-break: break-all;
+}
+
+.file-size,
+.file-status {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+/* A received file in its bubble: name and size, then view and save; a viewed image under them */
+.file-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    padding: 6px 0;
+}
+
+.file-card .file-action {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    font-size: 13px;
+}
+
+.file-card .file-view {
+    flex: 1 0 100%;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--border);
+}
+
 /* ========================================
    LOGIN FOOTER
    ======================================== */

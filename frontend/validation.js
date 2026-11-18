@@ -41,13 +41,30 @@ function trimMessageText(text) {
  * @returns {object} - {valid: boolean, sanitized: string, error: string, params?: object}; error is an Errors code
  */
 function validateMessageText(input) {
+    return checkMessageText(input, {});
+}
+
+/**
+ * Validates the caption of a file message: as a message, except that it may be empty, and it
+ * must fit one frame together with the file's description
+ * @param {string} input - Raw composer value
+ * @param {string} fileName - the name the file is sent under (isFileName)
+ * @returns {object} - as validateMessageText
+ */
+function validateCaption(input, fileName) {
+    return checkMessageText(input, { fileName: fileName });
+}
+
+// The message rule; withFile.fileName set: a caption beside that file (may be empty)
+function checkMessageText(input, withFile) {
     if (typeof input !== 'string') {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_INVALID };
     }
 
     const normalized = trimMessageText(input.replace(/\r\n?/g, '\n'));
+    const captioned = withFile.fileName !== undefined;
 
-    if (normalized.length === 0) {
+    if (normalized.length === 0 && !captioned) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_EMPTY };
     }
 
@@ -64,7 +81,7 @@ function validateMessageText(input) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_IS_ACCOUNT_NUMBER };
     }
 
-    if (!ElyrnCrypto.payloadFits(normalized)) {
+    if (!ElyrnCrypto.payloadFits({ text: normalized, fileName: withFile.fileName })) {
         return { valid: false, sanitized: '', error: Errors.CODES.E_MESSAGE_TOO_LONG };
     }
 
@@ -233,6 +250,68 @@ function validateRoleText(input) {
 function isRoleText(text) {
     const checked = validateRoleText(text);
     return checked.valid && checked.value === text;
+}
+
+// A file's display name (docs/architecture/files.md): the one home of its rule, the same as
+// backend/internal/e2e/file.go fileNameValid. NFC as it is (never normalised on reading), 1 to
+// MAX_FILE_NAME_CHARS code points, at most MAX_FILE_NAME_BYTES of UTF-8, no leading dot, no path
+// separator, no control character (Unicode Cc: C0, DEL, C1) and no bidirectional control.
+const MAX_FILE_NAME_CHARS = 128;
+const MAX_FILE_NAME_BYTES = 512;
+const FILE_NAME_HIDDEN_PREFIX = '.';
+const FILE_NAME_REFUSED = /[\p{Cc}\/\\\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const FILE_NAME_REFUSED_ALL = new RegExp(FILE_NAME_REFUSED.source, 'gu');
+// A lone surrogate is no Unicode text and has no UTF-8 form
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const LONE_SURROGATE_ALL = new RegExp(LONE_SURROGATE.source, 'g');
+// What stands in for a refused character, and the name of a file whose name keeps nothing
+const FILE_NAME_FILLER = '_';
+const FILE_NAME_FALLBACK = 'file';
+// Characters common file systems refuse in a name: replaced in the name a file is saved under
+const SAVE_NAME_REFUSED = /[<>:"|?*]/g;
+const fileNameEncoder = new TextEncoder();
+
+/**
+ * True when name is a file name a file message may carry (sent or received)
+ * @param {any} name
+ * @returns {boolean}
+ */
+function isFileName(name) {
+    if (typeof name !== 'string' || LONE_SURROGATE.test(name)) return false;
+    const chars = [...name].length;
+    return chars >= 1 && chars <= MAX_FILE_NAME_CHARS && fileNameEncoder.encode(name).length <= MAX_FILE_NAME_BYTES &&
+        name.normalize('NFC') === name && !name.startsWith(FILE_NAME_HIDDEN_PREFIX) && !FILE_NAME_REFUSED.test(name);
+}
+
+/**
+ * The name a chosen file is sent under: NFC, every refused character replaced, leading dots
+ * dropped, cut to the bounds keeping its extension where it can. Always passes isFileName.
+ * @param {any} raw - the name the browser gives the chosen file
+ * @returns {string}
+ */
+function fileNameForSending(raw) {
+    let name = (typeof raw === 'string' ? raw : '').replace(LONE_SURROGATE_ALL, FILE_NAME_FILLER).normalize('NFC')
+        .replace(FILE_NAME_REFUSED_ALL, FILE_NAME_FILLER);
+    while (name.startsWith(FILE_NAME_HIDDEN_PREFIX)) name = name.slice(FILE_NAME_HIDDEN_PREFIX.length);
+    const dot = name.lastIndexOf('.');
+    const ext = dot > 0 ? [...name.slice(dot)] : [];
+    let kept = [...name];
+    if (kept.length > MAX_FILE_NAME_CHARS) kept = kept.slice(0, Math.max(0, MAX_FILE_NAME_CHARS - ext.length)).concat(ext).slice(0, MAX_FILE_NAME_CHARS);
+    while (kept.length > 0 && fileNameEncoder.encode(kept.join('')).length > MAX_FILE_NAME_BYTES) {
+        kept.splice(Math.max(0, kept.length - ext.length - 1), 1);
+    }
+    const sent = kept.join('').normalize('NFC');
+    return isFileName(sent) ? sent : FILE_NAME_FALLBACK;
+}
+
+/**
+ * The name a received file is saved under: its (valid) name with the characters common file
+ * systems refuse replaced
+ * @param {string} name - a name that passed isFileName
+ * @returns {string}
+ */
+function saveName(name) {
+    return name.replace(SAVE_NAME_REFUSED, FILE_NAME_FILLER);
 }
 
 /**

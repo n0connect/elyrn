@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { FILE_NAMES_ACCEPTED, FILE_NAMES_REFUSED } from './file-names.mjs';
 
 const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa });
 for (const file of ['../js/log.js', '../js/errors.js', '../js/crypto.js', '../js/room-crypto.js', '../validation.js']) {
@@ -114,4 +115,54 @@ test('the role rule agrees with the Go side\'s own cases (vectors from backend/i
     for (const text of ['ｌｉｄｅｒ', 'über', 'оwner']) {
         assert.equal(validateRole(text).value, text, text);
     }
+});
+
+// ---------- file names (the same rule as backend/internal/e2e/file.go fileNameValid) ----------
+
+const isFileName = (name) => vm.runInContext('isFileName', context)(name);
+const forSending = (name) => vm.runInContext('fileNameForSending', context)(name);
+const saveName = (name) => vm.runInContext('saveName', context)(name);
+const cp = (...points) => String.fromCodePoint(...points);
+// A lone surrogate: no Unicode text (Go's strings cannot even hold one)
+const LONE_HIGH = String.fromCharCode(0xd800);
+const LONE_LOW = String.fromCharCode(0xdc00);
+
+test('file names: accepted and refused exactly as the Go side does (file-names.mjs, shared through vectors-js.json)', () => {
+    for (const name of FILE_NAMES_ACCEPTED) assert.equal(isFileName(name), true, JSON.stringify(name));
+    for (const name of FILE_NAMES_REFUSED) assert.equal(isFileName(name), false, JSON.stringify(name));
+    for (const value of [undefined, null, 7, ['a'], { toString: () => 'a' }, LONE_HIGH + '.txt', 'x' + LONE_LOW]) {
+        assert.equal(isFileName(value), false, JSON.stringify(value));
+    }
+});
+
+test('file names: any chosen name is sent under one the rule accepts, its extension kept where it can be', () => {
+    const cases = [
+        ['.bashrc', 'bashrc'], ['..secret.txt', 'secret.txt'], ['a/b\\c.pdf', 'a_b_c.pdf'],
+        ['pay' + cp(0x202e) + 'txt.exe', 'pay_txt.exe'], ['e' + cp(0x301) + '.txt', cp(0xe9) + '.txt'],
+        ['', 'file'], ['...', 'file'], ['ok.png', 'ok.png'], ['tab' + cp(9) + 'name', 'tab_name']
+    ];
+    for (const [raw, want] of cases) assert.equal(forSending(raw), want, JSON.stringify(raw));
+    const long = forSending('x'.repeat(300) + '.jpeg');
+    assert.equal([...long].length, 128);
+    assert.ok(long.endsWith('.jpeg'));
+    const wide = forSending(cp(0x1f642).repeat(200) + '.pdf');
+    assert.ok(isFileName(wide) && wide.endsWith('.pdf'), wide);
+    for (const raw of [undefined, 7, LONE_HIGH, ('a' + cp(0)).repeat(100), cp(0x212b)]) {
+        assert.equal(isFileName(forSending(raw)), true, JSON.stringify(raw));
+    }
+    // Saved under a name common file systems take
+    assert.equal(saveName('a<b>:"c"|?*.txt'), 'a_b___c____.txt');
+});
+
+test('a caption beside a file may be empty; otherwise it follows the message rule and must fit beside the file', () => {
+    const caption = (text, name) => vm.runInContext('validateCaption', context)(text, name);
+    const codes = vm.runInContext('Errors.CODES', context);
+    assert.equal(caption('', 'a.pdf').valid, true);
+    assert.equal(caption('  \n ', 'a.pdf').sanitized, '');
+    assert.equal(caption('look', 'a.pdf').sanitized, 'look');
+    assert.equal(caption('bad' + cp(7), 'a.pdf').error, codes.E_MESSAGE_CONTROL_CHARS);
+    assert.equal(caption('x'.repeat(2001), 'a.pdf').error, codes.E_MESSAGE_TOO_MANY_CHARS);
+    assert.equal(caption(cp(0x1f600).repeat(1000), cp(0xe9).repeat(128)).error, codes.E_MESSAGE_TOO_LONG);
+    // Without a file an empty message is still refused
+    assert.equal(vm.runInContext('validateMessageText', context)('').error, codes.E_MESSAGE_EMPTY);
 });

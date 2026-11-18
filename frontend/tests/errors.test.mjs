@@ -135,6 +135,18 @@ test('wave 2 codes exist with the severity they are reported at', () => {
     assert.equal(Errors.fromResult({ status: 403, data: { success: false, message: 'Role not allowed' } }), C.E_ROLE_NOT_ALLOWED);
     assert.equal(Errors.REGISTRY.E_ROLE_TOO_LONG.text.includes('{max}'), true);
     assert.equal(Errors.INTERNAL.W_ROLE_UNREADABLE, 'W_ROLE_UNREADABLE');
+    // Files: each of the server's own sentences (backend/internal/apperr) maps to its code
+    for (const [sentence, status, code] of [['File part out of order', 409, C.E_FILE_UPLOAD_RESTART],
+        ['File quota reached', 507, C.E_FILE_QUOTA_REACHED], ['File store full', 507, C.E_FILE_STORE_FULL],
+        ['File budget spent', 429, C.W_FILE_BUDGET_SPENT]]) {
+        assert.equal(Errors.fromResult({ status, data: { success: false, message: sentence } }), code, sentence);
+    }
+    const apperr = readFileSync(new URL('../../backend/internal/apperr/apperr.go', import.meta.url), 'utf8');
+    for (const sentence of ['File part out of order', 'File quota reached', 'File store full', 'File budget spent']) {
+        assert.ok(apperr.includes(`"${sentence}"`), `${sentence} is no longer the server's sentence`);
+    }
+    assert.match(Errors.REGISTRY.E_FILE_TOO_LARGE.text, /\{max\}/);
+    assert.equal(Errors.INTERNAL.W_FILE_TRANSFER_CANCELLED, 'W_FILE_TRANSFER_CANCELLED');
     // A room judged expired by this device's clock names the clock
     assert.match(Errors.REGISTRY.E_ROOM_CODE_EXPIRED.text, /device clock/);
     assert.match(Errors.REGISTRY.W_ROOM_EXPIRED.text, /device clock/);

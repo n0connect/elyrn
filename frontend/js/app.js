@@ -269,6 +269,8 @@ function setupConversationListeners() {
 
 // Composer: Enter to send, Shift+Enter for a new line
 function setupComposerListeners() {
+    // A file chosen, pasted or dropped on the open conversation (file-composer.js)
+    FileComposer.install();
     const messageInput = document.getElementById('messageInput');
     messageInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {

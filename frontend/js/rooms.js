@@ -196,13 +196,13 @@ const Rooms = (() => {
 
     // ---------- messages ----------
 
-    async function seal(conv, id, text, counter) {
+    async function seal({ conv, id, text, counter, file }) {
         const room = conv.room;
         const { recipients, digest } = await R.recipients(room.keys, room.member, room.rosterCards);
         if (recipients.length > room.maxMembers) {
             throw new Error('roster exceeds the room limit');
         }
-        return R.sealMessage({ room: room.keys, me: room.member, id, recipients, digest, text, sentAt: Date.now(), counter });
+        return R.sealMessage({ room: room.keys, me: room.member, id, recipients, digest, text, sentAt: Date.now(), counter, file });
     }
 
     function open(conv, raw) {

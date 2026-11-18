@@ -153,7 +153,17 @@ function roomLimits(data) {
         !Number.isSafeInteger(hours) || hours < 1 || hours > MAX_ROOM_TTL_HOURS) {
         return null;
     }
-    return { maxMembers: members, maxTTLHours: hours, pageLimit: pageLimit(data) };
+    const files = fileMaxBytes(data);
+    if (files === null) return null;
+    return { maxMembers: members, maxTTLHours: hours, pageLimit: pageLimit(data), fileMaxBytes: files };
+}
+
+// The largest file this server takes (MAX_FILE_BYTES): from one stored part to the bound any
+// server may set (backend/internal/config); anything else refuses the answer like the room limits
+function fileMaxBytes(data) {
+    const bytes = data && data.file_max_bytes;
+    return Number.isSafeInteger(bytes) && bytes >= ElyrnFileCrypto.FILE_PART_BYTES && bytes <= ElyrnCrypto.MAX_FILE_BYTES_BOUND
+        ? bytes : null;
 }
 
 // A server that does not say its page size (older than paging back) gets no "earlier
