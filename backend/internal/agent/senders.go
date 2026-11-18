@@ -78,16 +78,14 @@ func (st *roomState) keptSender(key string) bool {
 // noteUnrecorded remembers the senders the bound refused (bounded), so the result marks their
 // messages unrecorded, and forgets those the record holds by now (counter-records.js keeps
 // conv.unrecorded the same way). A bound only makes the answer more conservative: a refused sender
-// that finds the set full sets st.unrecordedFull, which stays set until the forgetting pass leaves
-// the set below its bound again (unrecordedSender).
+// that finds the set full sets st.unrecordedFull, which stays set for the life of the room's state
+// in this process (unrecordedSender): the keys that could not be noted are forgotten, so clearing
+// it once the set shrinks would show those senders as recorded again.
 func (st *roomState) noteUnrecorded(refused []string) {
 	for key := range st.unrecorded {
 		if _, recorded := st.counters.Senders[key]; recorded {
 			delete(st.unrecorded, key)
 		}
-	}
-	if len(st.unrecorded) < maxUnrecordedSenders {
-		st.unrecordedFull = false
 	}
 	if len(refused) == 0 {
 		return

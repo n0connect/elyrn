@@ -150,8 +150,9 @@ This is the design of record. Decisions are dated and final unless the owner rev
   arrives once 256 are tracked is not, and is reported like a refused one (`unrecorded: true`,
   `E_AGENT_SENDER_UNRECORDED`). The agent remembers at most 4096 unrecorded senders per room for
   the process; a bound only makes the answer more conservative: once a refused sender finds that
-  set full, every sender that is neither kept nor in the record is marked `unrecorded: true`, until
-  the record takes enough of the set to leave it room again. Remaining differences from the browser: the bound (256 against 4096), and a record above
+  set full, every sender that is neither kept nor in the record is marked `unrecorded: true` for
+  the rest of the process (the senders that could not be noted are forgotten, so the mark never
+  clears). Remaining differences from the browser: the bound (256 against 4096), and a record above
   the bound fails the file closed (`E_AGENT_STATE_FILE`) where the browser trims it, since no agent
   ever writes one.
 

@@ -36,7 +36,7 @@ type roomState struct {
 	pendingGaps    []Gap                     // found while syncing counters, reported by the next read
 	pendingReplays []Replay                  // likewise
 	unrecorded     map[string]struct{}       // senders the full counter record did not take (bounded)
-	unrecordedFull bool                      // a refused sender found unrecorded full: see unrecordedSender
+	unrecordedFull bool                      // a refused sender found unrecorded full; sticky: see unrecordedSender
 }
 
 func isCount(value, max int) bool { return value >= 0 && value <= max }

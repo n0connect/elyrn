@@ -139,8 +139,9 @@ func TestSenderBound_AFloodNeverUntracksARosterMember(t *testing.T) {
 }
 
 // The bounded unrecorded set never fails open: once a refused sender finds it full, every sender
-// neither kept nor recorded is marked unrecorded, until the record takes enough of the set to
-// leave it room again. Before, the dropped sender's messages showed as recorded.
+// neither kept nor recorded is marked unrecorded, for the life of the room's state, even once the
+// record takes some of the set and leaves it room again (the dropped keys are forgotten). Before,
+// the dropped sender's messages showed as recorded.
 func TestSenderBound_AFullUnrecordedSetFailsClosed(t *testing.T) {
 	fx := newRoomFixture(t)
 	st := seatedState(fx)
@@ -170,7 +171,7 @@ func TestSenderBound_AFullUnrecordedSetFailsClosed(t *testing.T) {
 	}
 	st.counters.Senders[noted[0]] = 1 // the record took one: the set has room again
 	st.noteUnrecorded(nil)
-	if st.unrecordedSender(madeUpSender(t)) {
-		t.Fatal("the overflow mark outlived the room the record made in the set")
+	if len(st.unrecorded) >= maxUnrecordedSenders || !st.unrecordedSender(dropped) {
+		t.Fatal("the overflow mark was cleared once the set had room: the dropped sender shows as recorded")
 	}
 }
