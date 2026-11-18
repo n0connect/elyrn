@@ -31,3 +31,11 @@ df0ccf843d16faa1ea427842bbd56d25490b5d88:backend/tests/testutil/env.go:generic-a
 # signature text "signature-bytes") in the contract tests.
 aec7b9a19131b3cfcb547e0ab3ab5e9f3d19194d:backend/tests/middleware/fuzz_test.go:generic-api-key:102
 051c530372898f169ac63a8c61039c64e2afea4b:backend/internal/contract/contract_test.go:jwt:36
+# Reviewed 2026-11-18: interop vector keys of the file and role formats (fixed test file keys and
+# role keys shared by the Go and browser suites, e.g. bytes 0x80..0x9f). None is a secret.
+8ebe838e62448bcc5a076cc9be084deb40202617:backend/internal/e2e/file_test.go:generic-api-key:197
+5ee4b8f3f4104de281f516fe9e8059dc6f956fab:backend/internal/e2e/file_test.go:generic-api-key:197
+86a8272a784fb236478f8c56e98fa74013dfa710:frontend/tests/room-crypto.test.mjs:generic-api-key:404
+310d2501586494e448973c943ea39d78ea89030e:frontend/tests/room-crypto.test.mjs:generic-api-key:295
+f015959ab8f1198071c1dce2b39e2e4ebf69a333:backend/internal/e2e/file_test.go:generic-api-key:19
+b00dd7ff63bb4883390b16032bb160fedbbf2f9b:backend/internal/e2e/role_test.go:generic-api-key:161
