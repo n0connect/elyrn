@@ -255,11 +255,14 @@ function isRoleText(text) {
 // A file's display name (docs/architecture/files.md): the one home of its rule, the same as
 // backend/internal/e2e/file.go fileNameValid. NFC as it is (never normalised on reading), 1 to
 // MAX_FILE_NAME_CHARS code points, at most MAX_FILE_NAME_BYTES of UTF-8, no leading dot, no path
-// separator, no control character (Unicode Cc: C0, DEL, C1) and no bidirectional control.
+// separator, no control character (Unicode Cc: C0, DEL, C1), no invisible format character
+// (Unicode Cf: zero-width characters, the byte order mark, the soft hyphen, every bidirectional
+// control, tag characters) and no run of two or more space characters (Unicode Zs) in a row, so
+// a name cannot hide or pad what it shows.
 const MAX_FILE_NAME_CHARS = 128;
 const MAX_FILE_NAME_BYTES = 512;
 const FILE_NAME_HIDDEN_PREFIX = '.';
-const FILE_NAME_REFUSED = /[\p{Cc}\/\\\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const FILE_NAME_REFUSED = /[\p{Cc}\p{Cf}\/\\]|\p{Zs}{2,}/u;
 // A lone surrogate is no Unicode text and has no UTF-8 form
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 // The name every file is sent under (outgoingFileName): file-<OUTGOING_NAME_RANDOM_BYTES as hex>,
