@@ -62,7 +62,7 @@ MANIFEST ?= frontend.sha256
 
 .PHONY: help setup certs check-production check-public-mode check-hardening check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent agent-cross \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db fuzz fuzz-js \
-        build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
+        build-ref tag-dev release check-release-commit check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts test-restore
 
 ## -----------------------------------------------------------------------------
@@ -405,6 +405,16 @@ release: check-clean-branch-release test-engines
 check-clean-branch-dev:
 	@[ "$$(git rev-parse --abbrev-ref HEAD)" = "$(DEV_BRANCH)" ] || { echo "[ERROR] check out $(DEV_BRANCH) first"; exit 1; }
 	@[ -z "$$(git status --porcelain)" ] || { echo "[ERROR] commit or stash your changes first"; exit 1; }
+
+# The release workflow runs this from a checkout of $(RELEASE_BRANCH) with its whole history (never
+# from the tagged tree, whose copy a tag on an unmerged commit could change): COMMIT, the tagged
+# commit's full SHA, must be an ancestor of $(RELEASE_BRANCH), or nothing is signed.
+check-release-commit:
+	@case "$(COMMIT)" in *[!0-9a-f]* | "") echo "[ERROR] usage: make check-release-commit COMMIT=<full commit SHA>"; exit 1 ;; esac
+	@[ "$$(git rev-parse --abbrev-ref HEAD)" = "$(RELEASE_BRANCH)" ] || { echo "[ERROR] run this from a checkout of $(RELEASE_BRANCH)"; exit 1; }
+	@git merge-base --is-ancestor "$(COMMIT)" HEAD 2>/dev/null \
+		|| { echo "[ERROR] $(COMMIT) is not on $(RELEASE_BRANCH): only a commit of $(RELEASE_BRANCH) is released and signed"; exit 1; }
+	@echo "[OK] $(COMMIT) is on $(RELEASE_BRANCH)"
 
 check-clean-branch-release:
 	@[ "$$(git rev-parse --abbrev-ref HEAD)" = "$(RELEASE_BRANCH)" ] || { echo "[ERROR] releases are cut from $(RELEASE_BRANCH)"; exit 1; }

@@ -3,6 +3,13 @@ name: release
 # make release pushes elyrn-{openssl,native}-vX.Y.Z; each tag gets a release carrying the
 # frontend manifest and its Sigstore signature, so anyone can check that an instance serves
 # exactly the released client (docs/security/verifying-the-client.md).
+#
+# Only a commit on main is signed: before signing, main's own Makefile (checked out beside the
+# tagged tree, never the tagged tree's copy) fails the job unless the tagged commit is an
+# ancestor of main. GitHub runs this file as the tagged commit holds it, so a tag on an unmerged
+# commit can carry a release.yml without that step; what stops such a signature from passing
+# for a release is the verifier's own check that the signed commit (the certificate's workflow
+# SHA) is on main, and the hosted repository's tag rules (docs/security/verifying-the-client.md).
 on:
   push:
     tags: ['elyrn-openssl-v*', 'elyrn-native-v*']
@@ -17,20 +24,47 @@ jobs:
       contents: write # create the release, upload its assets
       id-token: write # keyless signature bound to this workflow, repository and tag
     steps:
-      # This job can sign and publish: every action is pinned, and the checkout keeps no token
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # This job can sign and publish: every action is pinned, and no checkout keeps a token
+      - name: the tagged tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          path: tagged
           persist-credentials: false
+      - name: main, its whole history (the trusted copy of the release check)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          path: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: the tagged commit is on main
+        run: make -C main --no-print-directory check-release-commit COMMIT="$GITHUB_SHA"
+      # A release asset is never replaced: a re-run, or a moved tag, fails here before signing
+      - name: the release carries no manifest yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null) || exit 0
+          if printf '%s\n' "$assets" | grep -qxE 'frontend\.sha256|frontend\.sha256\.sigstore\.json'; then
+            echo "::error::release $GITHUB_REF_NAME already carries a frontend manifest; assets are never replaced"
+            exit 1
+          fi
       - run: make manifest
+        working-directory: tagged
       # Third-party code in the signing path: pinned to a commit, cosign to a release
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.0.6
       - run: cosign sign-blob --yes --bundle frontend.sha256.sigstore.json frontend.sha256
+        working-directory: tagged
+      # No --clobber: an asset that already exists fails the upload loudly
       - name: attach to the release
+        working-directory: tagged
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
-          gh release upload "$GITHUB_REF_NAME" frontend.sha256 frontend.sha256.sigstore.json --clobber
+          gh release upload "$GITHUB_REF_NAME" frontend.sha256 frontend.sha256.sigstore.json
