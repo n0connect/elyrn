@@ -2,12 +2,15 @@
 // BURN FIRE (the pixel fire the person who burns sees, once the server confirmed the burn)
 // ========================================
 // Decoration only: it starts after the burn request has answered and never delays or decides
-// anything. A grid of heat values runs the classic cellular fire: every step each cell takes the
-// heat of a cell below it (straight, or one column to either side) minus a small random decay;
-// the bottom row is the heat source, on while the flames rise and hold, off while they burn out.
-// Heat maps to four steps of the app's own palette, read from the stylesheet's custom properties.
-// Drawn on one canvas made for the length of the animation and removed afterwards: no markup
-// string, no inline style, nothing the CSP or Trusted Types refuse.
+// anything. A grid of heat values runs the classic cellular fire: every step each cell's heat
+// moves up one row, drifting sideways by at most one cell, and loses a random 0 to MAX_DECAY; a cell nothing moved into keeps its heat less one. The
+// bottom row is the heat source: clusters of hot columns with much cooler gaps between them,
+// drawn again every SOURCE_FRAMES frames, so the flames rise as separate tongues of different
+// heights that lean into each other and cover the window. While they burn out every cell cools
+// more each step, so the tips go first: the tongues shrink back down and break up. Heat maps to three
+// steps of the app's own palette (read from the stylesheet's custom properties); a cell with no
+// heat is not painted. Drawn on one canvas made for the length of the animation and removed
+// afterwards: no markup string, no inline style, nothing the CSP or Trusted Types refuse.
 
 const BurnFire = (() => {
     'use strict';
@@ -25,26 +28,32 @@ const BurnFire = (() => {
     const TOTAL_FRAMES = RISE_FRAMES + HOLD_FRAMES + BURN_FRAMES;
     // The hard stop: the overlay goes even if a frame callback never fires
     const HARD_STOP_MS = 1400;
-    // Each step a cell loses DECAY_STEP heat with DECAY_CHANCE; the source is hot enough for
-    // flames HEAT_REACH times the window's height
-    const DECAY_CHANCE = 0.5;
-    const DECAY_STEP = 1;
-    // Neighbouring cells share their decay in runs of TONGUE_CELLS, so flames rise as tongues
-    // that wide instead of single-pixel noise
-    const TONGUE_CELLS = 2;
+    // Each step a cell's heat loses 0 to MAX_DECAY, evenly; the hottest source is hot enough for
+    // flames HEAT_REACH times the window's height; a cell nothing moved into loses STALE_DECAY
+    const MAX_DECAY = 3;
+    const MEAN_DECAY = MAX_DECAY / 2;
     const HEAT_REACH = 1.6;
-    // The rise steps RISE_SPAN times the grid height, the source ramping up over the first
-    // RAMP_SPAN of it, so the ragged cool tips pass out at the top and the hot body covers the
-    // window; the burn out steps as long, the source ramping down, so the flames leave ragged too
+    const STALE_DECAY = 1;
+    // The sources: hot clusters CLUSTER_MIN..CLUSTER_MAX columns wide, gaps GAP_MIN..GAP_MAX wide
+    // at GAP_SHARE of the heat (short: their flames die low, the clusters' lean over them)
+    const CLUSTER_MIN = 6;
+    const CLUSTER_MAX = 14;
+    const GAP_MIN = 3;
+    const GAP_MAX = 8;
+    const GAP_SHARE = 0.5;
+    const SOURCE_FRAMES = 3;
+    // The rise steps RISE_SPAN times the grid height: the tongues grow out of the bottom, the
+    // clusters' past the gaps', and cover the window
     const RISE_SPAN = 1.5;
-    const BURN_SPAN = 1.5;
-    const RAMP_SPAN = 0.5;
-    // Hold frames step the fire this many times a frame
+    // Hold frames step the fire HOLD_STEPS times a frame, burn out frames BURN_STEPS times
     const HOLD_STEPS = 2;
-    // The palette, coolest to hottest: custom properties of styles.css
-    const PALETTE = Object.freeze(['--fire-smoke', '--fire-flame', '--fire-glow', '--fire-core']);
-    // Of the heat range, the share below which a cell is each step (the rest is the core)
-    const THRESHOLDS = Object.freeze([0.45, 0.65, 0.88]);
+    const BURN_STEPS = 4;
+    // The palette, coolest to hottest: custom properties of styles.css; a cell below the first
+    // threshold's share of the heat is the flame red, below the second the glow yellow, else white
+    const PALETTE = Object.freeze(['--fire-flame', '--fire-glow', '--fire-core']);
+    const THRESHOLDS = Object.freeze([0.4, 0.92]);
+    // paletteStep's answer for a cell with no heat: not painted, the page shows through
+    const NO_PAINT = -1;
     const CANVAS_CLASS = 'burn-fire';
     const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
@@ -53,37 +62,51 @@ const BurnFire = (() => {
         return { cols, rows, heat: new Uint16Array(cols * rows) };
     }
 
-    // The source heat that lets flames reach HEAT_REACH times rows high
+    // The hottest source heat: flames from it reach HEAT_REACH times rows high
     function sourceHeat(rows) {
-        return Math.ceil(rows * DECAY_CHANCE * DECAY_STEP * HEAT_REACH) + PALETTE.length;
+        return Math.ceil(rows * MEAN_DECAY * HEAT_REACH) + PALETTE.length;
     }
 
-    // One step of the fire: grid in, new grid out. source is the bottom row's heat (0 when off);
-    // every row takes the row below it, drifted sideways by at most one cell (one drift a row, so a
-    // column keeps its own line of decay and flames form as tongues), minus a random decay drawn
-    // once per TONGUE_CELLS cells. random() returns a number in [0, 1) and is the only chance used.
-    function step(grid, source, random) {
+    // One bottom row of sources for cols columns: hot clusters at heat, cooler gaps between them
+    function sourceRow(cols, heat, random) {
+        const row = new Uint16Array(cols);
+        const width = (min, max) => min + Math.floor(random() * (max - min + 1));
+        let x = 0;
+        let hot = random() < 0.5;
+        while (x < cols) {
+            const run = hot ? width(CLUSTER_MIN, CLUSTER_MAX) : width(GAP_MIN, GAP_MAX);
+            row.fill(hot ? heat : Math.round(heat * GAP_SHARE), x, Math.min(cols, x + run));
+            x += run;
+            hot = !hot;
+        }
+        return row;
+    }
+
+    // One step of the fire: grid in, new grid out. sources holds the bottom row's heat per column
+    // (all 0 when off). Every cell above the bottom row starts from its own heat less STALE_DECAY;
+    // then every cell's heat moves up one row, into its own column or one to either side (clamped
+    // to the grid), less a random 0 to MAX_DECAY; cooling (0 but while burning out) is taken from
+    // every cell. random() returns a number in [0, 1) and is the only chance used.
+    function step(grid, sources, random, cooling = 0) {
         const { cols, rows, heat } = grid;
         const next = createGrid(cols, rows);
         const out = next.heat;
-        const decay = () => (random() < DECAY_CHANCE ? DECAY_STEP : 0);
+        for (let i = 0; i < out.length; i++) out[i] = Math.max(0, heat[i] - STALE_DECAY - cooling);
         const bottom = (rows - 1) * cols;
-        for (let x = 0; x < cols; x++) out[bottom + x] = Math.max(0, source - decay());
-        for (let y = 0; y < rows - 1; y++) {
-            const drift = Math.floor(random() * 3) - 1;
-            let loss = 0;
+        for (let x = 0; x < cols; x++) out[bottom + x] = Math.max(0, sources[x] - cooling);
+        for (let y = 1; y < rows; y++) {
             for (let x = 0; x < cols; x++) {
-                if (x % TONGUE_CELLS === 0) loss = decay();
-                const from = Math.min(cols - 1, Math.max(0, x + drift));
-                out[y * cols + x] = Math.max(0, heat[(y + 1) * cols + from] - loss);
+                const decay = Math.floor(random() * (MAX_DECAY + 1));
+                const to = Math.min(cols - 1, Math.max(0, x + Math.floor(random() * 3) - 1));
+                out[(y - 1) * cols + to] = Math.max(0, heat[y * cols + x] - decay - cooling);
             }
         }
         return next;
     }
 
-    // The palette step (0 to 3) a heat value is drawn in, or -1 for a cold cell (not drawn)
+    // The palette step (0 to 2) a heat value is drawn in, or NO_PAINT for a cell with no heat
     function paletteStep(value, maxHeat) {
-        if (value <= 0) return -1;
+        if (value <= 0) return NO_PAINT;
         const share = value / maxHeat;
         const index = THRESHOLDS.findIndex(limit => share < limit);
         return index === -1 ? PALETTE.length - 1 : index;
@@ -101,20 +124,26 @@ const BurnFire = (() => {
         return { cell, cols: Math.ceil(width / cell), rows: Math.ceil(height / cell) };
     }
 
-    // The source heat of every step frame takes: ramping up while rising, full while holding,
-    // ramping down to nothing while burning out
-    function frameSources(frame, rows, maxHeat) {
-        const ramp = Math.ceil(rows * RAMP_SPAN);
-        const phase = (frames, span, first, heatAt) => {
-            const steps = Math.ceil(Math.ceil(rows * span) / frames);
-            return Array.from({ length: steps }, (_, i) => heatAt((frame - first) * steps + i));
-        };
+    // The steps a frame takes, each { share, cooling }: share scales the sources (whole while
+    // rising and holding, ramping down over the burn out) and cooling is taken from every cell,
+    // growing over the burn out to the hottest heat there is, so the coolest tips go first and
+    // nothing is left after the last step
+    function frameSteps(frame, rows, maxHeat) {
         if (frame < RISE_FRAMES) {
-            return phase(RISE_FRAMES, RISE_SPAN, 0, k => Math.min(maxHeat, Math.round(maxHeat * k / ramp)));
+            const steps = Math.ceil(Math.ceil(rows * RISE_SPAN) / RISE_FRAMES);
+            return Array(steps).fill({ share: 1, cooling: 0 });
         }
-        if (frame < RISE_FRAMES + HOLD_FRAMES) return Array(HOLD_STEPS).fill(maxHeat);
-        return phase(BURN_FRAMES, BURN_SPAN, RISE_FRAMES + HOLD_FRAMES,
-            k => Math.max(0, Math.round(maxHeat * (1 - k / ramp))));
+        if (frame < RISE_FRAMES + HOLD_FRAMES) return Array(HOLD_STEPS).fill({ share: 1, cooling: 0 });
+        const total = BURN_FRAMES * BURN_STEPS;
+        return Array.from({ length: BURN_STEPS }, (_, i) => {
+            const k = (frame - RISE_FRAMES - HOLD_FRAMES) * BURN_STEPS + i + 1;
+            return { share: 1 - k / total, cooling: Math.ceil(maxHeat * (k / total) ** 2) };
+        });
+    }
+
+    // The sources at a share of their heat
+    function scaled(sources, share) {
+        return sources.map(value => Math.round(value * share));
     }
 
     function readPalette() {
@@ -165,6 +194,7 @@ const BurnFire = (() => {
             const maxHeat = sourceHeat(size.rows);
             const colours = readPalette();
             let grid = createGrid(size.cols, size.rows);
+            let sources = null;
             let frame = 0;
             let timer = 0;
             let hardStop = 0;
@@ -179,7 +209,10 @@ const BurnFire = (() => {
             };
             const tick = () => {
                 if (frame >= TOTAL_FRAMES) return end();
-                for (const source of frameSources(frame, size.rows, maxHeat)) grid = step(grid, source, Math.random);
+                if (frame % SOURCE_FRAMES === 0) sources = sourceRow(size.cols, maxHeat, Math.random);
+                for (const { share, cooling } of frameSteps(frame, size.rows, maxHeat)) {
+                    grid = step(grid, scaled(sources, share), Math.random, cooling);
+                }
                 draw(context, grid, size, colours, maxHeat);
                 frame++;
                 if (frame === RISE_FRAMES) cover();
@@ -207,7 +240,7 @@ const BurnFire = (() => {
     }
 
     return Object.freeze({
-        play, step, createGrid, sourceHeat, paletteStep, shouldPlay, gridSize, frameSources,
-        PALETTE, CELL_PX, FRAME_MS, RISE_FRAMES, TOTAL_FRAMES, HARD_STOP_MS
+        play, step, createGrid, sourceHeat, sourceRow, scaled, paletteStep, shouldPlay, gridSize, frameSteps,
+        PALETTE, NO_PAINT, SOURCE_FRAMES, CELL_PX, FRAME_MS, RISE_FRAMES, TOTAL_FRAMES, HARD_STOP_MS
     });
 })();

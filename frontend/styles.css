@@ -47,9 +47,8 @@
     --danger-bg: #fff5f5;
     /* The warning yellow (a warning notification's frame) */
     --warning: #ffc107;
-    /* The burn fire's four steps, coolest to hottest (burn-fire.js reads them): black, the
-       destructive red, the warning yellow, white */
-    --fire-smoke: #000000;
+    /* The burn fire's three steps, coolest to hottest (burn-fire.js reads them): the
+       destructive red, the warning yellow, white; a cell with no heat is not painted */
     --fire-flame: var(--danger);
     --fire-glow: var(--warning);
     --fire-core: #ffffff;
