@@ -33,21 +33,21 @@ const (
 
 // holdHub takes the real hub's lock for the caller until release; a kick, generation read or
 // subscription meanwhile fails after utils.DefaultLockTimeout.
-func holdHub(t *testing.T) (release func()) {
+func holdHub(t *testing.T) func() {
 	t.Helper()
-	release, err := realtime.Default.HoldLockForTesting()
+	unlock, err := realtime.Default.HoldLockForTesting()
 	if err != nil {
 		t.Fatalf("hold the hub lock: %v", err)
 	}
 	released := false
 	t.Cleanup(func() {
 		if !released {
-			release()
+			unlock()
 		}
 	})
 	return func() {
 		released = true
-		release()
+		unlock()
 	}
 }
 
