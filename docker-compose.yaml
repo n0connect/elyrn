@@ -248,7 +248,9 @@ services:
     shm_size: 1m
     mem_limit: 128m
     memswap_limit: 128m
-    # worker_processes auto: one worker per host CPU, plus the master
+    # nginx-main.conf sizes nginx from these limits (one worker for cpus 1.0, 1024 connections
+    # for the memory and nofile below, the worst case of every buffer within mem_limit) and
+    # make check-hardening recomputes it from the values rendered here
     pids_limit: 128
     cpus: 1.0
     ulimits:

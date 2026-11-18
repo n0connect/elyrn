@@ -31,7 +31,8 @@ const (
 
 // outageStates is the oracle (PostgreSQL appendix A, written out independently of errors.go):
 // the SQLSTATEs that mean the database failed, not the statement.
-var outageStates = map[string]bool{"57P01": true, "57P02": true, "57P03": true, "55P03": true, "25P03": true, "57014": true}
+var outageStates = map[string]bool{"57P01": true, "57P02": true, "57P03": true, "55P03": true, "25P03": true, "57014": true,
+	"40P01": true, "40001": true}
 
 func outageState(code string) bool {
 	if outageStates[code] {
@@ -45,7 +46,7 @@ func outageState(code string) bool {
 // depth: an outage (and only an outage) is marked ErrUnavailable, the original error stays
 // reachable (errors.Is / errors.As), classifying twice changes nothing, and nil stays nil.
 func FuzzClassify(f *testing.F) {
-	for _, code := range []string{"08006", "53300", "57P01", "57014", "23505", "40001", "0", "", "08", "5", "57P0"} {
+	for _, code := range []string{"08006", "53300", "57P01", "57014", "23505", "40001", "40P01", "40002", "0", "", "08", "5", "57P0"} {
 		f.Add(uint8(shapePgError), code, "message", uint8(1))
 	}
 	for shape := range errorShapes {

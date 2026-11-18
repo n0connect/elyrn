@@ -43,7 +43,7 @@ make setup        # .env with fresh secrets (mode 0600) and the database TLS cer
 
 | Variable | Value for a public instance |
 |---|---|
-| `APP_ENV` | `production`: the `__Host-Session` cookie with `Secure`, and the production startup checks ([Production Mode](configuration-and-tuning.md#production-mode)). Required by `make onion` |
+| `APP_ENV` | `production`: the `__Host-Session` cookie with `Secure`, and the production startup checks ([Production Mode](configuration-and-tuning.md#production-mode)). Required by `make onion`, and by `make up` and the backend's startup as soon as `ALLOWED_ORIGINS` names an `https://` or `.onion` origin |
 | `ALLOWED_ORIGINS` | the exact origin users open, `https://` and the host name, no path and no trailing slash. For an onion-only instance, the `http://<address>.onion` origin once `make onion-address` has printed it |
 | `HTTP_PORT` | the loopback port nginx is published on (default 80). Set another one (for example `8088`) when your reverse proxy itself listens on port 80 of the host |
 | `LOG_LEVEL` | `info` (the default); `debug` is refused in production |
@@ -143,7 +143,7 @@ stream delivers again, so messages arrive late rather than never.
 **Client address and protocol.** nginx inside the stack takes the client address from
 `X-Forwarded-For` and the protocol (`http` or `https`) from `X-Forwarded-Proto` only for a
 request whose TCP peer is listed in `EDGE_TRUSTED_PROXIES` (comma-separated addresses or CIDRs
-with a prefix of 1 or more; empty by default). A proxy on the same host reaches nginx from the
+with a prefix of at least /8 for IPv4 and /16 for IPv6, the backend's `TRUSTED_PROXIES` bounds; empty by default). A proxy on the same host reaches nginx from the
 edge network's gateway, the first address of `EDGE_SUBNET` (`172.29.72.1` by default): list
 exactly that address, never the whole subnet. From any other peer both headers are ignored and
 nginx passes on the peer's address and its own `$scheme`. The list is rendered by
@@ -155,8 +155,9 @@ instead of appending to it.
 > tell who the client is or that the request came over HTTPS. Then:
 > - **every user shares one address**: one rate-limit bucket in nginx and in the backend (a busy
 >   instance answers `429` to everyone), one per-network event-stream allowance (16 streams for
->   the whole instance, after which nobody gets live updates), and one per-address file request
->   allowance;
+>   the whole instance, after which nobody gets live updates), one per-client share of nginx's
+>   connections (16 API requests, 4 file requests and 2 message pages at once for everyone
+>   together), and one per-address file request allowance;
 > - **no HSTS is sent**, because nginx never learns that the request was HTTPS.
 
 **HSTS.** nginx is the one source of `Strict-Transport-Security`: it sends it on every answer of
@@ -238,7 +239,8 @@ every conversation and the onion key.
 
 **Container health.** `make ps` (or `docker ps`): every service has a healthcheck and the restart
 policy `unless-stopped`. The backend's (`/internal/health`) fails when the database does not
-answer `SELECT 1` within 3 s or retention has not begun a cycle in 15 minutes; its log then
+answer `SELECT 1` within 3 s or no retention cycle has finished in 15 minutes (a cycle whose step
+failed does not count: see `RunRetention` in the backend log); its log then
 carries `E_HEALTH_UNAVAILABLE`. A database outage answers `503` (`E_STORE_UNAVAILABLE`) on every
 route.
 

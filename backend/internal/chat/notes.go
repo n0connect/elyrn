@@ -17,7 +17,8 @@ import (
 
 // SendNote delivers a sealed note (a friend request) to the one member whose card is `to`.
 // At most one note waits per sender and addressee, so a member never has more waiting than
-// the room has other members. Returns the addressee's live-event address.
+// the room has other members. The note's header card must be the sender's stored card
+// (checkSenderCard). Returns the addressee's live-event address.
 func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string) (string, error) {
 	noteID, okID := utils.ParseCanonicalUUIDv4(rawNoteID)
 	_, okTo := utils.DecodeExact(to, utils.RoomCardBytes)
@@ -40,7 +41,8 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 	var stream string
 	var refused *models.RoomNote
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
-		if _, err := tx.LockConversation(id); err != nil {
+		// A room burned between requireRoom and the lock answers 404 (lockConversation)
+		if err := lockConversation(tx, id); err != nil {
 			return err
 		}
 		sender, err := s.requireMembership(tx, me, id)
@@ -57,6 +59,10 @@ func (s *Service) SendNote(me *Member, id uuid.UUID, rawNoteID, to, blob string)
 		}
 		if recipient.MemberTag == sender.MemberTag {
 			return ErrInvalidInput
+		}
+		// Judged last, as for a message: every earlier answer keeps its order
+		if err := checkSenderCard(sender, parsed); err != nil {
+			return err
 		}
 		// On the hour like the room's own expiry (expiryAfter), and never after the room
 		expiresAt := expiryAfter(time.Now(), config.GetInviteTTL())

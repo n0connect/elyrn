@@ -127,7 +127,7 @@ download needs.
 
 | Request | Answer the client acts on |
 |---|---|
-| `POST /conversations/{id}/files` `{id, part, data}` | `201` stored; `409` "Conflict" = already stored (counts as stored); `409` "Id taken" or "File part out of order": the next send uploads afresh under a new id; `429` "File budget spent" (daily budget) or `429` (too many new files); `507` "File quota reached" (conversation) or "File store full" (server); `503` busy; `404` the conversation is gone (burned, expired, left) |
+| `POST /conversations/{id}/files` `{id, part, data}` | `201` stored; `409` "Conflict" = already stored (counts as stored); `409` "Id taken" or "File part out of order": the next send uploads afresh under a new id; `429` "File budget spent" (daily budget) or `429` (too many new files); `507` "File share reached" (the caller's share of the conversation), "File quota reached" (conversation) or "File store full" (server); `503` busy; `404` the conversation is gone (burned, expired, left) |
 | `GET /conversations/{id}/files/{file}?part=n` | `200 {"data"}` exactly one sealed part; `404` "no longer available" (expired, burned, missing) |
 
 Every answer maps to a registered code and a sentence that says what to do next
@@ -145,6 +145,11 @@ bytes, nor which message announced it. See the [threat model](../security/threat
 `MAX_FILE_BYTES` (default 10 MiB, at most 100 MiB) per file; `FILE_CONVERSATION_QUOTA_BYTES` per
 conversation; `FILE_STORE_MAX_BYTES` per server; `FILE_ACCOUNT_DAILY_BYTES` per account and day
 ([configuration](../operations/configuration-and-tuning.md)). Parts expire by the messages' day rule.
+
+One member cannot hold a conversation's whole quota: one member's share is the quota divided by the conversation's seat bound (a room's `max_members`, 2 for a one-to-one conversation), rounded down to whole parts and never less than one file of `MAX_FILE_BYTES`; it counts the member's own live parts in that conversation (the index
+`idx_file_parts_uploader` serves that count). The conversation total is checked against the quota
+as before. Parts of a member who left stay, readable like their messages: they count against
+nobody's share and still against the conversation's quota until they expire.
 
 ## Known limits
 

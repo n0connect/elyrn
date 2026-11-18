@@ -31,9 +31,11 @@ Thumbs.db
 # Docker
 *.log
 
-# Environment variables
+# Environment variables: .env and every variant of it (.env.local, .env.production, a copy
+# saved as .env.bak...), anywhere in the tree; only the template is tracked
 .env
-.env.local
+.env.*
+!/.env.example
 
 # Test results
 test-results/
@@ -46,3 +48,7 @@ coverage.txt
 
 # make certs output: the database CA key and the PostgreSQL server key (never committed)
 /certs/
+# Private keys and certificates anywhere in the tree (a key copied out of certs/, a local TLS
+# test key): never committed
+*.pem
+*.key

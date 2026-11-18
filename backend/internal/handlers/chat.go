@@ -22,6 +22,7 @@ const (
 	// Rate-limit buckets per action: each namespaces a key "<bucket>:<stream tag>", and the
 	// two PoW-gated ones double as the proof-of-work action
 	bucketDelete = "delete"
+	bucketBurn   = "burn" // DELETE /conversations/{id}: taken before the lookup, a miss included
 	bucketInvite = "invite"
 	bucketRedeem = "redeem"
 	bucketMsg    = "msg"
@@ -137,7 +138,9 @@ func deleteAccount(w http.ResponseWriter, r *http.Request, svc *chat.Service, me
 		return
 	}
 	realtime.Default.Publish(streams, realtime.Event{Kind: realtime.KindConversation})
-	realtime.Default.Kick(me.StreamTag) // this account's other devices
+	if !kickStreams(w, "deleteAccount: Kick", me.StreamTag) { // this account's other devices
+		return
+	}
 	auth.ClearAuthCookie(w)
 	clearSiteData(w)
 	utils.EncodeJSONResponse(w, models.LoginResponse{Success: true, Message: "Account deleted"}, http.StatusOK)
@@ -236,7 +239,13 @@ func listConversations(w http.ResponseWriter, svc *chat.Service, me *chat.Member
 	utils.EncodeJSONResponse(w, models.ConversationsResponse{Conversations: conversations}, http.StatusOK)
 }
 
+// burnConversation burns or leaves a conversation. Every request takes a token from the caller's
+// burn bucket before the conversation is looked up, so a stream of deletes (each a locking
+// transaction, a miss included) is bounded per account like every other write.
 func burnConversation(w http.ResponseWriter, svc *chat.Service, me *chat.Member, id uuid.UUID) {
+	if !allowOrTooMany(w, bucketBurn, me) {
+		return
+	}
 	peers, err := svc.BurnConversation(me, id)
 	if err != nil {
 		apperr.WriteError(w, "BurnConversation", err)

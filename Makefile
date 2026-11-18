@@ -36,6 +36,13 @@ COMPOSE_ENV := ENGINE=$(ENGINE)
 APP_ENV_NOW = $(shell e="$${APP_ENV:-$$(sed -n 's/^APP_ENV=//p' "$(ENV_FILE)" 2>/dev/null | tail -n 1)}"; \
 	printf '%s' "$$e" | tr -d "\"' \r" | tr '[:upper:]' '[:lower:]')
 IS_PRODUCTION = $(filter production prod,$(APP_ENV_NOW))
+# "yes" when ALLOWED_ORIGINS (as Compose sees it, like APP_ENV above) names an https:// or .onion
+# origin: browsers reach that instance from a network, so it is public. The value is only
+# matched, never printed; the backend refuses the same at startup (validate.go
+# checkPublicInstanceMode). Recursive for the same reason as APP_ENV_NOW.
+HAS_PUBLIC_ORIGIN = $(shell o="$${ALLOWED_ORIGINS:-$$(sed -n 's/^ALLOWED_ORIGINS=//p' "$(ENV_FILE)" 2>/dev/null | tail -n 1)}"; \
+	printf '%s' "$$o" | tr -d "\"' \r" | tr '[:upper:]' '[:lower:]' | tr ',' '\n' \
+	| grep -Eq '^https://|^[a-z]+://[^/]*\.onion\.?(:[0-9]+)?$$' && echo yes)
 # Production publishes nginx alone; development adds docker-compose.dev.yaml (backend and
 # PostgreSQL on loopback). See docs/operations/hardening.md.
 DEV_COMPOSE := -f docker-compose.dev.yaml
@@ -53,9 +60,9 @@ FUZZ_TARGETS := scripts/check-fuzz-targets.py
 # Frontend manifest: what the release workflow signs and verify-frontend checks against
 MANIFEST ?= frontend.sha256
 
-.PHONY: help setup certs check-production check-hardening check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent agent-cross \
+.PHONY: help setup certs check-production check-public-mode check-hardening check-docker migrate-networks build up onion onion-address start run down stop restart logs ps clean agent agent-cross \
         test test-engines test-equivalence test-run test-unit test-crypto test-all test-db fuzz fuzz-js \
-        build-ref tag-dev release check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
+        build-ref tag-dev release check-release-commit check-clean-branch-dev check-clean-branch-release shell-backend shell-db \
         manifest verify-frontend backup-accounts test-restore
 
 ## -----------------------------------------------------------------------------
@@ -74,7 +81,8 @@ help:
 	@echo "  certs         Create or renew the database TLS certificates in $(CERT_DIR)/ (never touches .env or data)"
 	@echo "  build         Build Docker container images for ENGINE"
 	@echo "  up            Build and start services in background for ENGINE (APP_ENV from .env;"
-	@echo "                development also publishes the backend and PostgreSQL on loopback)"
+	@echo "                development also publishes the backend and PostgreSQL on loopback;"
+	@echo "                an https:// or .onion ALLOWED_ORIGINS requires APP_ENV=production)"
 	@echo "  onion         Like up, and publish the app as a Tor onion service (requires APP_ENV=production)"
 	@echo "  onion-address Print the onion address (published by make onion)"
 	@echo "  down          Stop and remove running containers"
@@ -151,13 +159,19 @@ setup:
 certs:
 	@sh postgres/certs.sh "$(CERT_DIR)"
 
-# make onion publishes the instance: refuse to do it in development mode (unprefixed cookie
-# without Secure, production checks off). The shell's APP_ENV wins over .env, as in Compose.
+# A public instance (make onion always; make up when ALLOWED_ORIGINS names an https:// or .onion
+# origin) is refused in development mode (unprefixed cookie without Secure, no HSTS, production
+# checks off). The shell's APP_ENV wins over .env, as in Compose.
 check-production: $(ENV_FILE)
 	@if [ -z "$(IS_PRODUCTION)" ]; then \
-		echo "[ERROR] make onion requires APP_ENV=production (now: $(or $(APP_ENV_NOW),unset))."; \
-		echo "        Set APP_ENV=production in $(ENV_FILE); see docs/operations/onion-service.md"; exit 1; \
+		echo "[ERROR] A public instance (make onion, or ALLOWED_ORIGINS naming an https:// or .onion origin) requires APP_ENV=production (now: $(or $(APP_ENV_NOW),unset))."; \
+		echo "        Set APP_ENV=production in $(ENV_FILE); see docs/operations/deployment.md"; exit 1; \
 	fi
+
+# make up: check-production whenever ALLOWED_ORIGINS makes the instance public; a loopback-only
+# development instance (http://localhost) starts as before
+check-public-mode: $(ENV_FILE)
+	@$(if $(HAS_PUBLIC_ORIGIN),$(MAKE) --no-print-directory check-production,true)
 
 # Every service keeps its container controls (docs/operations/hardening.md), in both layouts.
 # The rendered config holds .env values: it goes straight into the checker, which prints names only.
@@ -199,7 +213,7 @@ migrate-networks: check-docker
 		$(COMPOSE_ALL) down && docker network rm $(LEGACY_NETWORK) >/dev/null; \
 	fi
 
-up: check-docker $(ENV_FILE) certs migrate-networks
+up: check-docker $(ENV_FILE) check-public-mode certs migrate-networks
 	@echo "[INFO] Starting services (crypto engine: $(ENGINE), APP_ENV: $(or $(APP_ENV_NOW),development))..."
 	@$(COMPOSE_ENV) $(TLS_ENV) $(DOCKER_COMPOSE) $(COMPOSE_FILES) up -d --build
 	@echo "[OK] Services running"
@@ -391,6 +405,16 @@ release: check-clean-branch-release test-engines
 check-clean-branch-dev:
 	@[ "$$(git rev-parse --abbrev-ref HEAD)" = "$(DEV_BRANCH)" ] || { echo "[ERROR] check out $(DEV_BRANCH) first"; exit 1; }
 	@[ -z "$$(git status --porcelain)" ] || { echo "[ERROR] commit or stash your changes first"; exit 1; }
+
+# The release workflow runs this from a checkout of $(RELEASE_BRANCH) with its whole history (never
+# from the tagged tree, whose copy a tag on an unmerged commit could change): COMMIT, the tagged
+# commit's full SHA, must be an ancestor of $(RELEASE_BRANCH), or nothing is signed.
+check-release-commit:
+	@case "$(COMMIT)" in *[!0-9a-f]* | "") echo "[ERROR] usage: make check-release-commit COMMIT=<full commit SHA>"; exit 1 ;; esac
+	@[ "$$(git rev-parse --abbrev-ref HEAD)" = "$(RELEASE_BRANCH)" ] || { echo "[ERROR] run this from a checkout of $(RELEASE_BRANCH)"; exit 1; }
+	@git merge-base --is-ancestor "$(COMMIT)" HEAD 2>/dev/null \
+		|| { echo "[ERROR] $(COMMIT) is not on $(RELEASE_BRANCH): only a commit of $(RELEASE_BRANCH) is released and signed"; exit 1; }
+	@echo "[OK] $(COMMIT) is on $(RELEASE_BRANCH)"
 
 check-clean-branch-release:
 	@[ "$$(git rev-parse --abbrev-ref HEAD)" = "$(RELEASE_BRANCH)" ] || { echo "[ERROR] releases are cut from $(RELEASE_BRANCH)"; exit 1; }

@@ -67,6 +67,33 @@ func (Room) TableName() string {
 	return "rooms"
 }
 
+// BurnedRoom is the tombstone of a room burned before its expiry (by its owner, or by the owner's
+// account deletion): its id and the room's original expiry, nothing else. Room ids derive from
+// the code alone, so without it any code holder could create the room again and own it. Retention
+// drops a tombstone once its expiry passed (an expired code no longer passes the create checks).
+type BurnedRoom struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+	ExpiresAt time.Time `gorm:"index;not null"` // the burned room's own expires_at
+}
+
+func (BurnedRoom) TableName() string {
+	return "burned_rooms"
+}
+
+// OrphanedConversation names a deleted conversation whose messages and file parts are still on
+// disk: a burn, a room purge or an account deletion ends access at once (the conversation,
+// memberships and notes go in the request) and retention deletes the rest in bounded batches,
+// oldest orphan first. OrphanedOn is the UTC day of the deletion, nothing finer. While a row is
+// here, no conversation is created again under its id.
+type OrphanedConversation struct {
+	ID         uuid.UUID `gorm:"type:uuid;primaryKey"`
+	OrphanedOn time.Time `gorm:"type:date;index;not null"`
+}
+
+func (OrphanedConversation) TableName() string {
+	return "orphaned_conversations"
+}
+
 // RoomNote is a sealed note from one room member to another (a friend request). Only the
 // addressee can open it; the server sees two per-room pseudonyms and ciphertext.
 type RoomNote struct {
@@ -101,13 +128,18 @@ func (Message) TableName() string {
 // ciphertext carries its key. The key spans the conversation, so nothing about another
 // conversation's file ids can be probed. Every part has one size and, like a message, only a
 // day-granular deletion date.
+//
+// idx_file_parts_uploader (conversation, uploader, expiry) serves the per-member share count that
+// every upload makes under the conversation lock: a conversation may hold up to
+// FILE_CONVERSATION_QUOTA_BYTES / 262144 parts (40960 at the bound), and the count reads only the
+// uploader's own index entries instead of every part's row.
 type FilePart struct {
-	ConversationID uuid.UUID `gorm:"type:uuid;primaryKey"`
+	ConversationID uuid.UUID `gorm:"type:uuid;primaryKey;index:idx_file_parts_uploader,priority:1"`
 	FileID         uuid.UUID `gorm:"type:uuid;primaryKey"` // client-generated, bound into the parts' encryption
 	Part           int       `gorm:"primaryKey;autoIncrement:false"`
-	UploaderTag    string    `gorm:"size:64;not null"` // the uploader's member tag in this conversation
+	UploaderTag    string    `gorm:"size:64;not null;index:idx_file_parts_uploader,priority:2"` // the uploader's member tag in this conversation
 	Data           []byte    `gorm:"type:bytea;not null"`
-	ExpiresOn      time.Time `gorm:"type:date;index;not null"`
+	ExpiresOn      time.Time `gorm:"type:date;index;not null;index:idx_file_parts_uploader,priority:3"`
 }
 
 func (FilePart) TableName() string {

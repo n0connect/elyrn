@@ -3,9 +3,13 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"elyrn/internal/middleware"
+	"elyrn/internal/utils"
 	"elyrn/tests/testutil"
 )
 
@@ -133,4 +137,61 @@ func clientKey(t *testing.T, r *http.Request) string {
 		t.Fatalf("ClientKey: %v", err)
 	}
 	return key
+}
+
+// A trusted range wider than /8 (IPv4) or /16 (IPv6) lets addresses no operator runs proxies in
+// name any client: a /0 lets the whole internet choose its rate-limit bucket. Such a list is
+// malformed, so the backend trusts no proxy (fail closed) and startup refuses it; a range at the
+// bound, and every single address, is kept. An IPv6 range over IPv4-mapped addresses matches
+// plain IPv4 clients and is held to the IPv4 bound after its 96 mapping bits.
+func TestTrustedProxies_RefuseRangesWiderThanTheFamilyBound(t *testing.T) {
+	for _, wide := range []string{"0.0.0.0/0", "10.0.0.0/7", "128.0.0.0/1", "::/0", "2001:db8::/15", "fd00::/8",
+		"::ffff:0:0/96", "::ffff:0.0.0.0/103", "192.0.2.1, 0.0.0.0/0"} {
+		if _, _, err := utils.ParseProxyList(wide); err == nil {
+			t.Errorf("TRUSTED_PROXIES=%q accepted", wide)
+		}
+	}
+	for _, narrow := range []string{"10.0.0.0/8", "2001:db8::/16", "::ffff:10.0.0.0/104", "203.0.113.0/24",
+		"172.29.73.10", "2001:db8::/128"} {
+		if _, _, err := utils.ParseProxyList(narrow); err != nil {
+			t.Errorf("TRUSTED_PROXIES=%q refused: %v", narrow, err)
+		}
+	}
+
+	testutil.SetupTestEnv(t)
+	defer testutil.TeardownTestEnv(t)
+	t.Cleanup(middleware.ResetTrustedProxiesForTesting)
+	for _, wide := range []string{"0.0.0.0/0", "::ffff:0:0/96"} {
+		t.Setenv("TRUSTED_PROXIES", wide)
+		middleware.ResetTrustedProxiesForTesting()
+		req := httptest.NewRequest("GET", "/api/v2/me", nil)
+		req.RemoteAddr = "203.0.113.10:12345"
+		req.Header.Set("X-Forwarded-For", "198.51.100.20")
+		if got := middleware.ClientIP(req); got != "203.0.113.10" {
+			t.Errorf("TRUSTED_PROXIES=%s: a forwarded address was believed (ClientIP %q)", wide, got)
+		}
+	}
+}
+
+// edgeProxiesScript is nginx's renderer of EDGE_TRUSTED_PROXIES, from this package's directory
+// (docker-compose.test.yaml mounts it at the same relative place for the containerized suite).
+const edgeProxiesScript = "../../../nginx-edge-proxies.sh"
+
+// nginx's EDGE_TRUSTED_PROXIES and the backend's TRUSTED_PROXIES refuse the same ranges: the
+// script's minimum prefixes are the backend's (one rule, two readers).
+func TestTrustedProxies_BoundsEqualNginxEdgeProxies(t *testing.T) {
+	script, err := os.ReadFile(edgeProxiesScript)
+	if err != nil {
+		t.Fatalf("read %s: %v", edgeProxiesScript, err)
+	}
+	for name, want := range map[string]int{"IPV4_MIN_PREFIX": utils.MinProxyPrefixIPv4, "IPV6_MIN_PREFIX": utils.MinProxyPrefixIPv6} {
+		found := regexp.MustCompile(`(?m)^`+name+`=(\d+)$`).FindAllSubmatch(script, -1)
+		if len(found) != 1 {
+			t.Errorf("nginx-edge-proxies.sh must set %s exactly once", name)
+			continue
+		}
+		if got, _ := strconv.Atoi(string(found[0][1])); got != want {
+			t.Errorf("nginx-edge-proxies.sh %s=%d, the backend's bound is %d", name, got, want)
+		}
+	}
 }

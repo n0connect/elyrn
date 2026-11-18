@@ -29,6 +29,9 @@
 |  - Strict CSP + Trusted Types policy ('noaddx-worker')                 |
 |  - /api/ whitelist mirroring the input contract; own refusals as JSON  |
 |  - Unbuffered SSE proxy for /api/v2/events (proxy_buffering off)       |
+|  - One worker, 1024 connections, sized from the container's limits;    |
+|    per-client (IPv4, IPv6 /64, circuit) and global connection shares   |
+|    on every /api/ location; nothing ever spooled to a temporary file   |
 |  - Strips/Overrides untrusted client proxy headers                     |
 |  - Onion listener :8081: tor container only; forwards the circuit as   |
 |    the client address, so rate limits stay per circuit                 |
@@ -49,7 +52,8 @@
 +------------------------------------------------------------------------+
 |                      POSTGRESQL 15 DATABASE                            |
 |  - Tables: users, invites, conversations, conversation_members,        |
-|            messages, file_parts, rooms, room_notes, key_checks         |
+|            messages, file_parts, rooms, room_notes, key_checks,        |
+|            burned_rooms, orphaned_conversations                        |
 |  - Pseudonymous storage: isolated per-conversation HMAC tags           |
 |  - Coarse day-granular message retention dates (no timestamp tracking) |
 +------------------------------------------------------------------------+
@@ -220,8 +224,11 @@ Ciphertexts do not live forever. The backend launches a supervised background go
 - **Interval:** Runs immediately on startup, then every **5 minutes** (rooms expire on the hour and should not linger).
 - **Clock check:** a cycle in which the wall clock moved differently from the time that passed, or is behind the last pass (`retention-clock` in `key_checks`), deletes nothing and logs `E_CLOCK_JUMP`; reads never serve an expired message either way.
 - **Configuration:** `MESSAGE_TTL_DAYS` (default: 7 days, maximum: 365 days). A message stored on UTC day D gets `expires_on = D + MESSAGE_TTL_DAYS` and is deleted once that day has ended, so it lives between `MESSAGE_TTL_DAYS` and `MESSAGE_TTL_DAYS` + 1 days.
-- **Purge Operation:** Caps every stored `expires_on` (messages and file parts) at `today_utc + MESSAGE_TTL_DAYS` (so a lowered setting also shortens what is stored), then deletes all messages and file parts where `expires_on < today_utc`, all unredeemed invites and room notes where `expires_at <= now_utc`, and every room past its `expires_at` with all its members, messages, file parts and notes. An expired room already stops answering at that instant; the purge only removes its rows.
-- **File store count:** every cycle, paused or not, then counts the stored file parts afresh; `FILE_STORE_MAX_BYTES` is checked against that in-process count (taken at start too, and kept up to date by uploads and burns) before every upload.
+- **Purge Operation:** Caps every stored `expires_on` (messages and file parts) at `today_utc + MESSAGE_TTL_DAYS` (so a lowered setting also shortens what is stored), then deletes the messages and file parts where `expires_on < today_utc`, all unredeemed invites and room notes where `expires_at <= now_utc`, every room past its `expires_at` (oldest first) with its members and notes, the messages and file parts of deleted conversations (orphans, the earliest deleted first) and the tombstones of burned rooms whose expiry passed. An expired room already stops answering at that instant; the purge only removes its rows.
+- **Batches:** messages and file parts go in bounded batches (1000 messages or 64 parts per statement, each statement its own short transaction, at most 200 batches per step and cycle), so a large backlog is worked off over cycles and a failed batch undoes nothing an earlier one did.
+- **Orphans:** a burn, a room's expiry and an account deletion remove in their own transaction only what grants access: the room row (leaving a tombstone, `burned_rooms`, when the room was burned before its expiry), the memberships, the notes and the conversation row. The conversation id is queued in `orphaned_conversations` (with the UTC day only), and its messages and file parts, which no route can reach without the conversation's membership, are deleted by the next cycles. While a tombstone or an orphan names an id, no room or conversation is created under it (`409`, as for an id in use).
+- **Liveness:** each cycle that finishes (every step and the recount succeeded, or the cycle paused for the clock) is recorded for the healthcheck, which fails after 15 minutes without one: a step that fails every cycle (a retention mark that cannot be parsed, a statement that never fits its timeout) turns the backend unhealthy instead of failing silently.
+- **File store count:** every cycle, paused or not, then counts the stored file parts afresh; `FILE_STORE_MAX_BYTES` is checked against that in-process count (taken at start too, and kept up to date by uploads and by retention's own deletions) before every upload. A deleted conversation's parts stay counted until retention removed them.
 - **Client Visibility:** `GET /api/v2/me` returns `message_ttl_days` so the client UI can inform the user of room ephemerality.
 
 ---
@@ -254,6 +261,7 @@ data: {}
 - The client receives the poke and refetches the message list via authorized `GET /api/v2/conversations/{id}/messages`.
 - **Advantage:** Exactly one authorized code path evaluates access control and message decryption.
 - `ping` is the heartbeat: once right after the `: ready` preamble, then every 10 seconds. It is a named event so the browser can observe it: a new stream that shows nothing within 5 seconds, or a proven one silent for 25 seconds (a proxy buffering or holding it), makes the visible tab poll the same refetch path about every 5 seconds until an event arrives again.
+- **A stream ends with its session.** Logout and account deletion close the account's streams in the in-memory hub (`Kick`) and bump the account's revocation generation there. A stream reads that generation before its session check and subscribes only if it is unchanged, so a revocation that lands between the check and the subscription is not missed. Every heartbeat re-checks the session (signature, expiry, epoch) and ends a revoked one, so a stream a kick could not reach (the hub was busy; logout then answers `503`) lives at most one heartbeat longer. The generations are kept for at most 4,096 kicked accounts; at the bound they are reset under a raised floor, which refuses at worst one stream that was mid-check (it retries) and never forgets a revocation.
 
 ---
 

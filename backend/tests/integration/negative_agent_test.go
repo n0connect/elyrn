@@ -193,6 +193,7 @@ func TestNegativeAgent_RoomsThatAreNotItsOwn(t *testing.T) {
 		t.Fatalf("alpha burns = %+v, %v", left, err)
 	}
 	expectAgentCodes(t, roomCalls(beta, room, agent.CodeRoomUnknown), "a burned room")
+	purgeAt(t, time.Now()) // the burned room's messages go with retention
 	var burned int64
 	database.DB.Model(&models.Message{}).Where("conversation_id = ?", room).Count(&burned)
 	if burned != 0 {

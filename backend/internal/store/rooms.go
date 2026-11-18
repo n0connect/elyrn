@@ -12,7 +12,8 @@ import (
 
 // ---------- rooms ----------
 
-// CreateRoom stores a new room, its conversation and its creator's membership together.
+// CreateRoom stores a new room, its conversation and its creator's membership together. An id
+// in use, or retired by a burn (refuseRetiredID), answers ErrConflict alike.
 func (r *chatRepository) CreateRoom(room *models.Room, creator *models.ConversationMember) error {
 	err := r.db().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&models.Conversation{ID: room.ID}).Error; err != nil {
@@ -21,9 +22,12 @@ func (r *chatRepository) CreateRoom(room *models.Room, creator *models.Conversat
 		if err := tx.Create(room).Error; err != nil {
 			return err
 		}
-		return tx.Create(creator).Error
+		if err := tx.Create(creator).Error; err != nil {
+			return err
+		}
+		return refuseRetiredID(tx, room.ID)
 	})
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
+	if errors.Is(err, gorm.ErrDuplicatedKey) || errors.Is(err, ErrConflict) {
 		return ErrConflict
 	}
 	if err != nil {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"time"
 
 	"elyrn/internal/models"
 
@@ -16,8 +17,14 @@ func (r *chatRepository) CreateConversation(conversationID uuid.UUID, members []
 		if err := tx.Create(&models.Conversation{ID: conversationID}).Error; err != nil {
 			return err
 		}
-		return tx.Create(&members).Error
+		if err := tx.Create(&members).Error; err != nil {
+			return err
+		}
+		return refuseRetiredID(tx, conversationID)
 	})
+	if errors.Is(err, ErrConflict) {
+		return err
+	}
 	if err != nil {
 		chatRepoLogger.LogError("ChatRepository.CreateConversation", err)
 	}
@@ -70,43 +77,38 @@ func (r *chatRepository) LastSeqs(conversationIDs []uuid.UUID) (map[uuid.UUID]in
 	return result, nil
 }
 
-// DeleteConversation burns a conversation for every member, ciphertext included. A room's row
-// goes first: lock order is rooms before conversations (LOCK_HIERARCHY.md). The conversation row
-// is locked next, before any row in it is deleted: a send holding that lock (NextSeq) commits
-// first and its message is deleted here; a send waiting for it then finds no conversation
-// (ErrNotFound). Deleting the messages first would miss one committed in between and leave its
-// ciphertext behind with no conversation. Burn, room expiry and account deletion all end here.
-// File parts go with the messages, under the same lock (an upload holds it too).
-func (r *chatRepository) DeleteConversation(conversationID uuid.UUID) (int64, error) {
-	var parts int64
+// DeleteConversation ends a conversation for every member: what grants access goes in the
+// caller's transaction, and the ciphertext is left to retention. A room's row goes first (lock
+// order is rooms before conversations, LOCK_HIERARCHY.md), leaving its tombstone when it is
+// burned before its expiry; the conversation row is locked next, so a send or upload holding
+// that lock (NextSeq, LockConversation) commits first and one waiting for it then finds no
+// conversation (ErrNotFound). Then the memberships, the notes and the conversation row go, and
+// the conversation is queued as an orphan: its messages and file parts stay on disk, unreachable
+// (every read needs the conversation's membership), until retention deletes them in bounded
+// batches (purgeOrphans). Nothing here grows with the conversation's history, so no member can
+// make a burn or an account deletion outlast its request. Burn, room expiry and account
+// deletion all end here.
+func (r *chatRepository) DeleteConversation(conversationID uuid.UUID, now time.Time) error {
 	err := r.db().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where(whereID, conversationID).Delete(&models.Room{}).Error; err != nil {
+		if err := tombstoneRoom(tx, conversationID, now); err != nil {
 			return err
 		}
 		if _, err := (&chatRepository{handle: r.handle, tx: tx}).LockConversation(conversationID); err != nil {
 			return err
 		}
-		if err := tx.Where(whereConversation, conversationID).Delete(&models.Message{}).Error; err != nil {
-			return err
-		}
-		result := tx.Where(whereConversation, conversationID).Delete(&models.FilePart{})
-		if result.Error != nil {
-			return result.Error
-		}
-		parts = result.RowsAffected
 		if err := tx.Where(whereConversation, conversationID).Delete(&models.ConversationMember{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where(whereConversation, conversationID).Delete(&models.RoomNote{}).Error; err != nil {
 			return err
 		}
-		return tx.Where(whereID, conversationID).Delete(&models.Conversation{}).Error
-	})
-	if err != nil {
-		if !errors.Is(err, ErrNotFound) {
-			chatRepoLogger.LogError("ChatRepository.DeleteConversation", err)
+		if err := tx.Where(whereID, conversationID).Delete(&models.Conversation{}).Error; err != nil {
+			return err
 		}
-		return 0, err
+		return tx.Create(&models.OrphanedConversation{ID: conversationID, OrphanedOn: utcDay(now)}).Error
+	})
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		chatRepoLogger.LogError("ChatRepository.DeleteConversation", err)
 	}
-	return parts, nil
+	return err
 }

@@ -28,6 +28,7 @@ an expired session from none). Three shapes reach the wire:
 |---|---|---|---|
 | 400 | `Invalid request` | `E_INVALID_REQUEST`, `E_INVALID_INPUT`, `E_LOGIN_BODY_INVALID` (JSON) | the input contract or the service refused the input |
 | 400 | `Pending token required` | `E_PENDING_TOKEN_REQUIRED` | registration phase 2 without its token |
+| 400 | `Sender card mismatch` (JSON) | `E_SENDER_CARD_MISMATCH` | a room message or note whose header card is not the sender's stored card |
 | 401 | `Unauthorized` | `E_NO_SESSION`, `E_SESSION_CONTEXT_MISSING`, `E_MEMBER_NOT_FOUND`, `E_PENDING_TOKEN_INVALID`, `E_ACCOUNT_EXISTS` | no session, a revoked or expired one, an account that is gone, a spent or expired pending token |
 | 401 | `Invalid credentials` (JSON) | `E_LOGIN_KEY_MALFORMED`, `E_LOGIN_NO_ACCOUNT`, `E_LOGIN_LEGACY_ACCOUNT` | login: no account for this key, whatever the reason |
 | 403 | `Forbidden` | `E_CROSS_ORIGIN`, `E_IDENTITY_UNSET`, `E_FORBIDDEN` | a cross-origin write, or an action the caller may not take |
@@ -36,7 +37,7 @@ an expired session from none). Three shapes reach the wire:
 | 404 | `Not Found` | `E_ROUTE_NOT_FOUND` | no such route (a malformed id answers the same) |
 | 404 | `Not found` | `E_NOT_FOUND` | no such conversation, room, invite, note, member card or file part *for the caller*: unknown, expired, burned, a wrong room code, or one the caller is not a member of |
 | 405 | `Method not allowed` | `E_METHOD_NOT_ALLOWED`, `E_HEAD_NOT_ALLOWED` (empty) | another method |
-| 409 | `Conflict` | `E_CONFLICT` | the id holds the caller's own identical earlier attempt (stored); a room id that exists |
+| 409 | `Conflict` | `E_CONFLICT` | the id holds the caller's own identical earlier attempt (stored); a room id that exists, or that a burned room or a deleted conversation still holds |
 | 409 | `Id taken` (JSON) | `E_ID_TAKEN` | a message or note id, or a file part, held by anything else: nothing stored, send again under a fresh id |
 | 409 | `File part out of order` (JSON) | `E_FILE_PART_OUT_OF_ORDER` | a later part of a file whose live part 0 the caller has not stored |
 | 409 | `Room full` | `E_ROOM_FULL` | no free seat |
@@ -48,6 +49,7 @@ an expired session from none). Three shapes reach the wire:
 | 500 | `Internal server error` | `E_INTERNAL`, `E_PANIC`, `E_ACCOUNT_COLLISION`, `E_INPUT_UNCHECKED`, `E_LOGIN_LOOKUP_FAILED` (JSON) | a server fault; on login, a lookup the server could not compute |
 | 503 | `Service unavailable` | `E_STORE_UNAVAILABLE`, `E_POW_CAPACITY`, `E_PENDING_STORE_FULL`, `E_SHUTTING_DOWN`, `E_REQUEST_CANCELLED`, `E_FILE_REQUESTS_BUSY` | the database is unreachable, restarting, out of connections or too slow (every route, the session check included), or a bounded resource is full (for files: 32 file part requests handled at once); retry later |
 | 507 | `File quota reached` (JSON) | `E_FILE_QUOTA_REACHED` | the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of file parts |
+| 507 | `File share reached` (JSON) | `E_FILE_SHARE_REACHED` | the uploader holds its share of the conversation's `FILE_CONVERSATION_QUOTA_BYTES` |
 | 507 | `File store full` (JSON) | `E_FILE_STORE_FULL` | the server holds `FILE_STORE_MAX_BYTES` of file parts, or has not counted them yet |
 
 `503 E_STORE_UNAVAILABLE` never means a key, session or conversation is gone: clients retry
@@ -85,7 +87,8 @@ peers only (`200` or `503 E_HEALTH_UNAVAILABLE`, no body; any other peer gets `4
 - **Same-Origin Writes:** `POST`/`PUT`/`PATCH`/`DELETE` requests are refused with `403` unless the browser marks them `Sec-Fetch-Site: same-origin` (or, without that header, sends an `Origin` listed exactly in `ALLOWED_ORIGINS`). Clients that send neither header are not browsers and hold no ambient cookies.
 - **Sliding Expiration:** Sessions expire after `JWT_EXPIRATION_MINUTES` (default 43200 minutes, 30 days; accepted range 1 to 525600 minutes, 365 days). A session used after half its lifetime has passed is re-issued as a fresh cookie, so one used at least once every half-lifetime (15 days by default) does not expire; logout and account deletion end it at once.
 - **Saturation and outages:** `POST /api/v2/login` answers `503` while the database is unreachable, so an outage is never reported as an unknown account. When the server cannot compute the account lookup from a well-formed key (a missing or short pepper, or a crypto engine failure), login answers `500 Internal server error` (`E_LOGIN_LOOKUP_FAILED`), never `401`: the lookup is computed from the key alone before any account is read, so it fails alike for every key, and `401` always means the key matches no usable account. The `503` and `500` answers do not depend on whether the account exists; retry with backoff. Every other route answers a database outage (unreachable, restarting, out of connections, or a statement past its timeout) the same way, `503 Service Unavailable`, the session check included, so an outage never logs a client out.
-- **Global Invalidation:** `POST /api/v2/logout` with a live session increments the user's `session_epoch`, instantly invalidating every JWT issued for that account on every device. A token revoked earlier cannot trigger this (it no longer authenticates); if revocation fails the endpoint answers `500` instead of reporting success. The cookie is cleared in every case.
+- **Global Invalidation:** `POST /api/v2/logout` with a live session increments the user's `session_epoch`, instantly invalidating every JWT issued for that account on every device. A token revoked earlier cannot trigger this (it no longer authenticates); if revocation fails the endpoint answers an error instead of reporting success. The cookie is cleared in every case.
+- **Live streams end with the session:** logout and account deletion close the account's event streams (and refuse a stream that checked its session just before the revocation and subscribes after it). When the streams cannot be closed at that moment, the sessions are already revoked and the answer is `503` (`E_STORE_UNAVAILABLE`, see `POST /api/v2/logout`); every open stream also re-checks its session at each heartbeat (10 s) and ends once it is revoked.
 
 ---
 
@@ -128,7 +131,7 @@ per-boot secret, so a solution must echo all five fields exactly as issued (see
 forged, expired, already used, or issued before a server restart, and 503 while the set of used,
 unexpired challenges is full.
 
-- **Rate Limit:** 5 requests per minute per client key (an IPv4 address, an IPv6 /64, or one Tor circuit on the onion service), shared by every proof of work (registration, invites, rooms): `429` beyond it; `503` while the server tracks its maximum of clients.
+- **Rate Limit:** 5 requests per minute per client key (an IPv4 address, an IPv6 /64, or one Tor circuit on the onion service), shared by every proof of work (registration, invites, rooms): `429` beyond it. The server tracks at most 50,000 clients; while that table is full, clients not in it share one bucket of 500 challenges per minute (`429` beyond it), and tracked clients keep their own limit.
 - **Response (200 OK):**
 ```json
 {
@@ -226,7 +229,9 @@ The key is proven by its keyed lookup: the server computes `HMAC(pepper, auth_ke
 ---
 
 ### `POST /api/v2/logout`
-Revokes all active sessions for this account across all devices by bumping `session_epoch`.
+Revokes all active sessions for this account across all devices by bumping `session_epoch`, then closes the account's live event streams.
+
+- **Errors:** `503` (`E_STORE_UNAVAILABLE`) when the database fails, and also when the sessions were revoked but the streams could not be closed (the server could not name them or its stream hub was busy): a partial revocation. Every session is refused from then on and a stream left open ends at its next heartbeat (within 10 s); the answer carries no `Clear-Site-Data`. A retry finds no live session and answers `200`.
 
 - **Response (200 OK):** Clears session cookie and carries `Clear-Site-Data: "cookies", "storage"`, so the browser drops this origin's cookies and stored data (the identity and its records in IndexedDB) even if the page's own wipe failed.
 ```json
@@ -267,7 +272,7 @@ A live session is not enough: the request re-proves the account number with its 
   "auth_key": "HKDF(AccountNumber, \"noaddx/auth\") base64url"
 }
 ```
-- **Errors:** `400` malformed body or key, `403` the key belongs to another account (`E_FORBIDDEN`), `415` body not declared as JSON, `429` too many attempts.
+- **Errors:** `400` malformed body or key, `403` the key belongs to another account (`E_FORBIDDEN`), `415` body not declared as JSON, `429` too many attempts, `503` (`E_STORE_UNAVAILABLE`) when the database fails, and also when the account was erased but its other devices' event streams could not be closed (a stream left open ends at its next heartbeat, within 10 s). After that `503` the account is gone: a retry answers `401`.
 - **Response (200 OK):** carries `Clear-Site-Data: "cookies", "storage"`, as a successful logout does. No other answer, a refused deletion included, carries it.
 ```json
 {
@@ -369,7 +374,9 @@ Lists the caller's conversations, newest first (the server keeps no recency acro
 ---
 
 ### `DELETE /api/v2/conversations/{id}`
-**Burn:** Bilaterally deletes the conversation, all memberships, and all stored ciphertexts from the database. In a room only the owner burns (for everyone); any other member **leaves**: their seat goes, their messages stay readable to the others, notes to and from them go. Members get a `conv` event either way.
+**Burn:** Ends the conversation for both sides: the conversation, all memberships and notes are deleted in the request, so nothing of it answers any route again; the stored ciphertexts (messages and file parts) leave the database within the next retention cycles, in bounded batches. A room burned before its expiry leaves a tombstone (its id and expiry only), so its code never opens a room again. In a room only the owner burns (for everyone); any other member **leaves**: their seat goes, their messages stay readable to the others, notes to and from them go. Members get a `conv` event either way. Every request takes a token
+from the caller's rate bucket `burn` before the conversation is looked up (a `404` spends one
+too): `429` (`E_RATE_LIMITED`) once it is empty.
 
 - **Response:** `204 No Content`
 
@@ -421,7 +428,7 @@ Sends an end-to-end encrypted message ciphertext.
 
 *Both are answered only to a member of the conversation, after the membership check (a non-member gets `404` first), and the split reveals only whether the holder is the caller's own identical send; that some message holds the id was already told by any `409` (`backend/internal/chat/duplicates.go`).*
 
-A conversation the caller is not a member of (or that does not exist, expired or was burned) answers `404` before the ciphertext is judged against its format, so the answer never tells a non-member whether the id is a room, or how large. In a room the ciphertext must have the room format (`NADR`, docs/architecture/rooms.md), with at most one wrap per member, and its roster digest must match the current members. A member who joined or left since the sender fetched the roster makes it `412 Precondition Failed`: fetch `/members` again, re-encrypt under the same `id`, and send again.
+A conversation the caller is not a member of (or that does not exist, expired or was burned) answers `404` before the ciphertext is judged against its format, so the answer never tells a non-member whether the id is a room, or how large. In a room the ciphertext must have the room format (`NADR`, docs/architecture/rooms.md), with at most one wrap per member, and its roster digest must match the current members. A member who joined or left since the sender fetched the roster makes it `412 Precondition Failed`: fetch `/members` again, re-encrypt under the same `id`, and send again. Last, the card in the header must be byte for byte the card the sender stored when it joined (its `/members` entry flagged `mine`); any other card, a fresh sealing of the sender's own key included, answers `400` `{"success":false,"message":"Sender card mismatch"}` (`E_SENDER_CARD_MISMATCH`) and nothing is stored: seal again under the stored card.
 
 ---
 
@@ -435,6 +442,7 @@ Advances the caller's read marker. Cannot be moved backwards or past `last_seq`.
 }
 ```
 - **Response:** `204 No Content`
+- **Errors:** `400` a `seq` past `last_seq`; `404` the caller is not a member, the conversation does not exist, or the room expired (as on every other route, also before retention removed it).
 
 ---
 
@@ -458,7 +466,7 @@ Stores a new room. Costs a fresh proof of work, like an invite.
 }
 ```
 - `max_members` is 2 to `ROOM_MAX_MEMBERS`. `expires_at` is on the hour, at least 50 minutes and at most `ROOM_MAX_TTL_HOURS` + 1 hours (plus 10 minutes of clock skew) ahead.
-- **Errors:** `400` any field out of shape or range, `412` / `403` proof of work missing or invalid, `409` the id exists (`E_CONFLICT`: draw a new secret), `429` too many conversations or requests.
+- **Errors:** `400` any field out of shape or range, `412` / `403` proof of work missing or invalid, `409` the id exists, or belonged to a room burned before its expiry or to a conversation whose rows retention has not removed yet (`E_CONFLICT`, the same answer: draw a new secret), `429` too many conversations or requests.
 - **Response (201 Created):** `{"conversation": { … "room": { … "owner": true, "members": 1 } }}`
 
 ---
@@ -527,7 +535,7 @@ Delivers a sealed note (a friend request carrying an invite) to the one member w
   "blob": "NADN note: exactly one wrap, roster digest over the addressee's card"
 }
 ```
-- **Errors:** `400` malformed, sealed for someone else, or addressed to the caller; `404` no member has that card; `409 Conflict` a note from the caller already waits for them (or this very note, same `id` and `blob`, is the one waiting); `409` `{"success":false,"message":"Id taken"}` the `id` is held by another note (another room, sender, addressee or `blob`): nothing stored, seal again under a fresh `id`.
+- **Errors:** `400` malformed, sealed for someone else, or addressed to the caller; `404` no member has that card, or the room is gone (burned or expired, also when that happens while the note is being sent) or the caller is not in it; `400` `{"success":false,"message":"Sender card mismatch"}` (`E_SENDER_CARD_MISMATCH`, judged after the addressee) the note's header card is not the caller's stored card; `409 Conflict` a note from the caller already waits for them (or this very note, same `id` and `blob`, is the one waiting); `409` `{"success":false,"message":"Id taken"}` the `id` is held by another note (another room, sender, addressee or `blob`): nothing stored, seal again under a fresh `id`.
 - **Response:** `201 Created`. The addressee gets a `conv` event.
 
 ### `GET /api/v2/conversations/{id}/notes`
@@ -546,7 +554,8 @@ only in whole parts and never its name, type or bytes. The file's key travels in
 message, so exactly the members who can read that message can open the file. Works in one-to-one
 conversations and rooms. Parts expire by the messages' day rule (`MESSAGE_TTL_DAYS`, day-granular,
 capped like messages) and go with their conversation (burn, room expiry, the owner's or a pair
-member's account deletion); leaving a room keeps the leaver's parts, like their messages.
+member's account deletion: unreachable at once, deleted by the next retention cycles and counted
+against `FILE_STORE_MAX_BYTES` until then); leaving a room keeps the leaver's parts, like their messages.
 
 ### `POST /api/v2/conversations/{id}/files`
 Stores one part. Part 0 opens the file for its uploader (and takes one token of the caller's `file`
@@ -573,6 +582,7 @@ part).
   - `409 Conflict` the caller's own identical part is already stored (the earlier attempt succeeded);
   - `409` `{"success":false,"message":"Id taken"}` (`E_ID_TAKEN`) the part is stored with other bytes or by another member: nothing stored, upload the file again under a fresh `id`;
   - `409` `{"success":false,"message":"File part out of order"}` (`E_FILE_PART_OUT_OF_ORDER`) a later part before the caller stored part 0 (or after part 0 expired);
+  - `507` `{"success":false,"message":"File share reached"}` (`E_FILE_SHARE_REACHED`) the caller holds its share of the conversation's quota (one member's share is the quota divided by the conversation's seat bound (a room's `max_members`, 2 for a one-to-one conversation), rounded down to whole parts and never less than one file of `MAX_FILE_BYTES`; it counts the member's own live parts in that conversation); other members may still upload. Checked before the quota itself;
   - `507` `{"success":false,"message":"File quota reached"}` (`E_FILE_QUOTA_REACHED`) the conversation holds `FILE_CONVERSATION_QUOTA_BYTES` of parts;
   - `507` `{"success":false,"message":"File store full"}` (`E_FILE_STORE_FULL`) the server holds `FILE_STORE_MAX_BYTES` of parts (or has not counted them yet: fail closed);
   - `429` `{"success":false,"message":"File budget spent"}` (`E_FILE_BUDGET_SPENT`) the account's daily budget is spent (checked right after membership, before the part's other checks);
@@ -599,8 +609,8 @@ Opens an unbuffered, content-free SSE stream.
   - `event: msg` with `data: {"c": "<conversation_id>"}` (signals a new message arrived).
   - `event: conv` with `data: {}` (signals the conversation list, a room's members, or the caller's notes changed).
   - `event: ping` with `data: {}` (heartbeat: sent once right after the `retry: 3000` / `: ready` preamble, which always comes first, then every 10 seconds). It is a named event, not an SSE comment, so the browser can see that the stream is being delivered. The web client treats a stream as held by a proxy when a new connection shows no event within 5 seconds, or a stream that already delivered one then goes 25 seconds without any; it then fetches its updates about every 5 seconds while the tab is visible and every 30 seconds while it is hidden (nothing is marked read while hidden), until an event arrives again (`frontend/js/live-updates.js`: `STREAM_FIRST_PROOF_MS`, `STREAM_SILENCE_LIMIT_MS`, `POLL_INTERVAL_MS`, `HIDDEN_POLL_INTERVAL_MS`). Clients must ignore event names they do not know.
-- **Authentication:** Validated via session cookie. If session is revoked, the stream closes with `401 Unauthorized`.
-- **Limits:** `429` when the account already holds 4 streams, the caller's network (IPv4 address, IPv6 /64 or Tor circuit) holds 16, or the server holds 4,096.
+- **Authentication:** Validated via session cookie when the stream opens, and again at every heartbeat. A logout or account deletion closes the account's streams at once; a stream it could not reach ends at its next heartbeat, whose session check fails. A stream ends silently (the connection closes); the reconnect is refused with `401 Unauthorized`.
+- **Limits:** `429` when the account already holds 4 streams, the caller's network (IPv4 address, IPv6 /64 or Tor circuit) holds 16, or the server holds 4,096; also when the account's streams were closed (a logout or deletion) between the stream's session check and its subscription, or the stream hub is busy (retry: a revoked session's retry is refused with `401`).
 
 ---
 

@@ -60,11 +60,13 @@ const (
 	IDTaken
 	RoomFull
 	RosterChanged
+	SenderCardMismatch
 	IdentityUnset
 	Forbidden
 	RoleNotAllowed
 	FilePartOutOfOrder
 	FileQuotaReached
+	FileShareReached
 	FileStoreFull
 	FileBudgetSpent
 	FileRequestsBusy
@@ -101,9 +103,11 @@ const (
 	sayIDTaken            = "Id taken"
 	sayRoomFull           = "Room full"
 	sayRosterChanged      = "Roster changed"
+	saySenderCardMismatch = "Sender card mismatch"
 	sayRoleNotAllowed     = "Role not allowed"
 	sayFilePartOutOfOrder = "File part out of order"
 	sayFileQuotaReached   = "File quota reached"
+	sayFileShareReached   = "File share reached"
 	sayFileStoreFull      = "File store full"
 	sayFileBudgetSpent    = "File budget spent"
 	sayInternalServerErr  = "Internal server error"
@@ -195,11 +199,15 @@ var registry = map[Code]entry{
 	IDTaken:       {"E_ID_TAKEN", http.StatusConflict, sayIDTaken, utils.LogLevelWARN, shapeJSON},
 	RoomFull:      {"E_ROOM_FULL", http.StatusConflict, sayRoomFull, utils.LogLevelINFO, shapeText},
 	RosterChanged: {"E_ROSTER_CHANGED", http.StatusPreconditionFailed, sayRosterChanged, utils.LogLevelINFO, shapeText},
+	// SenderCardMismatch: a room message or note whose header card is not the sending member's
+	// stored card. JSON for the reason IDTaken is: it shares 400 with the send's "Invalid
+	// request", and a client must tell "use your stored card" from a malformed send
+	SenderCardMismatch: {"E_SENDER_CARD_MISMATCH", http.StatusBadRequest, saySenderCardMismatch, utils.LogLevelWARN, shapeJSON},
 	// MERGE: an account without an identity key and an action the caller may not take
 	IdentityUnset: {"E_IDENTITY_UNSET", http.StatusForbidden, sayForbidden, utils.LogLevelWARN, shapeText},
 	Forbidden:     {"E_FORBIDDEN", http.StatusForbidden, sayForbidden, utils.LogLevelWARN, shapeText},
-	// The four below answer in JSON for the reason IDTaken does: each shares its status with
-	// another answer of its route (a cross-origin 403, the send's two 409s, the other 507), and
+	// The five below answer in JSON for the reason IDTaken does: each shares its status with
+	// another answer of its route (a cross-origin 403, the send's two 409s, the other 507s), and
 	// the browser tells them apart by message, the agent by the same field.
 	// RoleNotAllowed: a member who does not own the room set another member's role
 	RoleNotAllowed: {"E_ROLE_NOT_ALLOWED", http.StatusForbidden, sayRoleNotAllowed, utils.LogLevelWARN, shapeJSON},
@@ -207,6 +215,9 @@ var registry = map[Code]entry{
 	FilePartOutOfOrder: {"E_FILE_PART_OUT_OF_ORDER", http.StatusConflict, sayFilePartOutOfOrder, utils.LogLevelWARN, shapeJSON},
 	// FileQuotaReached: the conversation holds FILE_CONVERSATION_QUOTA_BYTES of parts already
 	FileQuotaReached: {"E_FILE_QUOTA_REACHED", http.StatusInsufficientStorage, sayFileQuotaReached, utils.LogLevelINFO, shapeJSON},
+	// FileShareReached: the uploader holds its share of the conversation's quota already (the
+	// quota over the conversation's seat bound, at least one largest file); others may still upload
+	FileShareReached: {"E_FILE_SHARE_REACHED", http.StatusInsufficientStorage, sayFileShareReached, utils.LogLevelINFO, shapeJSON},
 	// FileStoreFull: the server holds FILE_STORE_MAX_BYTES of parts, or does not know how many it
 	// holds yet (fail closed); the operator's signal to raise the bound or wait for retention
 	FileStoreFull: {"E_FILE_STORE_FULL", http.StatusInsufficientStorage, sayFileStoreFull, utils.LogLevelWARN, shapeJSON},

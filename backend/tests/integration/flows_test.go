@@ -212,10 +212,12 @@ func TestBurn_RemovesConversationForBothSides(t *testing.T) {
 	expectStatus(t, alice.do("DELETE", "/api/v2/conversations/"+convID, nil), http.StatusNoContent, "burn")
 	expectStatus(t, bob.do("GET", "/api/v2/conversations/"+convID+"/messages", nil), http.StatusNotFound, "bob after burn")
 
+	// Access ended in the request; the ciphertext leaves the disk with the next retention pass
+	purgeAt(t, time.Now())
 	var count int64
 	database.DB.Model(&models.Message{}).Where("conversation_id = ?", convID).Count(&count)
 	if count != 0 {
-		t.Fatalf("%d ciphertexts survived the burn", count)
+		t.Fatalf("%d ciphertexts survived the burn and a retention pass", count)
 	}
 }
 

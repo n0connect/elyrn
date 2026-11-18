@@ -26,6 +26,9 @@ var (
 	ErrStale    = errors.New("roster changed")
 	// ErrRoleNotAllowed: a member who does not own the room set another member's role
 	ErrRoleNotAllowed = errors.New("role not allowed")
+	// ErrSenderCardMismatch: a room message or note whose header card is not the sending
+	// member's stored card (every member holds the code and could seal a card for any key)
+	ErrSenderCardMismatch = errors.New("sender card mismatch")
 )
 
 const (
@@ -123,6 +126,19 @@ func lockSelf(tx store.ChatRepository, me *Member) (*Member, *models.User, error
 		return nil, nil, err
 	}
 	return self, row, nil
+}
+
+// lockConversation row-locks an existing conversation for a member's write. A conversation that
+// went (burned, purged) after the caller's earlier read answers ErrNotFound, as every route
+// answers for a conversation that is gone, never a server fault.
+func lockConversation(tx store.ChatRepository, id uuid.UUID) error {
+	if _, err := tx.LockConversation(id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 func roomMembership(owner *Member, in *RoomInput, joinedSeq int64) (models.ConversationMember, error) {
@@ -394,10 +410,7 @@ func (s *Service) SetRole(me *Member, id uuid.UUID, card, role string) ([]string
 	}
 	var streams []string
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
-		if _, err := tx.LockConversation(id); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrNotFound
-			}
+		if err := lockConversation(tx, id); err != nil {
 			return err
 		}
 		caller, err := s.requireMembership(tx, me, id)
@@ -447,10 +460,7 @@ func (s *Service) leaveRoom(me *Member, id uuid.UUID) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.LockConversation(id); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return ErrNotFound
-			}
+		if err := lockConversation(tx, id); err != nil {
 			return err
 		}
 		member, err := s.requireMembership(tx, self, id)
@@ -481,10 +491,27 @@ func (s *Service) leaveRoom(me *Member, id uuid.UUID) ([]string, error) {
 	return streams, nil
 }
 
+// checkSenderCard refuses a room message or note whose header card is not, byte for byte, the
+// card the sending member stored when it joined: the card is the sender identity every reader
+// opens and shows, so it must be the member the server authenticated, never a card the member
+// sealed for another key. Judged after membership, like every other refusal.
+func checkSenderCard(sender *models.ConversationMember, blob *utils.RoomBlob) error {
+	stored, ok := utils.DecodeExact(sender.Card, utils.RoomCardBytes)
+	if !ok {
+		return errCorrupt
+	}
+	if !cryptoengine.ConstantTimeEqual(stored, blob.Card) {
+		return ErrSenderCardMismatch
+	}
+	return nil
+}
+
 // checkRoomMessage refuses a message wrapped for more members than the room has, or for a
-// roster other than the current one (the sender then fetches it again and re-encrypts).
-// Runs under the conversation row lock taken by NextSeq.
-func checkRoomMessage(tx store.ChatRepository, id uuid.UUID, blob *utils.RoomBlob) error {
+// roster other than the current one (the sender then fetches it again and re-encrypts), or under
+// a card other than the sender's stored one. The card is judged last, so every answer a
+// message had before the card check keeps its order (a stale roster stays 412 whatever card
+// the header names). Runs under the conversation row lock taken by NextSeq.
+func checkRoomMessage(tx store.ChatRepository, id uuid.UUID, sender *models.ConversationMember, blob *utils.RoomBlob) error {
 	members, err := tx.ListMembers(id)
 	if err != nil {
 		return err
@@ -499,5 +526,5 @@ func checkRoomMessage(tx store.ChatRepository, id uuid.UUID, blob *utils.RoomBlo
 	if !cryptoengine.ConstantTimeEqual(digest, blob.Digest) {
 		return ErrStale
 	}
-	return nil
+	return checkSenderCard(sender, blob)
 }

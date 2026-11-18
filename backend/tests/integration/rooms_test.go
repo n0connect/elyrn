@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"elyrn/internal/apperr"
 	"elyrn/internal/chat"
 	"elyrn/internal/config"
 	"elyrn/internal/database"
@@ -554,13 +555,15 @@ func TestRooms_LeaveKeepsTheRoomAndBurnEndsIt(t *testing.T) {
 			t.Fatalf("%T row survived the burn", model)
 		}
 	}
-	for _, model := range []interface{}{&models.ConversationMember{}, &models.Message{}, &models.RoomNote{}} {
+	for _, model := range []interface{}{&models.ConversationMember{}, &models.RoomNote{}} {
 		var n int64
 		database.DB.Model(model).Where("conversation_id = ?", a.room.ID).Count(&n)
 		if n != 0 {
 			t.Fatalf("%T rows survived the burn", model)
 		}
 	}
+	purgeAt(t, time.Now()) // the messages, unreachable since the burn, go with retention
+	expectRows(t, &models.Message{}, 0, "a burned room's messages after a retention pass")
 }
 
 func TestRooms_ExpiredRoomStopsAnsweringAndIsPurged(t *testing.T) {
@@ -575,6 +578,13 @@ func TestRooms_ExpiredRoomStopsAnsweringAndIsPurged(t *testing.T) {
 	expectStatus(t, bob.do("GET", b.path("/members"), nil), http.StatusNotFound, "roster of an expired room")
 	id := newMessageID()
 	expectStatus(t, b.post(id, b.sealTo(t, []string{a.member.Card, b.member.Card}, id, "late", 1)), http.StatusNotFound, "send to an expired room")
+	// The read marker too: a member's mark on a message it could still mark before the expiry
+	expectAnswer(t, bob.do("POST", b.path("/read"), models.MarkReadRequest{Seq: 1}), apperr.NotFound, "mark read in an expired room")
+	var readSeq int64
+	database.DB.Model(&models.ConversationMember{}).Where("conversation_id = ?", a.room.ID).Select("max(read_seq)").Scan(&readSeq)
+	if readSeq != 0 {
+		t.Fatalf("an expired room's read marker moved to %d", readSeq)
+	}
 	expectStatus(t, carol.do("POST", "/api/v2/rooms/join", sideOf(t, carol, a.code).joinRequest(t)), http.StatusNotFound, "join an expired room")
 	if findConversation(listOf(t, bob), a.room.ID.String()) != nil {
 		t.Fatal("an expired room is still listed")
@@ -834,5 +844,135 @@ func TestRoomNotes_AreAddressedStrictly(t *testing.T) {
 	database.DB.Model(&models.RoomNote{}).Where("conversation_id = ?", a.room.ID).Count(&n)
 	if n != 0 {
 		t.Fatalf("%d notes survived their addressee leaving", n)
+	}
+}
+
+// lockWaitDeadline bounds how long a test waits for a request to queue behind a row lock it holds
+const lockWaitDeadline = 5 * time.Second
+
+// waitForLockWaiter returns once another session of this database waits for a lock: the request
+// the test started has passed its checks outside the transaction and queues behind the row lock
+// the test holds.
+func waitForLockWaiter(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(lockWaitDeadline)
+	for time.Now().Before(deadline) {
+		var waiting int64
+		if err := database.DB.Raw("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() " +
+			"AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()").Scan(&waiting).Error; err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the request never queued behind the held conversation lock")
+}
+
+// A room burned after SendNote found it live but before the note's transaction took the
+// conversation lock answers 404, as every route answers for a gone conversation; before the fix
+// the lock's "no such row" passed through as a 500. The burn is made deterministic: the test holds
+// the conversation row lock, lets the note queue behind it, removes the room's rows as a burn
+// does (room, members, conversation) and only then lets go.
+func TestRoomNotes_ARoomBurnedBeforeTheLockAnswersNotFound(t *testing.T) {
+	mux := setup(t)
+	a, b := roomOfTwo(t, mux)
+	noteID, note := a.note(t, b, "noaddx:x")
+
+	tx := database.DB.Begin()
+	if tx.Error != nil {
+		t.Fatalf("begin: %v", tx.Error)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+	if err := tx.Exec("SELECT id FROM conversations WHERE id = ? FOR UPDATE", a.room.ID).Error; err != nil {
+		t.Fatalf("hold the conversation lock: %v", err)
+	}
+	answer := make(chan *httptest.ResponseRecorder, 1)
+	go func() { answer <- a.postNote(noteID, b.member.Card, note) }()
+	waitForLockWaiter(t)
+	if err := tx.Where("id = ?", a.room.ID).Delete(&models.Room{}).Error; err != nil {
+		t.Fatalf("burn the room: %v", err)
+	}
+	if err := tx.Where("conversation_id = ?", a.room.ID).Delete(&models.ConversationMember{}).Error; err != nil {
+		t.Fatalf("burn the members: %v", err)
+	}
+	if err := tx.Where("id = ?", a.room.ID).Delete(&models.Conversation{}).Error; err != nil {
+		t.Fatalf("burn the conversation: %v", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatalf("commit the burn: %v", err)
+	}
+	committed = true
+	select {
+	case rr := <-answer:
+		expectAnswer(t, rr, apperr.NotFound, "a note to a room burned before its lock")
+	case <-time.After(lockWaitDeadline):
+		t.Fatal("the note never answered after the burn")
+	}
+	expectRows(t, &models.RoomNote{}, 0, "a note for a burned room")
+}
+
+// A member's room message and note carry, in their header, the card the server stored when it
+// joined, byte for byte: a card sealed afresh for its own key (as a client deriving its card per
+// session does) or one sealed for a key it made up is refused with 400 "Sender card mismatch"
+// and nothing is stored. Before the check both were stored (201), so one code holder could send
+// under any number of identities nobody sees on the roster.
+func TestRooms_SenderCardMustBeTheStoredOne(t *testing.T) {
+	mux := setup(t)
+	a, b := roomOfTwo(t, mux)
+	stored := b.member
+	fresh, err := b.room.Member(b.root) // the same key, its card sealed again under a new nonce
+	if err != nil {
+		t.Fatalf("Member: %v", err)
+	}
+	if fresh.Card == stored.Card || !bytes.Equal(fresh.Public, stored.Public) {
+		t.Fatal("a fresh sealing of bob's card must differ in bytes and open to his key")
+	}
+	invented := sideOf(t, register(t, mux), a.code).member // a key that never joined, under the room's code
+
+	b.member = fresh
+	id := newMessageID()
+	expectAnswer(t, b.post(id, b.sealTo(t, b.roster(t), id, "under a fresh card", 1)), apperr.SenderCardMismatch,
+		"a message under a fresh card of the sender's own key")
+	noteID, note := b.note(t, a, "noaddx:fresh")
+	expectAnswer(t, b.postNote(noteID, a.member.Card, note), apperr.SenderCardMismatch, "a note under a fresh card")
+
+	recipients, digest, err := b.room.Recipients(stored, b.roster(t))
+	if err != nil {
+		t.Fatalf("Recipients: %v", err)
+	}
+	forged, err := b.room.SealMessage(invented, uuid.MustParse(id), recipients, digest, "under an invented key", time.Now().UnixMilli(), 1)
+	if err != nil {
+		t.Fatalf("SealMessage: %v", err)
+	}
+	expectAnswer(t, b.post(id, forged), apperr.SenderCardMismatch, "a message under a card for an invented key")
+	b.member = invented
+	inventedNoteID, inventedNote := b.note(t, a, "noaddx:invented")
+	expectAnswer(t, b.postNote(inventedNoteID, a.member.Card, inventedNote), apperr.SenderCardMismatch,
+		"a note under a card for an invented key")
+	if got := a.read(t); len(got) != 0 {
+		t.Fatalf("a refused message was stored: %+v", got)
+	}
+	if got := a.notes(t); len(got) != 0 {
+		t.Fatalf("a refused note was stored: %+v", got)
+	}
+
+	// The stored card goes through, under the same ids nothing was stored for
+	b.member = stored
+	expectStatus(t, b.post(id, b.sealTo(t, b.roster(t), id, "under the stored card", 1)), http.StatusCreated,
+		"a message under the stored card")
+	storedNote, err := b.room.SealNote(stored, uuid.MustParse(noteID), a.member.Card, "noaddx:stored", time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("SealNote: %v", err)
+	}
+	expectStatus(t, b.postNote(noteID, a.member.Card, storedNote), http.StatusCreated, "a note under the stored card")
+	if got := a.read(t); len(got) != 1 || got[0].text != "under the stored card" || !bytes.Equal(got[0].sender, stored.Public) {
+		t.Fatalf("alice reads %+v", got)
 	}
 }

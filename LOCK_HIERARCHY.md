@@ -15,11 +15,19 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
   `globalRateLimiter.mu`. An upload takes and gives back a part inside its transaction, under
   the conversation row lock, each as one short hold (with the budget's `TokenBucket.mu` inside
   it); nothing else is acquired while it is held
-- `rateLimiterMutex` - PoW per-client limiters map (never held together with `spentMutex`)
+- `rateLimiterMutex` - PoW per-client limiters map (never held together with `spentMutex`).
+  Held only to find, create or choose a limiter (`limiterFor`); the chosen limiter's own lock is
+  taken after it is released. The shared overflow bucket (`overflowLimiter`, serving untracked
+  clients while the map is at its bound) is one more `RateLimiter` with its own per-bucket lock
+  (Priority Level 2), taken the same way
 - `spentMutex` - PoW spent (solved, unexpired) challenges map; leaf lock. Issued challenges are
   no longer stored (S-03)
-- `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map and the per-client (network) stream
-  counts (S-04); leaf lock, channel sends under it never block
+- `realtime.Hub.mu` (`utils.SafeMutex`, 5 s timeout) - SSE subscriber map, the per-client (network) stream
+  counts (S-04) and the revocation generation per kicked stream tag (`kicked`, its floor and
+  sequence: read by `Generation`, compared by `Subscribe`, bumped by `Kick`, at most 4,096
+  entries); leaf lock, channel sends under it never block. `middleware.StreamRevocationMark`
+  takes it for one read before the session check and holds nothing else meanwhile; a `Kick` that
+  cannot take it in time is reported (logout and account deletion answer 503)
 - `pendingStore.mu` - Pending registration map (leaf lock)
 
 ### Priority Level 2 - Per-Resource Locks
@@ -34,7 +42,11 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
 - `users` row locks (`SELECT … FOR UPDATE`, `ChatRepository.LockUsers`): always taken in ascending
   `uuid` order inside one transaction (redeem, burn, index prune, account deletion, room create,
   join and leave) — a global order rules out deadlocks. Account deletion locks only its own row:
-  peers' encrypted indexes drop the vanished conversations at their next listing instead
+  peers' encrypted indexes drop the vanished conversations at their next listing instead. It then
+  ends its conversations in ascending conversation id order (`chat.ascending`), so two deletions,
+  or a deletion and a burn, that share conversations take their `rooms` and `conversations` row
+  locks in one order. A deadlock or serialization failure that still occurs (`40P01`, `40001`)
+  answers 503 "temporarily unavailable" and the client retries
 - `rooms` row lock (`ChatRepository.LockRoom`, and the delete in `DeleteConversation` / retention):
   taken **after** any `users` row lock and **before** the room's conversation row lock. Joins of
   one room are serialised by it (seats, duplicate cards). `DeleteConversation` deletes the `rooms`
@@ -45,13 +57,21 @@ Locks MUST be acquired in the following order (lowest to highest priority) to pr
   (`UploadFilePart`) take it too, so a message is always checked against the roster it is stored
   under, a role is written only for a current member, and a conversation's file quota is counted
   exactly. Never held while acquiring a `users` or `rooms` row lock.
-  `DeleteConversation` takes it (`LockConversation`) right after the `rooms` delete and **before**
-  deleting the children (messages, file parts, memberships, notes) and the conversation row itself,
-  so a sender or uploader holding it finishes first and nothing it stores outlives the delete
+  `DeleteConversation` takes it (`LockConversation`) right after the `rooms` delete (and the room's
+  tombstone, `burned_rooms`) and **before** deleting the memberships, the notes and the
+  conversation row itself and queuing the conversation in `orphaned_conversations`, so a sender or
+  uploader holding it finishes first and whatever it stored is an orphan's row. The messages and
+  file parts are not deleted in the request: retention deletes an orphan's rows in bounded batches,
+  each batch its own transaction holding only the rows it deletes (no conversation row exists any
+  more, so no sender or uploader can wait on it)
+- Retired conversation ids (`burned_rooms`, `orphaned_conversations`): rows written inside
+  `DeleteConversation`'s transaction and read (no lock) by room and conversation creation after
+  their own inserts, so a create that waited on a burn's conversation row sees the burn's rows
 - Stored file parts counter (`chat.storedParts.mu`, `utils.SafeMutex`, 5 s timeout, leaf): held
   for the counter's arithmetic only, never across a statement. An upload takes it while it holds
-  the conversation row lock (to reserve its part); burns, account deletions and retention take it
-  after their transaction. Nothing is acquired while it is held
+  the conversation row lock (to reserve its part); retention takes it after its pass (burns and
+  account deletions remove no part: an orphan's parts are counted until retention deletes them).
+  Nothing is acquired while it is held
 
 Order in one transaction: `invites` → `users` → `rooms` → `conversations`.
 - Master key re-wrapping (`KeyRepository.Rewrap*`): single-row updates outside any transaction,
@@ -138,5 +158,5 @@ rl.mu.Lock()
 
 ---
 
-**Last Updated**: 2026-11-17
+**Last Updated**: 2026-11-18
 **Next Review**: Every sprint or when adding new locks

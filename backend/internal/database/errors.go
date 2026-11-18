@@ -34,6 +34,10 @@ var (
 		"55P03": {}, // lock_not_available: lock_timeout fired
 		"25P03": {}, // idle_in_transaction_session_timeout fired
 		"57014": {}, // query_canceled: statement_timeout fired
+		// Two transactions met in a lock cycle or a serialization conflict: the one cancelled
+		// did nothing wrong and succeeds when retried (a burn racing an account deletion)
+		"40P01": {}, // deadlock_detected
+		"40001": {}, // serialization_failure
 	}
 )
 

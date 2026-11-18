@@ -278,9 +278,11 @@ func TestFiles_QuotaStoreAndTheCounter(t *testing.T) {
 		t.Fatal("a part was stored past the store's bound")
 	}
 
-	// A burn gives its parts back at once
+	// A burn's parts stay stored, and counted, until retention deletes them; then they are given back
 	expectStatus(t, alice.do(http.MethodDelete, models.PathConversations+"/"+first, nil), http.StatusNoContent, "burn the first conversation")
-	expectStatus(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "an upload after the burn")
+	expectAnswer(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), apperr.FileStoreFull, "an upload while the burned parts wait for retention")
+	purgeAt(t, time.Now())
+	expectStatus(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "an upload after retention removed the burned parts")
 
 	// Expired parts are purged by retention, which counts the store again
 	expectStatus(t, alice.uploadPart(third, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "the store full again")
@@ -318,8 +320,9 @@ func TestFiles_ExpiredPartsAreNotServed(t *testing.T) {
 	expectAnswer(t, alice.uploadPart(conv, file, 1, newFilePart(t)), apperr.FilePartOutOfOrder, "continuing a file whose part 0 expired")
 }
 
-// Parts go with their conversation: a burn, a room's expiry and an account deletion remove them;
-// leaving a room keeps the leaver's parts, readable like their messages.
+// Parts go with their conversation: a burn, a room's expiry and an account deletion end access to
+// them at once and retention removes them; leaving a room keeps the leaver's parts, readable like
+// their messages.
 func TestFiles_PartsGoWithTheirConversation(t *testing.T) {
 	mux := filesSetup(t)
 	alice, bob, carol := register(t, mux), register(t, mux), register(t, mux)
@@ -327,8 +330,9 @@ func TestFiles_PartsGoWithTheirConversation(t *testing.T) {
 	burned := pair(t, alice, bob)
 	expectStatus(t, alice.uploadPart(burned, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "a part to burn")
 	expectStatus(t, bob.do(http.MethodDelete, models.PathConversations+"/"+burned, nil), http.StatusNoContent, "bob burns")
+	purgeAt(t, time.Now())
 	if storedParts(t, uuid.MustParse(burned)) != 0 {
-		t.Fatal("parts survived the burn")
+		t.Fatal("parts survived the burn and a retention pass")
 	}
 
 	room := createRoom(t, alice, 4, 24)
@@ -349,6 +353,7 @@ func TestFiles_PartsGoWithTheirConversation(t *testing.T) {
 	deleted := pair(t, carol, alice)
 	expectStatus(t, carol.uploadPart(deleted, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "carol's part")
 	expectStatus(t, carol.do(http.MethodDelete, models.PathMe, models.DeleteAccountRequest{AuthKey: carol.authKey}), http.StatusOK, "carol deletes her account")
+	purgeAt(t, time.Now())
 	if storedParts(t, uuid.MustParse(deleted)) != 0 {
 		t.Fatal("parts survived the account deletion")
 	}
@@ -460,4 +465,44 @@ func TestFiles_DailyBudgetIsPerAccount(t *testing.T) {
 	if n := storedParts(t, uuid.MustParse(withBob)) + storedParts(t, uuid.MustParse(withCarol)); n != 4 {
 		t.Fatalf("%d parts stored, want 4", n)
 	}
+}
+
+// One member holds at most its share of a conversation's quota (the quota over the seat bound,
+// never less than one largest file), so a room member who fills its share leaves the others room;
+// a member who left keeps its parts readable, counted against the total and nobody's share. On
+// the old single conversation-wide count bob took the whole quota and alice was refused.
+func TestFiles_OneMemberCannotHoldTheRoomsQuota(t *testing.T) {
+	mux := filesSetup(t)
+	t.Setenv(config.EnvMaxFileBytes, strconv.Itoa(utils.FilePartBytes))                 // one part per file
+	t.Setenv(config.EnvFileConversationQuotaBytes, strconv.Itoa(8*utils.FilePartBytes)) // 4 seats: a share of 2
+	a, b, c := roomOfThree(t, mux)
+	roomID := a.room.ID.String()
+
+	expectStatus(t, b.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "bob's first file")
+	expectStatus(t, b.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "bob's second file")
+	expectAnswer(t, b.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), apperr.FileShareReached, "bob past his share")
+	expectStatus(t, a.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice uploads while bob holds his share")
+
+	// bob leaves: his two parts stay and count against the total, not against anyone's share
+	expectStatus(t, b.u.do(http.MethodDelete, b.path(""), nil), http.StatusNoContent, "bob leaves")
+	expectStatus(t, c.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "carol's first file")
+	expectStatus(t, c.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "carol's second file")
+	expectStatus(t, a.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice's second file")
+	if n := storedParts(t, a.room.ID); n != 6 {
+		t.Fatalf("the room holds %d parts, want 6 (bob's two kept)", n)
+	}
+
+	// The total still binds: with the quota lowered to the parts stored, a newcomer with an empty
+	// share stores nothing either
+	t.Setenv(config.EnvFileConversationQuotaBytes, strconv.Itoa(6*utils.FilePartBytes))
+	d := joinRoom(t, register(t, mux), a.code)
+	expectAnswer(t, d.u.uploadPart(roomID, uuid.NewString(), 0, newFilePart(t)), apperr.FileQuotaReached, "dave past the room's quota")
+
+	// A one-to-one conversation splits its quota over two seats
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	t.Setenv(config.EnvFileConversationQuotaBytes, strconv.Itoa(2*utils.FilePartBytes))
+	expectStatus(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "alice's file in the pair")
+	expectAnswer(t, alice.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), apperr.FileShareReached, "alice past her half")
+	expectStatus(t, bob.uploadPart(conv, uuid.NewString(), 0, newFilePart(t)), http.StatusCreated, "bob's half is his")
 }

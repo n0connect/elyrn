@@ -42,8 +42,14 @@ func StreamDeadline(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := databaseContext(r)
 		defer cancel()
-		next(w, r.WithContext(context.WithValue(r.Context(), databaseContextKey{}, ctx)))
+		next(w, withDatabaseContext(r, ctx))
 	}
+}
+
+// withDatabaseContext is r carrying ctx as its database context (DatabaseContext), its own
+// context untouched.
+func withDatabaseContext(r *http.Request, ctx context.Context) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), databaseContextKey{}, ctx))
 }
 
 // DatabaseContext is the context a request's database work runs under: the stream's own

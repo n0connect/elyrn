@@ -1,7 +1,9 @@
 package chat
 
 import (
+	"bytes"
 	"errors"
+	"slices"
 	"time"
 
 	"elyrn/internal/auth"
@@ -123,9 +125,9 @@ func (s *Service) pruneIndex(me *Member, stale map[uuid.UUID]struct{}) {
 	}
 }
 
-// BurnConversation deletes a conversation and all its ciphertext for every member,
-// and removes it from every member's encrypted index. In a room only the owner burns;
-// any other member leaves instead.
+// BurnConversation ends a conversation for every member and removes it from every member's
+// encrypted index; its ciphertext becomes unreachable at once and leaves the disk with retention
+// (store.DeleteConversation). In a room only the owner burns; any other member leaves instead.
 func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]string, error) {
 	room, err := s.liveRoom(s.chats, conversationID)
 	if err != nil {
@@ -141,8 +143,6 @@ func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]stri
 		}
 	}
 	var streams []string
-	var parts int64
-	since := s.partsMark()
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
 		if _, err := s.requireMembership(tx, me, conversationID); err != nil {
 			return err
@@ -155,7 +155,7 @@ func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]stri
 		if err != nil {
 			return err
 		}
-		if parts, err = tx.DeleteConversation(conversationID); err != nil {
+		if err := tx.DeleteConversation(conversationID, time.Now()); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return ErrNotFound
 			}
@@ -181,14 +181,15 @@ func (s *Service) BurnConversation(me *Member, conversationID uuid.UUID) ([]stri
 	if err != nil {
 		return nil, err
 	}
-	s.partsRemoved(parts, since)
 	s.logger.Debug("BurnConversation: conversation burned")
 	return streams, nil
 }
 
 // DeleteAccount erases the caller once authKey proves the account: its invites, every
-// conversation it is in (all ciphertext, for both sides; rooms it owns likewise, rooms it
-// joined it only leaves) and the account row. Returns the
+// conversation it is in (ended for both sides, its ciphertext left to retention as a burn's is;
+// rooms it owns likewise, rooms it joined it only leaves) and the account row. Conversations are
+// taken in ascending id order, so two deletions (or a deletion and a burn) sharing conversations
+// take their rows' locks in one order (LOCK_HIERARCHY.md). Returns the
 // peers' live-event addresses. The key is checked against the locked row that is deleted; the
 // lookup is HMAC(pepper, auth key), so a match proves the key without any slow hash.
 // Lock order is RedeemInvite's (invites, then users), so the invites go first; a wrong key
@@ -200,8 +201,6 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 		return nil, err
 	}
 	var streams []string
-	var parts int64
-	since := s.partsMark()
 	err = s.chats.Transaction(func(tx store.ChatRepository) error {
 		if err := tx.DeleteInvites(me.inviteTag); err != nil {
 			return err
@@ -221,7 +220,7 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		for _, id := range ids {
+		for _, id := range ascending(ids) {
 			member, err := s.requireMembership(tx, me, id)
 			if errors.Is(err, ErrNotFound) {
 				continue // the peer burned it already
@@ -232,11 +231,9 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 			if err != nil {
 				return err
 			}
-			removed, err := s.forget(tx, id, member)
-			if err != nil {
+			if err := s.forget(tx, id, member); err != nil {
 				return err
 			}
-			parts += removed
 			streams = append(streams, peers...)
 		}
 		if err := tx.DeleteUser(me.UserUUID); err != nil {
@@ -250,28 +247,33 @@ func (s *Service) DeleteAccount(me *Member, authKey string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.partsRemoved(parts, since)
 	s.logger.Debug("DeleteAccount: account erased")
 	return streams, nil
 }
 
+// ascending is ids in ascending byte order (a copy: the index keeps its own order).
+func ascending(ids []uuid.UUID) []uuid.UUID {
+	sorted := slices.Clone(ids)
+	slices.SortFunc(sorted, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	return sorted
+}
+
 // forget removes one of a deleted account's conversations: a room it joined loses only its
-// membership (taken under the conversation lock, as leaving does; its file parts stay with its
-// messages), anything else is burned. Returns the file parts removed.
-func (s *Service) forget(tx store.ChatRepository, id uuid.UUID, member *models.ConversationMember) (int64, error) {
+// membership (taken under the conversation lock, as leaving does; its messages and file parts
+// stay, readable by the members), anything else is ended as a burn ends it.
+func (s *Service) forget(tx store.ChatRepository, id uuid.UUID, member *models.ConversationMember) error {
 	room, err := tx.FindRoom(id)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return 0, err
+		return err
 	}
 	if room != nil && room.OwnerTag != member.MemberTag {
 		if _, err := tx.LockConversation(id); err != nil {
-			return 0, err
+			return err
 		}
-		return 0, tx.DeleteMember(id, member.MemberTag)
+		return tx.DeleteMember(id, member.MemberTag)
 	}
-	parts, err := tx.DeleteConversation(id)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return 0, err
+	if err := tx.DeleteConversation(id, time.Now()); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
 	}
-	return parts, nil
+	return nil
 }

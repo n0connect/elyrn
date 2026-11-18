@@ -121,11 +121,21 @@ restored pepper commitment instead of pinning a new one:
 
 ```bash
 cp /safe/place/.env .env                     # the .env of the instance that wrote the backup
+# A new JWT_SECRET, always (the same command make setup uses; prints nothing)
+sed -i.bak "s|^JWT_SECRET=.*|JWT_SECRET=$(openssl rand -hex 32)|" .env && rm .env.bak
 make certs                                   # database TLS material (new certificates are fine)
 docker compose up -d postgres                # database only, no backend yet
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < backups/accounts-<time>.sql
 make up
 ```
+
+Replace `JWT_SECRET` before the backend first starts on the restored accounts, as above. The
+restored `users.session_epoch` values are those of the backup, older than the lost database's:
+every logout after the backup bumped an epoch that the restore rewinds, so a session token that
+logout revoked would be valid again under the old secret until it expires
+(`JWT_EXPIRATION_MINUTES`, 30 days by default). A new secret ends every session at once; users
+log in again, and nothing else is affected (the table above). Keep `ACCOUNT_LOOKUP_PEPPER` and
+the master keys exactly as they were: the restored accounts need them.
 
 Users log in with their account numbers as before. Their conversations are gone; the stale
 entries in their encrypted conversation lists are dropped at their first listing.
@@ -169,7 +179,7 @@ Prefer the accounts backup; roll back a full volume only to undo damage to the v
 | `MAX_CONVERSATIONS_PER_USER` or `MESSAGE_TTL_DAYS` lowered | Nothing breaks. | Accounts above the new cap keep their conversations; stored messages are capped at the new retention. | Nothing. |
 | The master key may have leaked | Nothing. | After rotation every record is re-wrapped under the new key in the background. A pass that a database error interrupted, or that left records it could not open, is repeated (after 1 min, doubling up to 1 h) and logs `E_REWRAP_INCOMPLETE` until no record names an old key. | Follow the [rotation runbook](configuration-and-tuning.md#master-key-rotation-runbook); remove the old key only once `E_REWRAP_INCOMPLETE` has stopped. |
 | The database's TLS certificate is about to expire | Nothing yet. | `make certs` and `make up` warn 60 days ahead and renew 30 days ahead. Once expired, the next backend start fails with `E_DB_UNREACHABLE` (`TLS: ... expired`). | Run `make up` at least monthly ([renewal routine](configuration-and-tuning.md#database-tls-make-certs)). |
-| The backend is unhealthy | Requests may fail. | The healthcheck (`/internal/health`, loopback only, every 30 s) answers 503 when the database does not answer `SELECT 1` within 3 s or retention has not cycled for 15 minutes; `docker compose ps` shows `unhealthy`. Docker does not restart an unhealthy container by itself. | `docker compose logs backend`; restart it if it stays unhealthy. |
+| The backend is unhealthy | Requests may fail. | The healthcheck (`/internal/health`, loopback only, every 30 s) answers 503 when the database does not answer `SELECT 1` within 3 s or no retention cycle finished for 15 minutes (a step failing every cycle, such as an unreadable `retention-clock` mark in `key_checks`, counts as not finished; deleting that row lets the next cycle run); `docker compose ps` shows `unhealthy`. Docker does not restart an unhealthy container by itself. | `docker compose logs backend`; restart it if it stays unhealthy. |
 
 ### Sessions and the clock
 

@@ -111,7 +111,7 @@ choosing, pasting and dropping, and save.
 
 | Suite | Count (13 Nov 2026) | How to count |
 |---|---|---|
-| Go test functions | 380 (137 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
+| Go test functions | 404 (150 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
 | Go fuzz targets | 76 | `python3 -I scripts/check-fuzz-targets.py --list \| wc -l` |
 | Frontend tests | 229 in 26 files (18 Nov 2026) | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
 
@@ -119,13 +119,13 @@ choosing, pasting and dropping, and save.
 
 ### Option D: Fuzzing the Parsers
 
-Every module of the server that parses, decodes, validates or classifies attacker-influenced bytes has a fuzz target, and so does every surface of the agent (`elyrn-agent`, its MCP server) that judges bytes it does not control (86 Go targets in all, none needs a database). A target asserts invariants, not only "no panic": whatever is accepted is canonical (re-encoding gives the input back), a mutated or forged blob, token, record or proof of work fails closed, every refusal is a registered `apperr` answer below 500, and state machines (spent proofs, log throttle, event hub) stay within their bounds and agree with a model.
+Every module of the server that parses, decodes, validates or classifies attacker-influenced bytes has a fuzz target, and so does every surface of the agent (`elyrn-agent`, its MCP server) that judges bytes it does not control (87 Go targets in all, none needs a database). A target asserts invariants, not only "no panic": whatever is accepted is canonical (re-encoding gives the input back), a mutated or forged blob, token, record or proof of work fails closed, every refusal is a registered `apperr` answer below 500, and state machines (spent proofs, log throttle, event hub) stay within their bounds and agree with a model.
 
 | Package | Targets |
 |---|---|
 | `internal/agent` | the nine targets below |
 | `internal/apperr` | `FuzzWriteError`, `FuzzWriteCode`, `FuzzEdgeBody` |
-| `internal/chat` | `FuzzParseRoomInput`, `FuzzRosterDigestMatchesClient`, `FuzzMessageWindow`, `FuzzClockTrusted` |
+| `internal/chat` | `FuzzParseRoomInput`, `FuzzRosterDigestMatchesClient`, `FuzzMessageWindow`, `FuzzClockTrusted`, `FuzzPartCounter`, `FuzzFileShareParts` |
 | `internal/contract` | `FuzzGateRequest`, `FuzzGateLoginBody`, `FuzzPattern*` (12), `FuzzIntegerLiteral` |
 | `internal/database` | `FuzzClassify` |
 | `internal/e2e` | `FuzzDecrypt`, `FuzzDecryptBindings`, `FuzzParseRoomCode`, `FuzzRoomCodeBuild`, `FuzzOpenRoomMessage`, `FuzzMutateRoomMessage`, `FuzzOpenRoomNote`, `FuzzOpenRoomCard`, `FuzzOpenRoomVault`, `FuzzRosterDigest`, `FuzzAura`, `FuzzRoomSafetyNumber` |

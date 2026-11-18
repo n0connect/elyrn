@@ -110,7 +110,9 @@ const (
 	// SchemaVersion is the schema this binary migrates to. Raise it with every change to the
 	// models that a previous binary must not run against. 2: file_parts (a binary that does not
 	// know the table would never purge it), conversation_members.role, and users.account_hash
-	// dropped (a binary that still writes it would fail every registration).
+	// dropped (a binary that still writes it would fail every registration). Within one version a
+	// change is additive only (idx_file_parts_uploader, burned_rooms, orphaned_conversations; this
+	// round is unreleased, so no released binary of the version lacks them).
 	SchemaVersion     = 2
 	schemaVersionName = "schema-version"
 	// droppedAccountHashColumn: the Argon2id hash of the auth key that registration used to store
@@ -143,7 +145,8 @@ func Migrate(db *gorm.DB) *opcode.Failure {
 			return errSchemaNewer
 		}
 		if err := tx.AutoMigrate(&models.User{}, &models.Invite{}, &models.Conversation{}, &models.ConversationMember{},
-			&models.Message{}, &models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}); err != nil {
+			&models.Message{}, &models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{},
+			&models.BurnedRoom{}, &models.OrphanedConversation{}); err != nil {
 			return err
 		}
 		// Idempotent, so a database restored from an older backup is migrated the same way

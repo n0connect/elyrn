@@ -38,7 +38,7 @@ func TestDatabaseMigration(t *testing.T) {
 	}
 
 	for _, table := range []interface{}{&models.Invite{}, &models.Conversation{}, &models.ConversationMember{}, &models.Message{},
-		&models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}} {
+		&models.KeyCheck{}, &models.Room{}, &models.RoomNote{}, &models.FilePart{}, &models.BurnedRoom{}, &models.OrphanedConversation{}} {
 		if !database.DB.Migrator().HasTable(table) {
 			t.Errorf("%T table should exist after migration", table)
 		}
@@ -158,6 +158,12 @@ func TestUserTableIndexes(t *testing.T) {
 	}
 	if !database.DB.Migrator().HasIndex(&models.Invite{}, "idx_invites_lookup") {
 		t.Error("invites table should have unique index 'idx_invites_lookup'")
+	}
+	// The per-member file share count of every upload, and the retention purge of parts
+	for _, index := range []string{"idx_file_parts_uploader", "idx_file_parts_expires_on"} {
+		if !database.DB.Migrator().HasIndex(&models.FilePart{}, index) {
+			t.Errorf("file_parts table should have index %q", index)
+		}
 	}
 }
 

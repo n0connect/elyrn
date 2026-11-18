@@ -82,3 +82,6 @@ services:
       # contract.DocPath resolves to /docs/api from /app/internal/contract; .dockerignore keeps
       # *.md out of the image, so the generated document is mounted for TestDocMatchesTable
       - ./docs/api:/docs/api:ro
+      # tests/middleware compares the backend's TRUSTED_PROXIES bounds with nginx's renderer:
+      # ../../../nginx-edge-proxies.sh from /app/tests/middleware is /nginx-edge-proxies.sh
+      - ./nginx-edge-proxies.sh:/nginx-edge-proxies.sh:ro

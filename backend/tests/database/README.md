@@ -27,7 +27,7 @@ runs the same tests in Docker against a disposable tmpfs database.
 | Session bounds | `TestConnection_BoundsLockWaitsAndIdleTransactions`: `lock_timeout` 5 s, `idle_in_transaction_session_timeout` 30 s |
 | Schema version (`lifecycle_test.go`) | `TestMigrate_RefusesASchemaNewerThanThisBinary` (`E_SCHEMA_NEWER`, the stamp stays), `TestMigrate_StampsAnUnversionedDatabase`, `TestMigrate_ConcurrentStartsSerialise` |
 | Single-instance lock | `TestInstanceLock_SecondHolderIsRefused` (`E_SECOND_INSTANCE`), `TestInstanceLock_LostConnectionIsReported` (`E_INSTANCE_LOCK_LOST`), `TestInstanceLock_AnUnansweringDatabaseKeepsTheLock` |
-| Startup validation (`config_validation_test.go`) | `TestValidateStartupConfig_RejectsOutOfRangeValues`, `TestValidateStartupConfig_ProductionFloors`, `TestConnectionURL_EscapesCredentials`, `TestStartupRefusal_CodedNamedAndValueFree`, `TestStartupRefusal_ListEntriesByPosition`, `TestLogError_ReducesDriverErrorsToTheirClass` |
+| Startup validation (`config_validation_test.go`) | `TestValidateStartupConfig_RejectsOutOfRangeValues`, `TestValidateStartupConfig_ProductionFloors`, `TestValidateStartupConfig_PublicOriginNeedsProduction`, `TestConnectionURL_EscapesCredentials`, `TestStartupRefusal_CodedNamedAndValueFree`, `TestStartupRefusal_ListEntriesByPosition`, `TestLogError_ReducesDriverErrorsToTheirClass` |
 | Fuzz (`fuzz_test.go`) | `FuzzValidateStartupConfig` |
 
 ## Infrastructure

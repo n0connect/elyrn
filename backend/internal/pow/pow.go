@@ -33,10 +33,19 @@ const (
 	// maxCleanupCycles bounds the cleanup loop (RULES.md §8.1); one per minute outlives any deployment
 	maxCleanupCycles = 1 << 26
 	// maxSpentChallenges bounds solved, unexpired challenges kept for single use (~150 bytes
-	// each). Every entry cost its sender a full proof of work. maxTrackedClients bounds
-	// per-client limiters. Past either cap the server fails closed (ErrCapacity, 503).
+	// each). Every entry cost its sender a full proof of work; past it validation fails closed
+	// (ErrCapacity, 503).
 	maxSpentChallenges = 50000
-	maxTrackedClients  = 50000
+	// maxTrackedClients bounds per-client limiters. Past it, clients not in the table share one
+	// bucket (overflowChallengesPerWindow) instead of being refused, so a table held full by
+	// many distinct client keys (Tor circuits, the /64s of one IPv6 prefix) costs new clients a
+	// shared budget, not every challenge; tracked clients keep their own.
+	maxTrackedClients = 50000
+	// overflowChallengesPerWindow is the shared bucket's rate per challengeWindow: a hundred
+	// clients' worth of challenges. Issuing costs the server one MAC and stores nothing, so the
+	// rate bounds only how many registrations, invites and rooms the untracked population can
+	// start per minute while the table is full; each one still pays its own proof of work.
+	overflowChallengesPerWindow = 100 * challengesPerWindow
 )
 
 var (
@@ -53,7 +62,7 @@ type RateLimiter struct {
 	maxTokens      int
 	refillTime     time.Time
 	refillInterval time.Duration
-	lastAccess     time.Time // For cleanup tracking
+	lastAccess     time.Time // the last admitted request: cleanup's idle clock
 	mutex          sync.Mutex
 }
 
@@ -68,13 +77,16 @@ func NewRateLimiter(maxTokens int, refillInterval time.Duration) *RateLimiter {
 	}
 }
 
+// Allow takes one token. Only an admitted request refreshes lastAccess: a refused one does not,
+// so a client hammering its spent budget is not kept in the table by its refusals. Evicting such
+// a limiter loses nothing: refillTime is at most one interval after the last admitted request (a
+// refill is always followed by the take it admits), so a limiter idle for longer than
+// limiterIdleTimeout has refilled.
 func (rl *RateLimiter) Allow() bool {
 	rl.mutex.Lock()
 	defer rl.mutex.Unlock()
 
 	now := time.Now()
-	rl.lastAccess = now
-
 	// Refill tokens if necessary
 	if now.After(rl.refillTime) {
 		rl.tokens = rl.maxTokens
@@ -86,6 +98,7 @@ func (rl *RateLimiter) Allow() bool {
 	}
 
 	rl.tokens--
+	rl.lastAccess = now
 	return true
 }
 
@@ -99,6 +112,9 @@ var (
 	// Rate limiter for challenge requests per client key
 	challengeRateLimiters = make(map[string]*RateLimiter)
 	rateLimiterMutex      = sync.RWMutex{}
+	// overflowLimiter serves every client not in challengeRateLimiters while the table is at
+	// maxTrackedClients. Its mutex is a per-bucket lock, taken with rateLimiterMutex released.
+	overflowLimiter = NewRateLimiter(overflowChallengesPerWindow, challengeWindow)
 )
 
 // GenerateChallenge issues a proof of work challenge without storing it: the salt
@@ -119,31 +135,33 @@ func GenerateChallenge(clientKey string) (*models.PoWChallenge, error) {
 }
 
 // admitClient charges one challenge to clientKey's limiter, creating it within the
-// tracked-client bound.
+// tracked-client bound; past the bound an untracked client is charged to the shared
+// overflowLimiter. The table is not swept here: a sweep is a pass over every entry under the
+// write lock, which one request per untracked key would repeat at the bound. RunCleanup sweeps
+// it once a minute, and the shared bucket serves new clients meanwhile.
 func admitClient(clientKey string) error {
-	rateLimiterMutex.Lock()
-	limiter, exists := challengeRateLimiters[clientKey]
-	if !exists {
-		if len(challengeRateLimiters) >= maxTrackedClients {
-			rateLimiterMutex.Unlock()
-			cleanupInactiveRateLimiters(time.Now())
-			rateLimiterMutex.Lock()
-		}
-		if len(challengeRateLimiters) >= maxTrackedClients {
-			rateLimiterMutex.Unlock()
-			powLogger.Warn("Challenge issuer at client capacity")
-			return ErrCapacity
-		}
-		limiter = NewRateLimiter(challengesPerWindow, challengeWindow)
-		challengeRateLimiters[clientKey] = limiter
-	}
-	rateLimiterMutex.Unlock()
-
-	if !limiter.Allow() {
+	if !limiterFor(clientKey).Allow() {
 		powLogger.Warn("Challenge rate limit exceeded")
 		return ErrRateLimited
 	}
 	return nil
+}
+
+// limiterFor returns clientKey's own limiter, creating it below maxTrackedClients, or the shared
+// overflowLimiter when the table is full and clientKey is not in it.
+func limiterFor(clientKey string) *RateLimiter {
+	rateLimiterMutex.Lock()
+	defer rateLimiterMutex.Unlock()
+	if limiter, exists := challengeRateLimiters[clientKey]; exists {
+		return limiter
+	}
+	if len(challengeRateLimiters) >= maxTrackedClients {
+		powLogger.Warn("Challenge issuer at client capacity: serving from the shared bucket")
+		return overflowLimiter
+	}
+	limiter := NewRateLimiter(challengesPerWindow, challengeWindow)
+	challengeRateLimiters[clientKey] = limiter
+	return limiter
 }
 
 // newChallenge draws a fresh challenge issued at now and seals its fields into the salt.

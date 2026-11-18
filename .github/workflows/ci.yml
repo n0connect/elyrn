@@ -83,6 +83,7 @@ jobs:
           fuzz ./internal/apperr FuzzWriteCode
           fuzz ./internal/apperr FuzzWriteError
           fuzz ./internal/chat FuzzClockTrusted
+          fuzz ./internal/chat FuzzFileShareParts
           fuzz ./internal/chat FuzzMessageWindow
           fuzz ./internal/chat FuzzParseRoomInput
           fuzz ./internal/chat FuzzPartCounter

@@ -67,8 +67,9 @@ var knownLevels = map[utils.LogLevel]struct{}{
 }
 
 // jsonWire pins login's failure answers to the exact (status, body) LoginHandler wrote before
-// they moved into the registry, a send's "id taken" 409, and the role and file answers that share
-// a status with another answer of their route (in JSON so the browser can read them);
+// they moved into the registry, a send's "id taken" 409, and the role, sender card and file
+// answers that share a status with another answer of their route (in JSON so the browser can read
+// them);
 // frontend/js/errors.js fromApi maps these messages.
 var jsonWire = map[Code]struct {
 	status int
@@ -81,8 +82,10 @@ var jsonWire = map[Code]struct {
 	LoginLegacyAccount: {401, `{"success":false,"message":"Invalid credentials"}`},
 	IDTaken:            {409, `{"success":false,"message":"Id taken"}`},
 	RoleNotAllowed:     {403, `{"success":false,"message":"Role not allowed"}`},
+	SenderCardMismatch: {400, `{"success":false,"message":"Sender card mismatch"}`},
 	FilePartOutOfOrder: {409, `{"success":false,"message":"File part out of order"}`},
 	FileQuotaReached:   {507, `{"success":false,"message":"File quota reached"}`},
+	FileShareReached:   {507, `{"success":false,"message":"File share reached"}`},
 	FileStoreFull:      {507, `{"success":false,"message":"File store full"}`},
 	FileBudgetSpent:    {429, `{"success":false,"message":"File budget spent"}`},
 }
@@ -237,8 +240,10 @@ func TestSentinelsMapped(t *testing.T) {
 		chat.ErrIdentityUnset:      IdentityUnset,
 		chat.ErrForbidden:          Forbidden,
 		chat.ErrRoleNotAllowed:     RoleNotAllowed,
+		chat.ErrSenderCardMismatch: SenderCardMismatch,
 		chat.ErrFilePartOutOfOrder: FilePartOutOfOrder,
 		chat.ErrFileQuotaReached:   FileQuotaReached,
+		chat.ErrFileShareReached:   FileShareReached,
 		chat.ErrFileStoreFull:      FileStoreFull,
 		chat.ErrFileBudgetSpent:    FileBudgetSpent,
 		auth.ErrPendingStoreFull:   PendingStoreFull,
