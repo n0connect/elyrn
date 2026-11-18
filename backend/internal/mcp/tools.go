@@ -248,7 +248,8 @@ func beforeArg(before *int64) (*int64, error) {
 	return before, nil
 }
 
-// codeArg whitelists the shape of a room code; the agent parses it exactly.
+// codeArg checks a room code by the agent's own rule (agent.ValidateRoomCode: it parses exactly
+// and has not expired), so a code the agent would refuse never reaches it.
 func codeArg(code *string) (string, error) {
 	if code == nil {
 		return "", badArgument()
@@ -257,12 +258,10 @@ func codeArg(code *string) (string, error) {
 	if len(value) == 0 || len(value) > maxRoomCodeChars {
 		return "", badArgument()
 	}
-	for _, prefix := range []string{e2e.RoomCodePrefix, e2e.LegacyRoomCodePrefix} {
-		if body, ok := strings.CutPrefix(value, prefix); ok && utils.IsBase64URL(body) {
-			return value, nil
-		}
+	if err := agent.ValidateRoomCode(value); err != nil {
+		return "", err
 	}
-	return "", agent.Fail(agent.CodeRoomCode, nil)
+	return value, nil
 }
 
 // roleArg checks a role against the role rule; the result is what will be sealed (NFC).

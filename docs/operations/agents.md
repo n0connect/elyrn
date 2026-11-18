@@ -212,7 +212,7 @@ attempts; a harder challenge, or one not solved within those bounds, fails with 
 Each sent message carries a per-sender counter that receivers use to detect withheld, replayed
 or reordered messages. The agent keeps its counters in `agent.counters.json` beside the identity
 file (same permissions): per room, its own last counter, written **before** each message is sent,
-and each sender's last counter with the highest `seq` read. A record names at most 256 senders: once full, a new sender that is neither this agent nor on the room's current member list is not recorded (its messages carry `unrecorded: true`, and `E_AGENT_SENDER_UNRECORDED` is logged), while a new member always is and takes the place of the off-list sender recorded longest ago. Its next counter is the higher of the
+and each sender's last counter with the highest `seq` read. A record names at most 256 senders: once full, a new sender that is neither this agent nor on the room's current member list is not recorded (its messages carry `unrecorded: true`, and `E_AGENT_SENDER_UNRECORDED` is logged), while a new member always is and takes the place of the off-list sender recorded most recently, which is then marked `unrecorded: true` (a long-held entry is a real former member; a flood of made-up keys is recorded later). One read tracks its senders under the same rule: this agent and the current member list always, and a sender that is neither, arriving once 256 are tracked, is reported `unrecorded: true`. Its next counter is the higher of the
 remembered one and the one rebuilt from the visible history plus one, so neither a restart nor
 expired messages make it repeat one (browsers would hide a repeat as a replay). Before its first
 `room_send` in a room, each run reads that room's whole visible history once (up to 64 pages),
@@ -245,7 +245,7 @@ nothing about it. If it is missing for an existing identity (first run of this r
 identity created before it, or a lost file) the agent logs `E_AGENT_STATE_REBUILT` once, writes
 it again at once and rebuilds from the visible messages; if it cannot be read, the agent logs the
 same code at every start until the file is readable again. If
-it is present but malformed, the agent refuses to start with `E_AGENT_STATE_FILE`: restore it
+it is present but malformed (keys are read exactly as written, in valid UTF-8), the agent refuses to start with `E_AGENT_STATE_FILE`: restore it
 from a backup, or move it away to rebuild.
 
 ---
@@ -457,7 +457,7 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_ROLE_IGNORED` | A member's role did not open under the room's code or broke the role rule, so that member is shown without a role; nothing to do unless it repeats. |
 | `E_AGENT_ROLE_MEMBER_DISPUTED` | More than one seat of this room claims that member's identity, so no role can be set for it (it could land on the seat of whoever copied the identity); compare the room safety number with the members on another channel. |
 | `E_AGENT_SENDER_CARD_MISMATCH` | The server refused the message because its sender card is not the card the server stores for this agent's seat, so it was not sent. The next send reads the member list again and uses the stored card: send it again, and update elyrn-agent if this repeats (a release older than the server's sends a card of its own). |
-| `E_AGENT_SENDER_UNRECORDED` | A sender outside the current member list arrived while this room's counter record was full, so it is not recorded: replay protection is not kept for it on this agent (its messages carry unrecorded: true); nothing to do unless this repeats. |
+| `E_AGENT_SENDER_UNRECORDED` | A sender outside the current member list arrived while this room's counter record was full, or gave its place there to a member, so it is not recorded: replay protection is not kept for it on this agent (its messages carry unrecorded: true); nothing to do unless this repeats. |
 | `E_AGENT_SEAT_DISPUTED` | Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat. |
 | `E_AGENT_OWN_SEAT_DISPUTED` | Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room. |
 | `E_AGENT_INTERNAL` | An internal error occurred in the agent; retry, and report it if it persists. |

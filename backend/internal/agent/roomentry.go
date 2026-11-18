@@ -86,20 +86,42 @@ func (a *Agent) settleLost(ctx context.Context, keys *e2e.Room, lost error) (*ro
 	return nil, lost
 }
 
+// parseRoomCode is the one room code rule of room_join: the code parses exactly (CodeRoomCode)
+// and has not expired (CodeRoomExpired). The caller zeroes the returned code's secret.
+func parseRoomCode(codeText string) (*e2e.RoomCode, error) {
+	code, err := e2e.ParseRoomCode(strings.TrimSpace(codeText))
+	if err != nil {
+		return nil, fail(CodeRoomCode, err)
+	}
+	if code.ExpiresAt() <= time.Now().Unix() {
+		zeroBytes(code.Secret)
+		return nil, fail(CodeRoomExpired, nil)
+	}
+	return code, nil
+}
+
+// ValidateRoomCode judges a room code by parseRoomCode's rule without keeping it: the room_join
+// tool refuses a code before it reaches the agent at all.
+func ValidateRoomCode(codeText string) error {
+	code, err := parseRoomCode(codeText)
+	if err != nil {
+		return err
+	}
+	zeroBytes(code.Secret)
+	return nil
+}
+
 // JoinRoom takes a seat in the room a code opens.
 func (a *Agent) JoinRoom(ctx context.Context, codeText string) (*RoomJoined, error) {
 	var result *RoomJoined
 	err := a.serialized(func() error {
 		// The code is judged before anything is spent: a malformed or expired code never
 		// creates the account (two proofs of work) or opens a session
-		code, err := e2e.ParseRoomCode(strings.TrimSpace(codeText))
+		code, err := parseRoomCode(codeText)
 		if err != nil {
-			return fail(CodeRoomCode, err)
+			return err
 		}
 		defer zeroBytes(code.Secret)
-		if code.ExpiresAt() <= time.Now().Unix() {
-			return fail(CodeRoomExpired, nil)
-		}
 		if err := a.ensureSession(ctx); err != nil {
 			return err
 		}

@@ -227,7 +227,7 @@ func (h *pageHarness) forward(items []servedItem, after int64) {
 	st := h.st
 	recordSeq := st.counters.Seq
 	accepted := h.accepted(items, after, 0)
-	l := newLedger(st.counters)
+	l := st.forwardLedger()
 	got := st.openPage(h.dtos(items), st.forwardWindow(after, l))
 	st.settle(l, got.last)
 	h.check(got, accepted, func(e poolEntry, seq int64) {
@@ -427,7 +427,7 @@ func FuzzOpenServedMessage(f *testing.F) {
 		e := fx.pool[index]
 		st := fx.state()
 		got := st.openPage([]models.MessageDTO{{ID: e.id.String(), Seq: 1, Mine: mine, Ciphertext: ciphertext}},
-			st.forwardWindow(0, newLedger(st.counters)))
+			st.forwardWindow(0, st.forwardLedger()))
 		if len(got.replays) != 0 {
 			t.Fatal("the first message of a fresh room was judged a replay")
 		}

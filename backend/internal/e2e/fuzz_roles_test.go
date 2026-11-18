@@ -16,7 +16,7 @@ import (
 // '-' and '_' only, not reserved, and accepted again unchanged; NFC-equal inputs get one answer.
 func FuzzRoleText(f *testing.F) {
 	for _, seed := range []string{"", "komutan", goRoleText, "über", "owner", "OwNeR", "you", "ｏｗｎｅｒ", "ＹＯＵ", "ｌｉｄｅｒ", "a b", "#x",
-		strings.Repeat("𝒜", RoleMaxChars), strings.Repeat("a", RoleMaxChars+1), "\xff", "swap‮me", "ﬁ", "Ⅻ", "K"} {
+		strings.Repeat("𝒜", RoleMaxChars), strings.Repeat("a", RoleMaxChars+1), "\xff", "swap\u202eme", "ﬁ", "Ⅻ", "K"} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, text string) {

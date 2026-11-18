@@ -92,7 +92,12 @@ This is the design of record. Decisions are dated and final unless the owner rev
   and unreadable to the agent. Known limits, Go being the stricter side: a number written with a
   fraction or an exponent (`1.0`, `1e3`) is refused although `JSON.parse` reads a whole number from
   it, and a lone surrogate escape in a message's text is refused although the browser would show
-  the text with a broken character.
+  the text with a broken character. The agent's own counter file (`agent.counters.json`) is held
+  to the same rule (`state.go` `exactKeys`, through `e2e.ExactObject`): valid UTF-8, no lone
+  surrogate escape, every key byte for byte (`"VERSION"` or `"ſeq"` no longer pass as
+  `version`, `seq`), before `encoding/json` fills the record; anything else fails closed with
+  `E_AGENT_STATE_FILE`. An empty `"order"` in a record without senders loads as none, as it
+  is written.
 
 - **D13. A key under two seats is disputed** (audit A2,
   `room-roster/duplicate-member-key-card-shadows-member`). A card proves the room code, not the key
@@ -134,10 +139,20 @@ This is the design of record. Decisions are dated and final unless the owner rev
   new sender that is neither the agent itself nor on the room's current member list is not
   recorded: its messages say `unrecorded: true` (replay protection is not kept for it on this
   agent) and `E_AGENT_SENDER_UNRECORDED` is logged. A new member of the current list is always
-  recorded and displaces the off-list entry recorded longest ago; the agent's own entry and the
-  list's are never displaced. The record keeps the order senders were first recorded in
+  recorded: a new kept sender displaces the off-roster entry recorded most recently; the
+  displaced sender is marked unrecorded (a long-held entry is a real former member, a flood of
+  made-up keys is recorded later; the direction `counters.js` `trim` takes). The agent's own entry
+  and the list's are never displaced. The record keeps the order senders were first recorded in
   (`"order"` in `agent.counters.json`; a record written before it has none and is read in key
-  order). Remaining differences from the browser: the bound (256 against 4096), and a record above
+  order). One loaded sequence (a read, a counter sync, or a history page, which never changes the record) tracks its senders under the same keep
+  set: the agent itself and the current list are always tracked, so a flood of made-up senders
+  early in a sequence never stops a member from being judged; a sender that is neither and
+  arrives once 256 are tracked is not, and is reported like a refused one (`unrecorded: true`,
+  `E_AGENT_SENDER_UNRECORDED`). The agent remembers at most 4096 unrecorded senders per room for
+  the process; a bound only makes the answer more conservative: once a refused sender finds that
+  set full, every sender that is neither kept nor in the record is marked `unrecorded: true` for
+  the rest of the process (the senders that could not be noted are forgotten, so the mark never
+  clears). Remaining differences from the browser: the bound (256 against 4096), and a record above
   the bound fails the file closed (`E_AGENT_STATE_FILE`) where the browser trims it, since no agent
   ever writes one.
 

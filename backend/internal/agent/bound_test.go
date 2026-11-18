@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"slices"
 	"testing"
 
 	"elyrn/internal/cryptoengine"
@@ -9,9 +10,20 @@ import (
 
 // THE SENDER BOUND, as counters.js bound: at the bound a new sender off the current roster is not
 // recorded (its messages say unrecorded), a new roster member always is and displaces the
-// off-roster entry recorded longest ago, and this agent's own entry and the roster's are never
-// displaced. The old rule recorded nobody new at the bound, roster members included, and said
+// off-roster entry recorded most recently (marked unrecorded), and this agent's own entry and the
+// roster's are never displaced. The old rule recorded nobody new at the bound, roster members included, and said
 // nothing.
+
+// madeUpSender is a sender key of nobody's: what a member sending under keys of its own making
+// shows.
+func madeUpSender(t *testing.T) string {
+	t.Helper()
+	key, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
+	if err != nil {
+		t.Fatalf("RandomBytes: %v", err)
+	}
+	return senderKey(key)
+}
 
 // fullRecord fills st's record to the bound: this agent's own key first, then made-up senders.
 func fullRecord(t *testing.T, st *roomState) []string {
@@ -20,12 +32,8 @@ func fullRecord(t *testing.T, st *roomState) []string {
 	st.counters.recordSender(own, 1, st.keptSender)
 	var madeUp []string
 	for len(st.counters.Senders) < maxTrackedSenders {
-		key, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
-		if err != nil {
-			t.Fatalf("RandomBytes: %v", err)
-		}
-		sender := senderKey(key)
-		if st.counters.recordSender(sender, 1, st.keptSender) {
+		sender := madeUpSender(t)
+		if recorded, _ := st.counters.recordSender(sender, 1, st.keptSender); recorded {
 			madeUp = append(madeUp, sender)
 		}
 	}
@@ -44,7 +52,7 @@ func TestSenderBound_KeepsTheRosterRefusesMadeUpSenders(t *testing.T) {
 		fx.sealFrom(t, fx.members[2], everyone, 1, 1, "off the roster"),
 		fx.sealFrom(t, fx.members[1], everyone, 2, 1, "on the roster"),
 	}
-	l := newLedger(st.counters)
+	l := st.forwardLedger()
 	got := st.openPage(page, st.forwardWindow(0, l))
 	st.settle(l, got.last)
 	result := newReadResult(st, got.messages, got.gaps, got.replays, got.last)
@@ -56,8 +64,15 @@ func TestSenderBound_KeepsTheRosterRefusesMadeUpSenders(t *testing.T) {
 	if _, recorded := st.counters.Senders[on]; !recorded {
 		t.Fatal("a new roster member was not recorded in a full record")
 	}
-	if _, kept := st.counters.Senders[madeUp[0]]; kept {
-		t.Fatal("the off-roster entry recorded longest ago was not the one displaced")
+	newest := madeUp[len(madeUp)-1]
+	if _, kept := st.counters.Senders[newest]; kept {
+		t.Fatal("the off-roster entry recorded most recently was not the one displaced")
+	}
+	if _, kept := st.counters.Senders[madeUp[0]]; !kept {
+		t.Fatal("the off-roster entry recorded longest ago was displaced")
+	}
+	if _, marked := st.unrecorded[newest]; !marked {
+		t.Fatal("the displaced sender is not marked unrecorded")
 	}
 	if _, kept := st.counters.Senders[senderKey(st.member.Public)]; !kept || len(st.counters.Senders) != maxTrackedSenders {
 		t.Fatalf("this agent's own entry gave way, or the bound moved: %d senders", len(st.counters.Senders))
@@ -80,14 +95,116 @@ func TestSenderBound_NeverDisplacesAKeptSender(t *testing.T) {
 	}
 	kept := func(string) bool { return true }
 	for len(st.counters.Senders) < maxTrackedSenders {
-		key, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
-		if err != nil {
-			t.Fatalf("RandomBytes: %v", err)
-		}
-		st.counters.recordSender(senderKey(key), 1, kept)
+		st.counters.recordSender(madeUpSender(t), 1, kept)
 	}
 	before := len(st.counters.Senders)
-	if !st.counters.recordSender(senderKey(fx.members[1].Public), 1, kept) || len(st.counters.Senders) != before+1 {
+	if recorded, displaced := st.counters.recordSender(senderKey(fx.members[1].Public), 1, kept); !recorded || displaced != "" ||
+		len(st.counters.Senders) != before+1 {
 		t.Fatal("a kept sender was refused, or displaced another kept one")
+	}
+}
+
+// A flood of made-up senders early in one loaded sequence must not stop a roster member from being
+// tracked: rule 1 still applies to it and its record is raised, while a made-up sender arriving at
+// the bound is reported with the refused senders, once. Before, the run refused every new sender
+// at the bound, roster members included, and said nothing.
+func TestSenderBound_AFloodNeverUntracksARosterMember(t *testing.T) {
+	fx := newRoomFixture(t)
+	st := seatedState(fx)
+	if err := st.verifyMembers(fx.honestRows()); err != nil {
+		t.Fatalf("verifyMembers: %v", err)
+	}
+	l := st.forwardLedger()
+	for range maxTrackedSenders {
+		l.admit(madeUpSender(t), 1)
+	}
+	member, late := senderKey(fx.members[1].Public), madeUpSender(t)
+	l.admit(member, 5)
+	l.admit(late, 1)
+	l.admit(late, 2)
+	seq := int64(maxTrackedSenders + 3)
+	if !l.judge(member, 5, seq).replay {
+		t.Fatal("rule 1 did not apply to a roster member that arrived after the flood")
+	}
+	_, refused := l.snapshot(st.counters, seq)
+	if st.counters.Senders[member] != 5 {
+		t.Fatalf("the roster member's record is %d, want 5", st.counters.Senders[member])
+	}
+	if slices.Contains(refused, member) {
+		t.Fatal("the roster member was refused")
+	}
+	if n := len(slices.DeleteFunc(slices.Clone(refused), func(key string) bool { return key != late })); n != 1 {
+		t.Fatalf("the made-up sender the run did not track is reported %d times, want once", n)
+	}
+}
+
+// The bounded unrecorded set never fails open: once a refused sender finds it full, every sender
+// neither kept nor recorded is marked unrecorded, for the life of the room's state, even once the
+// record takes some of the set and leaves it room again (the dropped keys are forgotten). Before,
+// the dropped sender's messages showed as recorded.
+func TestSenderBound_AFullUnrecordedSetFailsClosed(t *testing.T) {
+	fx := newRoomFixture(t)
+	st := seatedState(fx)
+	if err := st.verifyMembers(fx.honestRows()[:2]); err != nil { // member 2 is off the roster
+		t.Fatalf("verifyMembers: %v", err)
+	}
+	var noted []string
+	for range maxUnrecordedSenders {
+		noted = append(noted, madeUpSender(t))
+	}
+	st.noteUnrecorded(noted)
+	dropped := madeUpSender(t)
+	st.noteUnrecorded([]string{dropped})
+	if _, kept := st.unrecorded[dropped]; kept || !st.unrecordedSender(dropped) {
+		t.Fatal("a sender the full set could not note shows as recorded")
+	}
+	member := senderKey(fx.members[1].Public)
+	if st.unrecordedSender(member) || st.unrecordedSender(senderKey(st.member.Public)) {
+		t.Fatal("a kept sender is marked unrecorded")
+	}
+	everyone := []string{fx.members[0].Card, fx.members[1].Card, fx.members[2].Card}
+	page := []models.MessageDTO{fx.sealFrom(t, fx.members[2], everyone, 1, 1, "off the roster, never recorded")}
+	got := st.openPage(page, st.forwardWindow(0, st.forwardLedger()))
+	result := newReadResult(st, got.messages, got.gaps, got.replays, got.last)
+	if len(result.Messages) != 1 || !result.Messages[0].Unrecorded {
+		t.Fatalf("a sender neither kept nor recorded, while the set was full: %+v", result.Messages)
+	}
+	st.counters.Senders[noted[0]] = 1 // the record took one: the set has room again
+	st.noteUnrecorded(nil)
+	if len(st.unrecorded) >= maxUnrecordedSenders || !st.unrecordedSender(dropped) {
+		t.Fatal("the overflow mark was cleared once the set had room: the dropped sender shows as recorded")
+	}
+}
+
+// An earlier page judged on its own ledger keeps the bound's rule too: a made-up sender the page's
+// run did not track (the page holds more made-up senders than the bound) has its message marked
+// unrecorded, a roster member's never is, and the record is left as it was. Before, a history
+// ledger reported nothing, so that message showed as recorded.
+func TestSenderBound_AHistoryPageReportsItsUntrackedSenders(t *testing.T) {
+	fx := newRoomFixture(t)
+	st := seatedState(fx)
+	if err := st.verifyMembers(fx.honestRows()); err != nil {
+		t.Fatalf("verifyMembers: %v", err)
+	}
+	page := make([]models.MessageDTO, 0, maxTrackedSenders+2)
+	for range maxTrackedSenders + 1 {
+		from := fx.madeUpMember(t)
+		page = append(page, fx.sealFrom(t, from, []string{fx.members[0].Card, from.Card}, int64(len(page)+1), 1, "made up"))
+	}
+	page = append(page, fx.sealFrom(t, fx.members[1], []string{fx.members[0].Card, fx.members[1].Card}, int64(len(page)+1), 1, "member"))
+	recordBefore := len(st.counters.Senders)
+	got := st.openHistory(page, int64(len(page)+1))
+	result := newReadResult(st, got.messages, got.gaps, got.replays, got.last)
+	if len(result.Messages) != len(page) {
+		t.Fatalf("%d messages of %d", len(result.Messages), len(page))
+	}
+	if late := result.Messages[maxTrackedSenders]; !late.Unrecorded {
+		t.Fatal("the made-up sender the page's run did not track is not marked unrecorded")
+	}
+	if member := result.Messages[len(page)-1]; member.Unrecorded {
+		t.Fatal("a roster member's message on the history page is marked unrecorded")
+	}
+	if len(st.counters.Senders) != recordBefore {
+		t.Fatal("a history page changed the record")
 	}
 }

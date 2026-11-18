@@ -96,10 +96,10 @@ const (
 	fileFieldName = "n"
 )
 
-// decodeFile validates "f" field by field, read exactly (exactObject): an object of exactly the
+// decodeFile validates "f" field by field, read exactly (ExactObject): an object of exactly the
 // five keys, each of its shape and range.
 func decodeFile(raw json.RawMessage) (*File, error) {
-	members, err := exactObject(raw)
+	members, err := ExactObject(raw)
 	if err != nil || len(members) != fileFields {
 		return nil, ErrBadMessage
 	}

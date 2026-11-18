@@ -162,7 +162,7 @@ var sentences = map[Code]string{
 	CodeSeatDisputed:       "Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat.",
 	CodeOwnSeatDisputed:    "Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room.",
 	CodeSenderCardMismatch: "The server refused the message because its sender card is not the card the server stores for this agent's seat, so it was not sent. The next send reads the member list again and uses the stored card: send it again, and update elyrn-agent if this repeats (a release older than the server's sends a card of its own).",
-	CodeSenderUnrecorded:   "A sender outside the current member list arrived while this room's counter record was full, so it is not recorded: replay protection is not kept for it on this agent (its messages carry unrecorded: true); nothing to do unless this repeats.",
+	CodeSenderUnrecorded:   "A sender outside the current member list arrived while this room's counter record was full, or gave its place there to a member, so it is not recorded: replay protection is not kept for it on this agent (its messages carry unrecorded: true); nothing to do unless this repeats.",
 	CodeInternal:           "An internal error occurred in the agent; retry, and report it if it persists.",
 }
 

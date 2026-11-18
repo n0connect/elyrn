@@ -101,7 +101,7 @@ func TestToolArguments_AreValidatedBeforeAnythingIsSent(t *testing.T) {
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"ｏｗｎｅｒ"}`, agent.CodeRoleText},
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"ＹＯＵ"}`, agent.CodeRoleText},
 		{ToolRoomRole, `{"room":` + validRoom + `,"role":"` + strings.Repeat("a", agent.MaxRoleChars+1) + `"}`, agent.CodeRoleText},
-		{ToolRoomRole, `{"room":` + validRoom + `,"role":"swap` + "‮" + `"}`, agent.CodeRoleText},
+		{ToolRoomRole, `{"room":` + validRoom + `,"role":"swap` + "\u202e" + `"}`, agent.CodeRoleText},
 	}
 	for _, tc := range cases {
 		if got := callError(t, tc.tool, tc.args); got != tc.want {

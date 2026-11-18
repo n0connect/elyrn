@@ -27,20 +27,33 @@ func TestEdgeAnswers_MatchTheServersRegistry(t *testing.T) {
 // (serverIDTaken, repeated from apperr). Read from the server's own Write: "Id taken" is taken,
 // "Conflict" (the earlier attempt is stored) and every other registered answer are not.
 func TestIDTaken_MatchesTheServersRegistry(t *testing.T) {
+	recognizesOnly(t, idTaken, apperr.IDTaken, serverIDTaken, http.StatusBadRequest)
+}
+
+// The agent tells the server's "Sender card mismatch" from the generic 400 by its registered
+// message (serverSenderCardMismatch, repeated from apperr), read from the server's own Write.
+func TestSenderCardMismatch_MatchesTheServersRegistry(t *testing.T) {
+	recognizesOnly(t, senderCardMismatch, apperr.SenderCardMismatch, serverSenderCardMismatch, http.StatusConflict)
+}
+
+// recognizesOnly asserts that recognize, given every registered answer as the server writes it,
+// holds for want's alone; never for no answer; and not for message (the agent's copy of want's
+// sentence) under otherStatus.
+func recognizesOnly(t *testing.T, recognize func(*answer) bool, want apperr.Code, message string, otherStatus int) {
+	t.Helper()
 	for code := apperr.MethodNotAllowed; code <= apperr.Internal; code++ {
 		rec := httptest.NewRecorder()
 		apperr.Write(rec, "test", code)
-		got := idTaken(&answer{status: rec.Code, body: rec.Body.Bytes()})
-		if got != (code == apperr.IDTaken) {
+		got := recognize(&answer{status: rec.Code, body: rec.Body.Bytes()})
+		if got != (code == want) {
 			id, _ := apperr.Describe(code)
-			t.Fatalf("%s: idTaken = %v", id, got)
+			t.Fatalf("%s: recognized = %v", id, got)
 		}
 	}
-	if idTaken(nil) {
-		t.Fatal("no answer is not an id taken")
+	if recognize(nil) {
+		t.Fatal("no answer was recognized")
 	}
-	// The message under another status is not the send's 409
-	if idTaken(&answer{status: http.StatusBadRequest, body: []byte(`{"message":"` + serverIDTaken + `"}`)}) {
-		t.Fatal("a 400 with the message is not an id taken")
+	if recognize(&answer{status: otherStatus, body: []byte(`{"message":"` + message + `"}`)}) {
+		t.Fatalf("the message under status %d was recognized", otherStatus)
 	}
 }

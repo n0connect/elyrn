@@ -62,6 +62,12 @@ type pageWindow struct {
 	ledger *ledger
 }
 
+// forwardLedger is a forward sequence of st's: judged against st's record under the room's keep
+// set (keptSender).
+func (st *roomState) forwardLedger() *ledger {
+	return newLedger(st.counters, st.keptSender)
+}
+
 // forwardWindow is a page of new messages: judged against, and later raising, the room's record.
 func (st *roomState) forwardWindow(after int64, l *ledger) pageWindow {
 	return pageWindow{after: after, ledger: l}
@@ -71,7 +77,17 @@ func (st *roomState) forwardWindow(after int64, l *ledger) pageWindow {
 // already admitted at or above before, it measures gaps inside the page only and never changes
 // the room's record.
 func (st *roomState) historyWindow(before int64) pageWindow {
-	return pageWindow{before: before, ledger: newHistoryLedger(st.counters, st.ceilingAbove(before))}
+	return pageWindow{before: before, ledger: newHistoryLedger(st.counters, st.ceilingAbove(before), st.keptSender)}
+}
+
+// openHistory opens a page below before on its own ledger (historyWindow); the record is left as
+// it was, but the senders the page's ledger did not track are noted unrecorded (settle), so their
+// messages in the result say so.
+func (st *roomState) openHistory(page []models.MessageDTO, before int64) *opened {
+	window := st.historyWindow(before)
+	got := st.openPage(page, window)
+	st.settle(window.ledger, got.last)
+	return got
 }
 
 // ceilingAbove is counters.js lowest for a page below before: each sender's lowest counter among
@@ -203,7 +219,7 @@ func (a *Agent) settleLedger(st *roomState, l *ledger, seq, mineBefore int64) {
 // settle raises st's record with l up to seq under the sender bound; it reports whether the record
 // changed.
 func (st *roomState) settle(l *ledger, seq int64) bool {
-	changed, refused := l.snapshot(st.counters, seq, st.keptSender)
+	changed, refused := l.snapshot(st.counters, seq)
 	st.noteUnrecorded(refused)
 	return changed
 }
@@ -222,7 +238,7 @@ func (a *Agent) read(ctx context.Context, st *roomState, after *int64) (*ReadRes
 		from = *after
 	}
 	mineBefore := st.counters.Mine
-	l := newLedger(st.counters)
+	l := st.forwardLedger()
 	got := st.openPage(page, st.forwardWindow(from, l))
 	last := got.last
 	if last > from {
@@ -288,7 +304,7 @@ func (a *Agent) markRead(ctx context.Context, st *roomState, seq int64) {
 func (a *Agent) syncCounters(ctx context.Context, st *roomState) error {
 	cursor := int64(0)
 	mineBefore := st.counters.Mine
-	l := newLedger(st.counters)
+	l := st.forwardLedger()
 	for page := 0; page < maxSyncPages && !st.countersKnown; page++ {
 		raw, err := a.fetchPage(ctx, st, afterQuery(&cursor))
 		if err != nil {
@@ -350,7 +366,7 @@ func (a *Agent) ReadBefore(ctx context.Context, id uuid.UUID, before int64) (*Re
 		if err != nil {
 			return err
 		}
-		got := st.openPage(page, st.historyWindow(before))
+		got := st.openHistory(page, before)
 		result = newReadResult(st, got.messages, got.gaps, got.replays, got.last)
 		return nil
 	})

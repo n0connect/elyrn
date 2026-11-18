@@ -193,18 +193,48 @@ func TestEvents_StreamOutlivesTheRequestDeadline(t *testing.T) {
 	alice, bob := register(t, mux), register(t, mux)
 	conv := pair(t, alice, bob)
 	t.Setenv("SERVER_WRITE_TIMEOUT_SEC", stallWriteTimeout)
-	base := serveForReal(t, mux)
+	lines := openStream(t, serveForReal(t, mux), alice)
+	stayIdle(t, lines, max(database.RequestBudget(), config.GetServerWriteTimeout())+time.Second)
+	send(t, bob, alice, conv, 1)
+	waitFor(t, lines, "event: msg")
+}
 
+// streamReadTimeout is the shortest SERVER_READ_TIMEOUT_SEC (and SERVER_READ_HEADER_TIMEOUT_SEC)
+// the configuration takes, so a stream can be watched outliving it several times over.
+const streamReadTimeout = "1"
+
+// http.Server's ReadTimeout does not end the event stream (handlers.EventsHandler: for a GET
+// without a body net/http clears the read deadline before the handler runs). Settled by
+// measurement on a real server with the production configuration (server.NewHTTPServer) and the
+// shortest read timeouts: the stream stays open past twice the read timeout and still delivers an
+// event. Were the read deadline left in place, the background read would fail at the timeout,
+// cancel the request and close the stream first.
+func TestEvents_StreamOutlivesTheReadTimeout(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	t.Setenv(config.EnvServerReadTimeoutSeconds, streamReadTimeout)
+	t.Setenv(config.EnvServerReadHeaderTimeoutSeconds, streamReadTimeout)
+	lines := openStream(t, serveForReal(t, mux), alice)
+	stayIdle(t, lines, 2*config.GetServerReadTimeout()+time.Second)
+	send(t, bob, alice, conv, 1)
+	waitFor(t, lines, "event: msg")
+}
+
+// openStream opens /events for u at base over a real connection and returns its lines once the
+// preamble's retry line arrived; the body is closed when the test ends.
+func openStream(t *testing.T, base string, u *user) <-chan string {
+	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, base+models.PathEvents, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	req.AddCookie(alice.cookie)
+	req.AddCookie(u.cookie)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("events connect: %v", err)
 	}
-	defer resp.Body.Close()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("events status %d", resp.StatusCode)
 	}
@@ -217,27 +247,28 @@ func TestEvents_StreamOutlivesTheRequestDeadline(t *testing.T) {
 		close(lines)
 	}()
 	waitFor(t, lines, "retry: 3000")
+	return lines
+}
 
-	// Until the request budget and the write timeout have both passed, the stream may carry only
-	// what an idle stream writes: SSE comment lines (the preamble's ": ready"), the heartbeat sent
-	// right after the preamble (a named ping event) and the blank lines that end them. Anything
-	// else, or the stream closing, fails.
-	outlive := time.After(max(database.RequestBudget(), config.GetServerWriteTimeout()) + time.Second)
-	for idle := true; idle; {
+// stayIdle asserts that for d the stream carries only what an idle stream writes: SSE comment
+// lines (the preamble's ": ready"), heartbeats (a named ping event) and the blank lines that end
+// them. Anything else, or the stream closing, fails.
+func stayIdle(t *testing.T, lines <-chan string, d time.Duration) {
+	t.Helper()
+	outlive := time.After(d)
+	for {
 		select {
 		case line, open := <-lines:
 			if !open {
-				t.Fatal("the stream closed before the request deadline passed")
+				t.Fatalf("the stream closed before %s passed", d)
 			}
 			if line != "" && !strings.HasPrefix(line, sseCommentPrefix) && !sseHeartbeatLines[line] {
 				t.Fatalf("unexpected line %q before any event", line)
 			}
 		case <-outlive:
-			idle = false
+			return
 		}
 	}
-	send(t, bob, alice, conv, 1)
-	waitFor(t, lines, "event: msg")
 }
 
 // The drill: PostgreSQL stops answering (paused) under a running server. A request stalled on

@@ -30,14 +30,7 @@ func (fx *roomFixture) lookalike(tb testing.TB, i int) *e2e.RoomMember {
 		tb.Fatalf("AuraOf: %v", err)
 	}
 	for try := 0; try < maxGrindTries; try++ {
-		root, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
-		if err != nil {
-			tb.Fatalf("RandomBytes: %v", err)
-		}
-		member, err := fx.keys.Member(root)
-		if err != nil {
-			tb.Fatalf("Member: %v", err)
-		}
+		member := fx.madeUpMember(tb)
 		aura, err := e2e.AuraOf(member.Public)
 		if err == nil && aura.Name == want.Name && aura.Code != want.Code {
 			return member
@@ -45,6 +38,21 @@ func (fx *roomFixture) lookalike(tb testing.TB, i int) *e2e.RoomMember {
 	}
 	tb.Fatal("no lookalike key found within the bound")
 	return nil
+}
+
+// madeUpMember is a member key of the fixture's room from a random root: one a member could send
+// under, of its own making.
+func (fx *roomFixture) madeUpMember(tb testing.TB) *e2e.RoomMember {
+	tb.Helper()
+	root, err := cryptoengine.RandomBytes(cryptoengine.AES256KeySize)
+	if err != nil {
+		tb.Fatalf("RandomBytes: %v", err)
+	}
+	member, err := fx.keys.Member(root)
+	if err != nil {
+		tb.Fatalf("Member: %v", err)
+	}
+	return member
 }
 
 // sealFrom seals text as from, wrapped for every card in roster (from's own card included).
@@ -76,7 +84,7 @@ func TestSenders_AreNamedWithCodeLeftAndSameName(t *testing.T) {
 		fx.sealFrom(t, impostor, everyone, 2, 1, "lookalike"),
 		fx.sealFrom(t, fx.members[2], everyone, 3, 1, "gone"),
 	}
-	got := st.openPage(page, st.forwardWindow(0, newLedger(st.counters)))
+	got := st.openPage(page, st.forwardWindow(0, st.forwardLedger()))
 	result := newReadResult(st, got.messages, got.gaps, got.replays, got.last)
 	if len(result.Messages) != len(page) {
 		t.Fatalf("%d messages", len(result.Messages))
@@ -113,9 +121,9 @@ func TestSenders_SameNameRemembersEarlierSenders(t *testing.T) {
 	}
 	impostor := fx.lookalike(t, 2)
 	everyone := []string{fx.members[0].Card, fx.members[1].Card, fx.members[2].Card, impostor.Card}
-	first := st.openPage([]models.MessageDTO{fx.sealFrom(t, impostor, everyone, 1, 1, "earlier")}, st.forwardWindow(0, newLedger(st.counters)))
+	first := st.openPage([]models.MessageDTO{fx.sealFrom(t, impostor, everyone, 1, 1, "earlier")}, st.forwardWindow(0, st.forwardLedger()))
 	newReadResult(st, first.messages, first.gaps, first.replays, first.last)
-	later := st.openPage([]models.MessageDTO{fx.sealFrom(t, fx.members[2], everyone, 2, 1, "later")}, st.forwardWindow(1, newLedger(st.counters)))
+	later := st.openPage([]models.MessageDTO{fx.sealFrom(t, fx.members[2], everyone, 2, 1, "later")}, st.forwardWindow(1, st.forwardLedger()))
 	result := newReadResult(st, later.messages, later.gaps, later.replays, later.last)
 	if len(result.Messages) != 1 || !result.Messages[0].SameName || result.Messages[0].Left {
 		t.Fatalf("the genuine member after a lookalike: %+v", result.Messages)
