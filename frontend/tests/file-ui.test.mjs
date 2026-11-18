@@ -71,3 +71,18 @@ test('chat.js reaches the files through thin hooks only', () => {
     // The announcing message goes through the one send path (deliver), parts first
     assert.match(chat, /await deliver\(conv, typed, validation\.sanitized, file\);/);
 });
+
+test('a final upload refusal lets the file go and keeps the typed text; a transient one keeps the file', () => {
+    const start = composer.indexOf('async function upload(');
+    const upload = composer.slice(start, composer.indexOf('\n    }\n', start));
+    // The refusal is said first, then the file leaves the composer only when FileTransfer says final
+    assert.match(upload, /Errors\.report\(outcome\.code\);\n\s*\}\n(?:\s*\/\/[^\n]*\n)*\s*if \(outcome\.final && chosen === mine\) clear\(\);\n\s*return null;/);
+    assert.equal((upload.match(/clear\(\)/g) || []).length, 1, 'the file leaves on a final refusal only');
+    // The one home of final: file-transfer.js, from the same transient() the retries use
+    const transfer = read('../js/file-transfer.js');
+    assert.match(transfer, /function final\(result\) \{\n\s*return !transient\(result\) && /);
+    assert.match(transfer, /final: final\(result\)/);
+    // chat.js stops before deliver when no file came back: the typed text stays in the box unsent
+    const send = chat.slice(chat.indexOf('FileComposer.upload('));
+    assert.match(send, /^[^\n]*\n[^\n]*\n\s*if \(attached && !file\) return;\n\s*await deliver\(/);
+});

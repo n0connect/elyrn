@@ -122,7 +122,8 @@ const FileComposer = (() => {
 
     // Uploads the chosen file's parts for conv (continuing a stopped upload). Resolves to the
     // file description its message carries, or null once the reason was shown (or the upload
-    // was cancelled: cancelled() is chat.js's, and removing the file cancels too).
+    // was cancelled: cancelled() is chat.js's, and removing the file cancels too). After a final
+    // refusal the file is removed from the composer.
     async function upload({ api, conv, cancelled }) {
         const mine = chosen;
         if (!mine || mine.convId !== conv.id || !mine.ready || mine.uploading) return null;
@@ -154,6 +155,9 @@ const FileComposer = (() => {
             } else {
                 Errors.report(outcome.code);
             }
+            // A final refusal (FileTransfer: sending again cannot change it) lets the file go, so
+            // the typed text, left unsent in the box, goes on the next send; a transient one keeps it
+            if (outcome.final && chosen === mine) clear();
             return null;
         } finally {
             mine.uploading = false;

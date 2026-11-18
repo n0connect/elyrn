@@ -100,9 +100,13 @@ a photo with the place it was taken in it, and that cannot be undone once a memb
 **Sending.** Pressing send uploads the parts in order (progress: parts done / total), then sends the
 announcing message through the one send path, so a roster that changed meanwhile (412) re-encrypts
 the message for the new roster, a lost answer is retried under the same id (409 "Conflict" means
-stored) and the counters hold. A part whose request gets no answer or a server error is tried 3
-times with a pause that doubles from 1 s; then the upload stops and says so, and the next send
-continues under the same file id from the first part not stored, while the page lives. The
+stored) and the counters hold. A part whose request gets no answer, a `502`, a `503` or a `504` is
+tried 3 times with a pause that doubles from 1 s; then the upload stops and says so, the file
+stays attached, and the next send continues under the same file id from the first part not
+stored, while the page lives. Every other refusal is final at once (`file-transfer.js`
+`transient`, `final`): a `507` (share, quota, store), a `500`, a `400`, the daily budget or a `404`
+is said once, the file leaves the composer, and the typed text stays unsent for the next send. A
+`409` asking for a fresh upload and a new file's request limit keep the file for the next send. The
 server's request limit (a `429` without a file sentence) is waited out past part 0 and on every
 download: the transfer pauses 3 s (the server's default refill) and asks again, at most 120
 times per transfer. Leaving the conversation, removing the file, logging out or the session ending
