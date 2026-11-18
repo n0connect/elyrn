@@ -65,7 +65,7 @@ const Errors = (() => {
         E_ACCOUNT_NUMBER_FAILED: e('error - try again'),
         // The copy failed or never settled (utils.js copyToClipboard): the number stays on screen
         W_ACCOUNT_NUMBER_NOT_COPIED: w('this browser did not copy your account number — select it, copy it by hand and keep it safe, then press continue'),
-        E_ACCOUNT_NUMBER_MISSING: e('Please generate your account number first'),
+        E_ACCOUNT_NUMBER_MISSING: e('generate your account number first'),
         E_REGISTRATION_EXPIRED: e('Session expired. Please try again.'),
         E_REGISTER_CONNECTION_LOST: e('connection lost' + REGISTRATION_RETRY),
         E_REGISTER_RATE_LIMITED: e('too many attempts, wait a minute' + REGISTRATION_RETRY),
