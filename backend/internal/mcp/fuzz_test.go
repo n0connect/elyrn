@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"elyrn/internal/agent"
 	"elyrn/internal/apperr"
@@ -68,9 +69,10 @@ func fuzzAgent(tb testing.TB, d *downServer) *agent.Agent {
 }
 
 // refusedByValidation are the codes an argument the tools or the agent refuse before sending
-// anything is answered with
+// anything is answered with (an expired room code among them: agent.ValidateRoomCode)
 var refusedByValidation = map[agent.Code]bool{
-	agent.CodeArgument: true, agent.CodeRoomCode: true, agent.CodeMessageText: true, agent.CodeRoleText: true,
+	agent.CodeArgument: true, agent.CodeRoomCode: true, agent.CodeRoomExpired: true, agent.CodeMessageText: true,
+	agent.CodeRoleText: true,
 }
 
 // expectReachedOnlyIfValid: a call refused by validation reached nothing; any other call reached
@@ -225,7 +227,8 @@ func FuzzToolArguments(f *testing.F) {
 }
 
 func FuzzRoomCodeArgument(f *testing.F) {
-	code, err := e2e.NewRoomCode(e2e.MinRoomMembers, 1)
+	// A code that expires in an hour or two: joinable, so the seeds reach the parse
+	code, err := e2e.NewRoomCode(e2e.MinRoomMembers, uint32(time.Now().Add(time.Hour).Unix()/int64(time.Hour/time.Second)+1))
 	if err != nil {
 		f.Fatalf("NewRoomCode: %v", err)
 	}
@@ -240,11 +243,11 @@ func FuzzRoomCodeArgument(f *testing.F) {
 	f.Fuzz(func(t *testing.T, raw string) {
 		value, err := codeArg(&raw)
 		parsed, parseErr := e2e.ParseRoomCode(strings.TrimSpace(raw)) // what JoinRoom parses
-		if parseErr == nil && err != nil {
+		if parseErr == nil && parsed.ExpiresAt() > time.Now().Unix() && err != nil {
 			t.Fatalf("the joinable code %q is refused as an argument", raw)
 		}
 		if err != nil {
-			if code := agent.CodeOf(err); code != agent.CodeArgument && code != agent.CodeRoomCode {
+			if code := agent.CodeOf(err); code != agent.CodeArgument && code != agent.CodeRoomCode && code != agent.CodeRoomExpired {
 				t.Fatalf("code %s for %q", code, raw)
 			}
 			return
