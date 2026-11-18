@@ -48,9 +48,13 @@
 //   - a new sender that is not on the current roster is recorded only while there is room; at
 //     the bound it is not recorded (bound() names it: its messages are shown with a warning that
 //     replay protection is not kept for it on this device);
-//   - a new sender on the current roster is always recorded: it displaces the off-roster entry
-//     recorded longest ago (the order a record lists its senders in is the order they were first
-//     recorded, merge() keeps it). This device's own entry and the roster's are never displaced.
+//   - a new sender on the current roster is always recorded: a new kept sender displaces the
+//     off-roster entry recorded most recently; the displaced sender is marked unrecorded (bound()
+//     names it, and its messages carry the same warning). A long-held entry is a real former
+//     member, while a flood of made-up keys is recorded after it, so the latest goes first (the
+//     order a record lists its senders in is the order they were first recorded, merge() keeps
+//     it; trim() keeps the earliest too). This device's own entry and the roster's are never
+//     displaced.
 // A record above the bound (an older build wrote it) is read keeping this device's own entry, the
 // roster's, then the earliest-recorded others up to the bound (trim()): never thrown away whole,
 // which would forget this device's own counter and the remembered seq.
@@ -139,8 +143,10 @@ const Counters = (() => {
     // trimmed first should it be above the bound. Senders of earlier keep their place and take
     // next's counters; next's new senders follow in next's order: each is recorded while there is
     // room; at the bound one in keep (this device's own key, the roster) displaces the off-roster
-    // entry recorded longest ago, and one not in keep is refused. Returns { record, refused (the
-    // senders not recorded), displaced (how many entries gave way to a roster member) }.
+    // entry recorded most recently (the last in record order that is not kept, counting those
+    // this call recorded), and one not in keep is refused. Returns { record, refused (the senders
+    // not recorded), displaced (the senders that gave way to a roster member) }: both are
+    // unrecorded from now on.
     function bound(earlier, next, keep) {
         const kept = new Set(keep || []);
         const counters = new Map(next.senders);
@@ -149,8 +155,9 @@ const Counters = (() => {
             out.set(key, Math.max(counter, counters.get(key) || 0));
         }
         const refused = [];
-        let displaced = 0;
-        let oldest = out.keys();  // walks the entries recorded longest ago, for displacement
+        const displaced = [];
+        // The off-roster entries in record order: the last one was recorded most recently
+        const offRoster = [...out.keys()].filter(key => !kept.has(key));
         for (const [key, counter] of next.senders) {
             if (out.has(key)) continue;
             if (out.size >= MAX_SENDERS) {
@@ -158,28 +165,19 @@ const Counters = (() => {
                     refused.push(key);
                     continue;
                 }
-                const victim = firstOffRoster(oldest, out, kept);
-                if (victim !== null) {
+                if (offRoster.length > 0) {
+                    const victim = offRoster.pop();
                     out.delete(victim);
-                    displaced++;
-                } else {
-                    oldest = out.keys();
+                    displaced.push(victim);
                 }
             }
+            if (!kept.has(key)) offRoster.push(key);
             out.set(key, counter);
         }
         return {
             record: freeze(Math.max(earlier.seq, next.seq), Math.max(earlier.mine, next.mine), out),
             refused: refused, displaced: displaced
         };
-    }
-
-    // The first key the iterator still yields that is in out and not kept, or null
-    function firstOffRoster(iterator, out, kept) {
-        for (let step = iterator.next(); !step.done; step = iterator.next()) {
-            if (out.has(step.value) && !kept.has(step.value)) return step.value;
-        }
-        return null;
     }
 
     // Every field is a high-water mark, so two records combine by taking the higher of each:

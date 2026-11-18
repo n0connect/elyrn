@@ -145,8 +145,9 @@ const Errors = (() => {
         // deleted their messages. The count comes from the sender's own counter and is repeated
         // only up to a bound (ui.js MAX_GAP_SHOWN); past it the uncounted sentence is shown
         // A room's counter record is full (counters.js THE SENDER BOUND): a sender new to it and
-        // not on the roster is not recorded. The tag on each of its messages, and the room's
-        // warning, once per session
+        // not on the roster is not recorded, and the off-roster sender a new member displaced is
+        // no longer recorded. The tag on each of its messages, and the room's warning, once per
+        // session
         W_SENDER_NOT_RECORDED: w('replay protection is not kept for this sender on this device'),
         W_COUNTER_RECORD_FULL: w('this room\'s replay record on this device is full — new senders who are not members are shown without replay protection after a reload'),
         W_MESSAGE_MISSING: w('⚠ 1 message from {who} never arrived'),
@@ -271,7 +272,7 @@ const Errors = (() => {
         // More counter records than Counters.MAX_RECORDS: the least recently used were dropped,
         // so those conversations are judged from their visible messages only (once per page load).
         // Also: a record read above Counters.MAX_SENDERS was trimmed (Counters.trim), or a roster
-        // member new to a full record displaced the off-roster entry recorded longest ago
+        // member new to a full record displaced the off-roster entry recorded most recently
         // (Counters.bound); once per read or write that dropped any
         W_COUNTER_RECORDS_EVICTED: 'W_COUNTER_RECORDS_EVICTED',
         // The event stream delivered no event within its silence limit (a proxy buffering or

@@ -123,8 +123,9 @@ test('parse / merge / same: never throw on stored values; parse is a fixed point
 
 // THE SENDER BOUND (fix-spec C2 as revised 18 Nov), against a model written apart from
 // counters.js: what earlier recorded keeps its place; a new sender is recorded while there is
-// room; at the bound a kept one (own key, roster) displaces the earliest off-roster entry and
-// any other is refused. Reading above the bound keeps the kept, then the earliest others.
+// room; at the bound a kept one (own key, roster) displaces the off-roster entry recorded most
+// recently (the displaced are named) and any other is refused. Reading above the bound keeps the
+// kept, then the earliest others.
 const BOUND_ITERATIONS = 120;
 const MAX_NEW = 96;
 const MAX_KEPT = 40;
@@ -135,7 +136,7 @@ function boundModel(earlier, next, keep, limit) {
     let out = earlier.map(([key, counter]) => [key, Math.max(counter, counters.get(key) || 0)]);
     const present = new Set(out.map(([k]) => k));
     const refused = [];
-    let displaced = 0;
+    const displaced = [];
     for (const [key, counter] of next) {
         if (present.has(key)) continue;
         if (out.length >= limit) {
@@ -143,11 +144,11 @@ function boundModel(earlier, next, keep, limit) {
                 refused.push(key);
                 continue;
             }
-            const at = out.findIndex(([k]) => !keep.has(k));
+            const at = out.findLastIndex(([k]) => !keep.has(k));
             if (at >= 0) {
                 present.delete(out[at][0]);
+                displaced.push(out[at][0]);
                 out = out.slice(0, at).concat(out.slice(at + 1));
-                displaced++;
             }
         }
         out.push([key, counter]);
@@ -191,14 +192,16 @@ test('the sender bound: bound and trim match the model, a kept or earlier entry 
         const want = boundModel(plain(earlier.senders), plain(next.senders), keep, limit);
         assert.deepEqual(plain(got.record.senders), want.senders);
         assert.deepEqual(plain(got.refused), want.refused);
-        assert.equal(got.displaced, want.displaced);
+        assert.deepEqual(plain(got.displaced), want.displaced);
         assert.equal(got.record.seq, next.seq);
         assert.equal(got.record.mine, next.mine);
         const written = new Map(got.record.senders);
         // Every kept sender of next is recorded; an earlier entry goes only to a kept newcomer
         for (const [k] of next.senders) if (keep.has(k)) assert.ok(written.has(k), 'a kept sender was not recorded');
+        const displaced = new Set(got.displaced);
+        assert.ok([...displaced].every((k) => !keep.has(k) && !written.has(k)), 'a kept or recorded sender was named displaced');
         const lost = earlierEntries.filter(([k]) => !written.has(k));
-        assert.ok(lost.length === got.displaced && lost.every(([k]) => !keep.has(k)), 'an earlier entry was lost to a made-up sender');
+        assert.ok(lost.every(([k]) => displaced.has(k)), 'an earlier entry was lost without being named displaced');
         assert.ok(got.record.senders.length <= Math.max(limit, keep.size));
         // What is written reads back whole, and an unbounded record reads as the model trims it
         const read = Counters.parseBounded(plain(got.record), keep);
@@ -225,7 +228,7 @@ test('the sender bound under attack: made-up senders well past the bound leave a
             const kept = new Map(written.record.senders);
             assert.equal(kept.get(former), formerCounter);
             assert.equal(kept.get(own), 3);
-            assert.equal(written.displaced, 0);
+            assert.equal(written.displaced.length, 0);
             assert.ok(written.record.senders.length <= limit);
             record = written.record;
         }

@@ -284,7 +284,7 @@ test('an attacker\'s made-up senders never displace what was recorded before the
         const next = Counters.merge(earlier, raisedBy(earlier, fresh));
         const written = Counters.bound(earlier, next, keep);
         assert.ok(written.record.senders.length <= Counters.MAX_SENDERS);
-        assert.equal(written.displaced, 0, 'nothing on the roster was new: nothing gave way');
+        assert.equal(written.displaced.length, 0, 'nothing on the roster was new: nothing gave way');
         for (const key of written.refused) refusedAll.add(key);
         const kept = new Map(written.record.senders);
         assert.equal(kept.get(FORMER), 9, 'the former member\'s entry and counter are untouched');
@@ -296,18 +296,36 @@ test('an attacker\'s made-up senders never displace what was recorded before the
     assert.equal(refusedAll.size, 3 * Counters.MAX_SENDERS - (Counters.MAX_SENDERS - 3), 'every made-up sender past the room is refused');
 });
 
-test('a roster member new to a full record is recorded: it displaces the off-roster entry recorded longest ago', () => {
+test('a roster member new to a full record is recorded: it displaces the off-roster entry recorded most recently', () => {
     const full = Counters.parse({ seq: 1, mine: 1, senders: [[FORMER, 5], [OWN, 1],
         ...Array.from({ length: Counters.MAX_SENDERS - 2 }, (_, i) => [mintedKey(i), 1])] });
     assert.equal(full.senders.length, Counters.MAX_SENDERS);
     const next = Counters.merge(full, raisedBy(full, [mintedKey(999999), BOB]));
     const written = Counters.bound(full, next, [OWN, BOB]);
     const kept = new Map(written.record.senders);
+    const latest = mintedKey(Counters.MAX_SENDERS - 3);
     assert.equal(kept.has(BOB), true, 'a member is always recorded');
-    assert.equal(kept.has(FORMER), false, 'the off-roster entry recorded longest ago gave way');
+    assert.equal(kept.get(FORMER), 5, 'the long-held former member stays');
+    assert.equal(kept.has(latest), false, 'the off-roster entry recorded most recently gave way');
     assert.equal(kept.get(OWN), 1);
     assert.deepEqual([...written.refused], [mintedKey(999999)]);
-    assert.equal(written.displaced, 1);
+    assert.deepEqual([...written.displaced], [latest], 'the displaced sender is named, to be marked unrecorded');
+    assert.equal(written.record.senders.length, Counters.MAX_SENDERS);
+});
+
+test('a roster member displaces an off-roster sender recorded earlier in the same write before any older one', () => {
+    const almost = Counters.parse({ seq: 1, mine: 1, senders: [[FORMER, 5], [OWN, 1],
+        ...Array.from({ length: Counters.MAX_SENDERS - 3 }, (_, i) => [mintedKey(i), 1])] });
+    const flood = mintedKey(999998);
+    // The made-up sender fills the last place, then a member arrives in the same write
+    const next = Counters.merge(almost, raisedBy(almost, [flood, BOB]));
+    const written = Counters.bound(almost, next, [OWN, BOB]);
+    const kept = new Map(written.record.senders);
+    assert.equal(kept.has(BOB), true);
+    assert.equal(kept.has(flood), false, 'the sender recorded last gave way');
+    assert.equal(kept.has(mintedKey(Counters.MAX_SENDERS - 4)), true, 'what was recorded before the write stays');
+    assert.deepEqual([...written.refused], []);
+    assert.deepEqual([...written.displaced], [flood]);
     assert.equal(written.record.senders.length, Counters.MAX_SENDERS);
 });
 

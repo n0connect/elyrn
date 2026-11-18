@@ -54,17 +54,17 @@ const CounterRecords = (() => {
 
     // Keeps next within the sender bound (Counters.bound: what earlier recorded is never given up
     // to a made-up sender; a new off-roster sender at the bound is not recorded, a new roster
-    // member displaces the off-roster entry recorded longest ago, logged), as this tab's last one
-    // (it stands in when storage fails), and stores it unless the stored one already says the
-    // same. Every record this device writes therefore reads back whole. The senders not recorded
-    // are kept in conv.unrecorded, which the page shows (chat.js markUnrecorded); one recorded
-    // since (it joined the roster) leaves it.
+    // member displaces the off-roster entry recorded most recently, logged), as this tab's last
+    // one (it stands in when storage fails), and stores it unless the stored one already says the
+    // same. Every record this device writes therefore reads back whole. The senders not recorded,
+    // refused and displaced alike, are kept in conv.unrecorded, which the page shows (chat.js
+    // markUnrecorded); one recorded since (it joined the roster) leaves it.
     async function writeMark(conv, stored, earlier, next) {
         const kept = Counters.bound(earlier, next, keptSenders(conv));
-        if (kept.displaced > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
+        if (kept.displaced.length > 0) Log.warn(Errors.INTERNAL.W_COUNTER_RECORDS_EVICTED);
         const recorded = new Map(kept.record.senders);
         for (const key of conv.unrecorded) if (recorded.has(key)) conv.unrecorded.delete(key);
-        for (const key of kept.refused) conv.unrecorded.add(key);
+        for (const key of [...kept.refused, ...kept.displaced]) conv.unrecorded.add(key);
         conv.mark = kept.record;
         if (!Counters.same(kept.record, stored)) {
             await Keystore.saveCounters(conv.id, kept.record, conv.room ? conv.room.expiresAt : 0);
