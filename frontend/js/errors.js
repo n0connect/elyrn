@@ -63,7 +63,8 @@ const Errors = (() => {
 
         // registration
         E_ACCOUNT_NUMBER_FAILED: e('error - try again'),
-        W_ACCOUNT_NUMBER_NOT_COPIED: w('Could not copy automatically. Please copy manually.'),
+        // The copy failed or never settled (utils.js copyToClipboard): the number stays on screen
+        W_ACCOUNT_NUMBER_NOT_COPIED: w('this browser did not copy your account number — select it, copy it by hand and keep it safe, then press continue'),
         E_ACCOUNT_NUMBER_MISSING: e('Please generate your account number first'),
         E_REGISTRATION_EXPIRED: e('Session expired. Please try again.'),
         E_REGISTER_CONNECTION_LOST: e('connection lost' + REGISTRATION_RETRY),
@@ -232,6 +233,9 @@ const Errors = (() => {
     // Failures nobody is shown, only logged
     const INTERNAL = Object.freeze({
         E_CLIPBOARD_FALLBACK_FAILED: 'E_CLIPBOARD_FALLBACK_FAILED',
+        // The Clipboard API refused the copy or did not settle within CLIPBOARD_WRITE_TIMEOUT_MS
+        // (an unfocused tab can wait forever): the selection fallback is tried next (utils.js)
+        W_CLIPBOARD_WRITE_FAILED: 'W_CLIPBOARD_WRITE_FAILED',
         W_CLIPBOARD_NOT_CLEARED: 'W_CLIPBOARD_NOT_CLEARED',
         E_SCRAMBLE_ELEMENTS_MISSING: 'E_SCRAMBLE_ELEMENTS_MISSING',
         W_KEYSTORE_UNAVAILABLE: 'W_KEYSTORE_UNAVAILABLE',

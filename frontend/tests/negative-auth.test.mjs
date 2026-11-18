@@ -18,7 +18,7 @@ const clipboard = {
     readText: async () => clipboard.text
 };
 const { context, get } = load(
-    { crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa, AbortSignal, DOMException, Response,
+    { crypto: globalThis.crypto, TextEncoder, TextDecoder, atob, btoa, AbortSignal, DOMException, Response, setTimeout, clearTimeout,
         window: { isSecureContext: true }, navigator: { clipboard } },
     ['../js/log.js', '../js/errors.js', '../js/utils.js', '../js/crypto.js', '../js/room-crypto.js', '../js/file-crypto.js',
         '../validation.js', '../js/auth.js']);
@@ -162,6 +162,26 @@ test('leaving registration leaves the clipboard alone once something else was co
     // with no number held there is nothing to clear
     await get('forgetRegistration')();
     assert.equal(clipboard.text, 'something the user copied');
+});
+
+test('a clipboard write that never settles fails within the time limit, so registration is never stuck on it', async () => {
+    const limit = get('CLIPBOARD_WRITE_TIMEOUT_MS');
+    assert.ok(limit > 0 && limit <= 10000);
+    const write = clipboard.writeText;
+    // An unfocused tab's write (headless Chromium): the promise never settles
+    clipboard.writeText = () => new Promise(() => {});
+    try {
+        const started = Date.now();
+        // The selection fallback needs a page (no document here), so the copy fails: in time
+        await assert.rejects(get('copyToClipboard')(ACCOUNT_B));
+        const took = Date.now() - started;
+        assert.ok(took >= limit - 50 && took < limit + 2000, `${took} ms`);
+        assert.notEqual(clipboard.text, ACCOUNT_B);
+    } finally {
+        clipboard.writeText = write;
+    }
+    // ...and what registration shows then: copy by hand, keep it, then continue
+    assert.match(Errors.REGISTRY.W_ACCOUNT_NUMBER_NOT_COPIED.text, /by hand.*then press continue/);
 });
 
 test('where the account may already exist the way back asks once, then leaves; a definite state leaves at once', async () => {
