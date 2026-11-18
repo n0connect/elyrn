@@ -119,6 +119,10 @@ func (a *Agent) deliverID(ctx context.Context, st *roomState, text string) (*Sen
 		case idTaken(ans):
 			// Checked before the stored case: an id held by anything else is never "stored"
 			return nil, errIDTaken
+		case senderCardMismatch(ans):
+			// Nothing was stored; the next send reloads the roster, and with it the stored card
+			st.rosterCards = nil
+			return nil, fail(CodeSenderCardMismatch, nil)
 		case status == http.StatusConflict && lostRetries > 0:
 			return &Sent{Room: st.id.String(), Stored: true}, nil
 		case status == http.StatusPreconditionFailed:

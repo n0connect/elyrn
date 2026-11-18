@@ -85,8 +85,9 @@ const (
 	CodeRoleMemberDisputed  Code = "E_AGENT_ROLE_MEMBER_DISPUTED"
 
 	// Seats and senders
-	CodeSeatDisputed    Code = "E_AGENT_SEAT_DISPUTED"     // a warning in room_members
-	CodeOwnSeatDisputed Code = "E_AGENT_OWN_SEAT_DISPUTED" // a warning in room_members
+	CodeSeatDisputed       Code = "E_AGENT_SEAT_DISPUTED"     // a warning in room_members
+	CodeOwnSeatDisputed    Code = "E_AGENT_OWN_SEAT_DISPUTED" // a warning in room_members
+	CodeSenderCardMismatch Code = "E_AGENT_SENDER_CARD_MISMATCH"
 
 	CodeInternal Code = "E_AGENT_INTERNAL"
 )
@@ -157,9 +158,10 @@ var sentences = map[Code]string{
 	CodeRoleIgnored:         "A member's role did not open under the room's code or broke the role rule, so that member is shown without a role; nothing to do unless it repeats.",
 	CodeRoleMemberDisputed:  "More than one seat of this room claims that member's identity, so no role can be set for it (it could land on the seat of whoever copied the identity); compare the room safety number with the members on another channel.",
 
-	CodeSeatDisputed:    "Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat.",
-	CodeOwnSeatDisputed: "Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room.",
-	CodeInternal:        "An internal error occurred in the agent; retry, and report it if it persists.",
+	CodeSeatDisputed:       "Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat.",
+	CodeOwnSeatDisputed:    "Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room.",
+	CodeSenderCardMismatch: "The server refused the message because its sender card is not the card the server stores for this agent's seat, so it was not sent. The next send reads the member list again and uses the stored card: send it again, and update elyrn-agent if this repeats (a release older than the server's sends a card of its own).",
+	CodeInternal:           "An internal error occurred in the agent; retry, and report it if it persists.",
 }
 
 // Sentence returns what the operator should do next for code.

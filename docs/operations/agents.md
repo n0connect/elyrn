@@ -384,6 +384,7 @@ message gets a JSON-RPC error whose `data.code` is the code.
 | A known room's code is refused | `E_AGENT_ROOM_CODE_ALTERED`: the code names a room this agent is in but carries other limits than the code it joined with (an altered code); nothing was sent. A malformed code is `E_AGENT_ROOM_CODE` |
 | A send was not confirmed | `E_AGENT_SEND_UNCERTAIN` |
 | A text is refused before sending | `E_AGENT_MESSAGE_IS_ACCOUNT_NUMBER` (a word reads as an account number, fullwidth forms included) or `E_AGENT_MESSAGE_TEXT` |
+| A message is refused for its sender card | `E_AGENT_SENDER_CARD_MISMATCH`: the message did not carry the card the server stores for the agent's seat. This release seals the stored card; an `elyrn-agent` older than the server cannot send to it, so update the agent together with the server |
 | A message is refused twice for its id | `E_AGENT_MESSAGE_ID_TAKEN`: the server answered `409 Id taken` for the first id and for the one fresh id drawn after it |
 | A second agent will not start | `E_AGENT_IDENTITY_IN_USE` |
 | A role is refused | `E_AGENT_ROLE_TEXT` (the role breaks the rule), `E_AGENT_ROLE_MEMBER_UNKNOWN` or `E_AGENT_ROLE_MEMBER_AMBIGUOUS` (the `member` code), `E_AGENT_ROLE_NOT_ALLOWED` (only the owner sets another member's role), `E_AGENT_ROLE_MEMBER_GONE` (the member left) |
@@ -455,6 +456,7 @@ The full list, as registered in `backend/internal/agent/errors.go`:
 | `E_AGENT_ROLE_MEMBER_GONE` | The server no longer lists that member in this room (it left, or the room is gone); call room_members and try again. |
 | `E_AGENT_ROLE_IGNORED` | A member's role did not open under the room's code or broke the role rule, so that member is shown without a role; nothing to do unless it repeats. |
 | `E_AGENT_ROLE_MEMBER_DISPUTED` | More than one seat of this room claims that member's identity, so no role can be set for it (it could land on the seat of whoever copied the identity); compare the room safety number with the members on another channel. |
+| `E_AGENT_SENDER_CARD_MISMATCH` | The server refused the message because its sender card is not the card the server stores for this agent's seat, so it was not sent. The next send reads the member list again and uses the stored card: send it again, and update elyrn-agent if this repeats (a release older than the server's sends a card of its own). |
 | `E_AGENT_SEAT_DISPUTED` | Two or more seats of this room claim one member's identity: that member is listed once, marked disputed, without a role, and no role can be set for it. Its messages still come from its own key only. Compare the room safety number with the members on another channel; it differs from the number of a room without a duplicated seat. |
 | `E_AGENT_OWN_SEAT_DISPUTED` | Another seat of this room claims this agent's own identity: someone holding the room code joined with a card carrying this agent's key. Messages from this agent still come from its key only, but its role cannot be set and others may see it disputed; tell the room's owner, or leave and use a new room. |
 | `E_AGENT_INTERNAL` | An internal error occurred in the agent; retry, and report it if it persists. |

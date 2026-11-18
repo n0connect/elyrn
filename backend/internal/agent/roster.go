@@ -47,7 +47,8 @@ type keySeats struct {
 // longer than the code's limit is refused. Every key is listed once, in the order first served,
 // with the number of cards that open to it (a key with more is disputed); its owner flag is true
 // when any of its rows is flagged owner (only the server flags the owner, and an impostor's seat
-// is never the owner's).
+// is never the owner's). This agent's stored card, from the row flagged as its own, becomes the
+// card it seals into every message.
 func (a *Agent) loadRoster(ctx context.Context, st *roomState) error {
 	var resp models.RoomMembersResponse
 	status, err := a.api(ctx, http.MethodGet, conversationPath(st.id)+pathMembers, nil, &resp)
@@ -110,6 +111,10 @@ func (st *roomState) verifyMembers(rows []models.RoomMemberDTO) error {
 		}
 		roster = append(roster, entry)
 	}
+	// A card is sealed under a random nonce, so the one derived when the room was adopted differs in
+	// bytes from the one stored when this account joined; the server refuses a message whose header
+	// card is not the stored one (A1, Sender card mismatch), and others address it by that one
+	st.member.Card = own.mine.Card
 	st.roster, st.rosterCards, st.skipped, st.members = roster, cards, skipped, len(cards)
 	return nil
 }

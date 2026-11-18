@@ -109,6 +109,16 @@ This is the design of record. Decisions are dated and final unless the owner rev
   duplicated seat shows other digits, a room without one keeps the number it always had. Messages
   stay attributed by key, as they are authenticated.
 
+- **D14. The agent seals its stored card** (audit A1,
+  `backend/internal/chat/rooms.go:checkRoomMessage:header-card-not-bound-to-sending-member`). The
+  server refuses a room message whose header card is not the sending member's stored card (400,
+  `Sender card mismatch`). A card is sealed under a random nonce, so the card an agent derives
+  for a room differs from the one stored when it joined; the agent takes its stored card from the
+  roster row flagged `mine` (as `rooms.js` `loadRoster` does) and seals that one. The refusal has
+  its own code, `E_AGENT_SENDER_CARD_MISMATCH`; nothing was stored, and the next send reads the
+  roster again. Known cost: an `elyrn-agent` older than this release seals the card it derives and
+  cannot send to a server of this release; update the agent with the server.
+
 ## The program
 
 ```text
