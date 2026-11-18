@@ -213,7 +213,7 @@ Beyond edge cases and disasters, the browser client is checked by what a user do
 What lives in DOM-bound code (`app.js`, `auth.js`'s screens, `chat.js`, `live-updates.js`, `ui.js`, `code-reveal.js`) is checked by hand in a real browser, against a local stack, with the console open: no line may carry a secret, and each expected code must appear in the console's `[elyrn]` line. Each line is screen · action · expected.
 
 Pre-login screens:
-- Main menu · open the page · no `404` for `/favicon.ico` or `/favicon.svg` in the network panel; the tab shows a black square with a white dot (also on the 404 page).
+- Main menu · open the page · no `404` for `/favicon.ico` or `/favicon.svg` in the network panel; the tab shows a white pixel "e." on a black square (also on the 404 page).
 - Login · press `← back to main menu`, click the brand title, press Escape (each in turn) · the main menu; opening login again shows an empty field; the eye icon reveals nothing.
 - Login · type a number, press login, press Escape before it answers · the main menu stays; the app never opens behind it.
 - Login · paste a room code · `that is an invite or a room code — log in first, then use join` (`E_LOGIN_INVITE_PASTED`); nothing is sent (network panel).
