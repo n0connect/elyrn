@@ -56,18 +56,35 @@ type filePayload struct {
 	N string `json:"n"`
 }
 
-// fileNameRune refuses control characters (C0, DEL, C1), bidirectional controls and path separators.
+// fileNameRune refuses what validation.js FILE_NAME_REFUSED refuses one character at a time:
+// control characters (Cc), format characters (Cf: zero-width characters, the byte order mark, the
+// soft hyphen, every bidirectional control, tag characters) and path separators.
 func fileNameRune(r rune) bool {
-	return !unicode.IsControl(r) && !unicode.Is(unicode.Bidi_Control, r) && !strings.ContainsRune(fileNameSeparators, r)
+	return !unicode.Is(unicode.Cc, r) && !unicode.Is(unicode.Cf, r) && !strings.ContainsRune(fileNameSeparators, r)
 }
 
-// fileNameValid is the name rule: NFC as received, 1..128 code points, at most 512 UTF-8 bytes,
-// no leading dot, and only characters fileNameRune allows.
+// hasSpaceRun reports whether name holds two or more space characters (Zs) in a row, the rest of
+// FILE_NAME_REFUSED: a run of spaces could push the real extension out of sight.
+func hasSpaceRun(name string) bool {
+	previous := false
+	for _, r := range name {
+		space := unicode.Is(unicode.Zs, r)
+		if space && previous {
+			return true
+		}
+		previous = space
+	}
+	return false
+}
+
+// fileNameValid is the name rule, validation.js isFileName: valid UTF-8 (so no lone surrogate),
+// NFC as received, 1..128 code points, at most 512 UTF-8 bytes, no leading dot, only characters
+// fileNameRune allows, and no run of spaces.
 func fileNameValid(name string) bool {
 	n := utf8.RuneCountInString(name)
 	return utf8.ValidString(name) && n >= 1 && n <= FileNameMaxChars && len(name) <= fileNameMaxBytes &&
 		norm.NFC.IsNormalString(name) && !strings.HasPrefix(name, fileNameHiddenPrefix) &&
-		strings.IndexFunc(name, func(r rune) bool { return !fileNameRune(r) }) < 0
+		strings.IndexFunc(name, func(r rune) bool { return !fileNameRune(r) }) < 0 && !hasSpaceRun(name)
 }
 
 // The keys of "f", exactly (filePayload's tags say the same for the test-only writer)

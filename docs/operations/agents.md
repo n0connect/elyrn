@@ -182,8 +182,10 @@ does not open, or breaks the rule above, is shown as none and logged as `E_AGENT
 
 A message that announces a file shows its text (a caption, which may be empty) and the file's
 `name` and `size`; the agent cannot download the file, and never sends one. A message whose
-file description breaks the format (for example a name with `/`, `\`, a control or bidirectional
-character, or a leading dot) is `broken`. The agent needs a server that reports `file_max_bytes`
+file description breaks the format is `broken`: for example a name with `/` or `\`, a control
+character, an invisible format character (zero-width characters, the byte order mark, the soft
+hyphen, any bidirectional control), two or more spaces in a row, or a leading dot. The browser
+applies the same rule. The agent needs a server that reports `file_max_bytes`
 on `/me` (262144..104857600); an older server fails every call with `E_AGENT_SERVER_ANSWER`.
 
 ### One call at a time, and cancellation

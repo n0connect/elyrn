@@ -69,9 +69,14 @@ This is the design of record. Decisions are dated and final unless the owner rev
   file's id, key, size, SHA-256 and name; `backend/internal/e2e/file.go`). The agent shows such a message as its text (which may be empty)
   plus `file: {name, size}`; the key, the hash and the file id are never returned by a tool, and the
   agent neither downloads nor sends files. A description that breaks the format (a name with a
-  path separator, a control or bidirectional character, a leading dot, not NFC, longer than 128
-  characters or 512 bytes; a size outside `1..104857600`; a key, hash or id of the wrong shape)
-  makes the message `broken`. The agent checks `/me`'s `file_max_bytes` against
+  path separator, a control character (`Cc`), a format character (`Cf`: zero-width characters,
+  the byte order mark, the soft hyphen, every bidirectional control, tag characters), two or more
+  space characters (`Zs`) in a row, a leading dot, not NFC, longer than 128 characters or 512
+  bytes; a size outside `1..104857600`; a key, hash or id of the wrong shape) makes the message
+  `broken`. The name rule is `validation.js` `isFileName` and `e2e` `fileNameValid`, pinned by the
+  shared cases of `backend/internal/e2e/filename_test.go`; the two read Unicode categories from
+  their own tables (Go's `unicode` package, the browser's ICU), so a code point assigned to `Cf`
+  or `Zs` in one Unicode version and unassigned in the other may be judged differently. The agent checks `/me`'s `file_max_bytes` against
   `262144..104857600` like the other limits, so it needs a server that reports it.
 
 ## Decisions (18 Nov 2026, after the security audit)
