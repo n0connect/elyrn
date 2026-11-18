@@ -369,7 +369,9 @@ Lists the caller's conversations, newest first (the server keeps no recency acro
 ---
 
 ### `DELETE /api/v2/conversations/{id}`
-**Burn:** Bilaterally deletes the conversation, all memberships, and all stored ciphertexts from the database. In a room only the owner burns (for everyone); any other member **leaves**: their seat goes, their messages stay readable to the others, notes to and from them go. Members get a `conv` event either way.
+**Burn:** Bilaterally deletes the conversation, all memberships, and all stored ciphertexts from the database. In a room only the owner burns (for everyone); any other member **leaves**: their seat goes, their messages stay readable to the others, notes to and from them go. Members get a `conv` event either way. Every request takes a token
+from the caller's rate bucket `burn` before the conversation is looked up (a `404` spends one
+too): `429` (`E_RATE_LIMITED`) once it is empty.
 
 - **Response:** `204 No Content`
 

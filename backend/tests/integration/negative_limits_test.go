@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"elyrn/internal/apperr"
 	"elyrn/internal/config"
 	"elyrn/internal/cryptoengine"
@@ -104,6 +106,30 @@ func TestNegative_ConversationsPerUser(t *testing.T) {
 	expectStatus(t, alice.do(http.MethodPost, models.PathRoomsJoin, sideOf(t, alice, carolsRoom.code).joinRequest(t)),
 		http.StatusCreated, "join under the raised limit")
 	expectAnswer(t, redeem(alice, token), apperr.LimitReached, "redeem over the raised limit, now reached again")
+}
+
+// DELETE /conversations/{id} takes a token from the caller's burn bucket before the lookup: a
+// stream of deletes (each a locking transaction, a miss included) ends in the registered 429,
+// which burns nothing, and the bucket is the account's alone.
+func TestNegative_BurnsPerAccount(t *testing.T) {
+	mux := setup(t)
+	alice, bob := register(t, mux), register(t, mux)
+	conv := pair(t, alice, bob)
+	// No token comes back while the test runs (a bucket takes the interval when it is created)
+	t.Setenv("RATE_LIMIT_REFILL_INTERVAL_SEC", "3600")
+	tokens := config.GetRateLimitMaxTokens()
+	missing := func() string { return models.PathConversations + "/" + uuid.NewString() }
+	for i := 0; i < tokens; i++ {
+		expectAnswer(t, alice.do(http.MethodDelete, missing(), nil), apperr.NotFound, "delete "+strconv.Itoa(i)+" within the bucket")
+	}
+	expectAnswer(t, alice.do(http.MethodDelete, missing(), nil), apperr.RateLimited, "one delete too many")
+	expectAnswer(t, alice.do(http.MethodDelete, models.PathConversations+"/"+conv, nil), apperr.RateLimited,
+		"a real burn past the bucket")
+	if n := len(listOf(t, alice)); n != 1 {
+		t.Fatalf("alice lists %d conversations after a refused burn, want 1", n)
+	}
+	// Another account's bucket is its own
+	expectAnswer(t, bob.do(http.MethodDelete, missing(), nil), apperr.NotFound, "bob's delete")
 }
 
 func TestNegative_RoomMembers(t *testing.T) {
