@@ -117,8 +117,10 @@ test('an altered or truncated part never opens; neither does one sealed for a sh
 
 test('a declared hash that disagrees with the bytes is caught', async () => {
     const one = await sealed(100);
-    const other = await sealed(100);
-    await assert.rejects(openAll({ ...one, file: { ...one.file, hash: other.file.hash } }));
+    // sealed() writes the same content every time: another hash is taken from other bytes
+    const otherHash = await F.hashOf(new Uint8Array(one.file.size));
+    assert.notEqual(otherHash, one.file.hash);
+    await assert.rejects(openAll({ ...one, file: { ...one.file, hash: otherHash } }));
     assert.equal(await F.matches(one.file, one.bytes), true);
     const flipped = one.bytes.slice();
     flipped[0] ^= 1;

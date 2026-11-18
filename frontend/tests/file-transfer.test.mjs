@@ -60,6 +60,11 @@ function behave(misbehave = () => null) {
     return parts;
 }
 
+// Bytes made in the modules' context carry its Uint8Array prototype: compare them by content
+function sameBytes(actual, expected) {
+    assert.equal(Buffer.compare(Buffer.from(actual), Buffer.from(expected)), 0, 'the bytes differ');
+}
+
 async function newFile(size) {
     const bytes = new Uint8Array(size);
     for (let i = 0; i < size; i++) bytes[i] = (i * 13 + 1) & 0xff;
@@ -87,7 +92,7 @@ test('a behaving server: parts go up in order, each exactly one sealed part, and
     assert.equal(parts.size, 3);
     const down = await download(one.file);
     assert.equal(down.ok, true);
-    assert.deepEqual(down.bytes, one.bytes);
+    sameBytes(down.bytes, one.bytes);
 });
 
 test('lost answers are tried again; a part stored before its answer was lost counts as stored (409 Conflict)', async () => {
@@ -188,8 +193,10 @@ test('downloads: a missing part is gone; a malformed, misplaced or altered part,
     parts.clear();
     keep.forEach((v, k) => parts.set(k, v));
     // A message that declares another hash, or another size, never yields the bytes
-    const other = await newFile(2 * PART);
-    assert.equal((await download({ ...one.file, hash: other.file.hash })).code, CODES.E_FILE_UNREADABLE);
+    // newFile() writes the same content every time: another hash is taken from other bytes
+    const otherHash = await F.hashOf(new Uint8Array(one.file.size));
+    assert.notEqual(otherHash, one.file.hash);
+    assert.equal((await download({ ...one.file, hash: otherHash })).code, CODES.E_FILE_UNREADABLE);
     assert.equal((await download({ ...one.file, size: 2 * PART - 1 })).code, CODES.E_FILE_UNREADABLE);
     assert.equal((await download({ ...one.file, size: 2 * PART + 1 })).ok, false);
 });
@@ -211,7 +218,7 @@ test('the server\'s request limit is waited out on later parts and on downloads,
     const down = await download(one.file);
     assert.equal(down.ok, true);
     assert.equal(limited, 2);
-    assert.deepEqual(down.bytes, one.bytes);
+    sameBytes(down.bytes, one.bytes);
 });
 
 test('downloads: answers of the wrong shape are unreadable; lost answers are tried again, then stop', async () => {
