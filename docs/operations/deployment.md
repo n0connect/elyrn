@@ -143,7 +143,7 @@ stream delivers again, so messages arrive late rather than never.
 **Client address and protocol.** nginx inside the stack takes the client address from
 `X-Forwarded-For` and the protocol (`http` or `https`) from `X-Forwarded-Proto` only for a
 request whose TCP peer is listed in `EDGE_TRUSTED_PROXIES` (comma-separated addresses or CIDRs
-with a prefix of 1 or more; empty by default). A proxy on the same host reaches nginx from the
+with a prefix of at least /8 for IPv4 and /16 for IPv6, the backend's `TRUSTED_PROXIES` bounds; empty by default). A proxy on the same host reaches nginx from the
 edge network's gateway, the first address of `EDGE_SUBNET` (`172.29.72.1` by default): list
 exactly that address, never the whole subnet. From any other peer both headers are ignored and
 nginx passes on the peer's address and its own `$scheme`. The list is rendered by

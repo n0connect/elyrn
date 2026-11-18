@@ -91,10 +91,12 @@ EDGE_GEO_FILE = "edge-proxies.geo"
 EDGE_REALIP_INCLUDE = "include /etc/nginx/conf.d/" + EDGE_REALIP_FILE + ";"
 EDGE_GEO_INCLUDE = "include /etc/nginx/conf.d/" + EDGE_GEO_FILE + ";"
 EDGE_RENDER_TIMEOUT_SEC = 10
-# Entries the renderer must refuse: injection, a zero prefix (every address), malformed, empty
-EDGE_MALFORMED = ("192.0.2.1;", "0.0.0.0/0", "::/0", "192.0.2.300", "192.0.2.1/33", "192.0.2.1,,192.0.2.2",
-                  "192.0.2.1,", "01.2.3.4", "1::2::3", "192.0.2.1\nset_real_ip_from 0.0.0.0/0")
-EDGE_SAMPLE = ("192.0.2.1", "2001:db8::/32")
+# Entries the renderer must refuse: injection, a zero prefix (every address), a range wider than
+# the backend's TRUSTED_PROXIES bounds (/8 IPv4, /16 IPv6), malformed, empty
+EDGE_MALFORMED = ("192.0.2.1;", "0.0.0.0/0", "::/0", "10.0.0.0/7", "2001:db8::/15", "192.0.2.300", "192.0.2.1/33",
+                  "192.0.2.1,,192.0.2.2", "192.0.2.1,", "01.2.3.4", "1::2::3", "192.0.2.1\nset_real_ip_from 0.0.0.0/0")
+# Rendered one entry each; the last two sit exactly on the family bounds
+EDGE_SAMPLE = ("192.0.2.1", "2001:db8::/32", "10.0.0.0/8", "2001:db8::/16")
 # Directives that make nginx believe a client-sent address; only the rendered file may hold them
 REALIP_DIRECTIVES = ("set_real_ip_from", "real_ip_header", "real_ip_recursive")
 # Headers nginx passes to the backend, each from the variable nginx alone decides

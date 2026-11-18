@@ -14,13 +14,13 @@ backend/tests/
 |-- encryption/          # Stored-record encryption, key ids, AAD (12 tests, 2 fuzz)
 |-- identity/            # HKDF / X25519 RFC vectors, derivations, tag separation (5 tests, 2 fuzz)
 |-- integration/         # End-to-end flows over the real route table (137 tests)
-|-- middleware/          # JWT, rate limits, trusted proxy, CORS, security headers, recover (30 tests, 3 fuzz)
+|-- middleware/          # JWT, rate limits, trusted proxy, CORS, security headers, recover (32 tests, 3 fuzz)
 |-- testutil/            # Shared helpers (below)
 `-- utils/               # Validation, SafeMutex, supervised goroutines, logger (12 tests, 3 fuzz)
 ```
 
 Counts are test functions (`^func Test`, `TestMain` excluded) and fuzz targets, as of 18 Nov 2026.
-Across the whole backend there are 380 test functions and 86 fuzz targets; the fuzz list, the
+Across the whole backend there are 382 test functions and 86 fuzz targets; the fuzz list, the
 frontend tests and how to run everything are in
 [docs/development/testing-and-contributing.md](../../docs/development/testing-and-contributing.md).
 

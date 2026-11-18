@@ -218,7 +218,8 @@ func checkConnections() error {
 		return invalid(config.EnvAllowedOrigins, "must list exact origins scheme://host[:port], comma-separated, no wildcard or path ("+err.Error()+")")
 	}
 	if _, _, err := utils.ParseProxyList(config.GetTrustedProxies()); err != nil {
-		return invalid(config.EnvTrustedProxies, "must list IP addresses or CIDR ranges, comma-separated ("+err.Error()+")")
+		return invalid(config.EnvTrustedProxies, fmt.Sprintf("must list IP addresses or CIDR ranges of at least /%d (IPv4) or /%d (IPv6), comma-separated (%s)",
+			utils.MinProxyPrefixIPv4, utils.MinProxyPrefixIPv6, err.Error()))
 	}
 	return nil
 }

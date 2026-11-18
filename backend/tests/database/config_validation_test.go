@@ -60,6 +60,10 @@ func TestValidateStartupConfig_RejectsOutOfRangeValues(t *testing.T) {
 		"file store above its bound":    {config.EnvFileStoreMaxBytes, "1099511627777"},
 		"file store not a number":       {config.EnvFileStoreMaxBytes, "2GiB"},
 		"file budget above its bound":   {config.EnvFileAccountDailyBytes, "10737418241"},
+		"proxies: the whole internet":   {config.EnvTrustedProxies, "0.0.0.0/0"},
+		"proxies: wider than /8":        {config.EnvTrustedProxies, "172.29.73.10,10.0.0.0/7"},
+		"proxies: wider than /16":       {config.EnvTrustedProxies, "2001:db8::/15"},
+		"proxies: mapped IPv4 internet": {config.EnvTrustedProxies, "::ffff:0:0/96"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

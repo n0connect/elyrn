@@ -12,8 +12,11 @@
 #
 # Empty (the default) renders both files without a single entry: no address and no protocol a
 # request sends is ever believed, exactly as before the setting existed. Any malformed entry,
-# an empty one (",,"), or a prefix of 0 (that would list every address on the internet) stops
-# the container with a message naming the setting: nginx never starts on a list it cannot read.
+# an empty one (",,"), or a range wider than /8 (IPv4) or /16 (IPv6) (a /0 would list every
+# address on the internet) stops the container with a message naming the setting: nginx never
+# starts on a list it cannot read. The backend's TRUSTED_PROXIES has the same bounds
+# (backend/internal/utils/netlist.go MinProxyPrefixIPv4/IPv6; backend/tests/middleware reads the
+# two values below and fails when they differ).
 # EDGE_PROXIES_OUT_DIR overrides where the files go (scripts/check-hardening.py renders them
 # into a temporary directory to check this script).
 set -eu
@@ -24,6 +27,9 @@ REALIP_FILE=edge-proxies.realip
 GEO_FILE=edge-proxies.geo
 IPV4_BITS=32
 IPV6_BITS=128
+# The shortest prefix a listed range may have, per family (the backend's bounds; see above)
+IPV4_MIN_PREFIX=8
+IPV6_MIN_PREFIX=16
 IPV4_OCTETS=4
 IPV6_MAX_GROUPS=8
 IPV6_GROUP_CHARS=4
@@ -79,7 +85,7 @@ is_ipv6() {
     done
 }
 
-# One entry: an address, or an address and a prefix length from 1 to the family's width
+# One entry: an address, or an address and a prefix length from the family's minimum to its width
 is_entry() {
     address=${1%/*}
     prefix=
@@ -89,14 +95,16 @@ is_entry() {
     fi
     if is_ipv4 "$address"; then
         bits=$IPV4_BITS
+        min_prefix=$IPV4_MIN_PREFIX
     elif is_ipv6 "$address"; then
         bits=$IPV6_BITS
+        min_prefix=$IPV6_MIN_PREFIX
     else
         return 1
     fi
     [ -z "$prefix" ] && [ "$address" = "$1" ] && return 0
-    # A prefix of 0 would list every address there is
-    is_number "$prefix" "$bits" && [ "$prefix" -ge 1 ]
+    # A wider range trusts address space no operator runs its proxies in (a /0: every address)
+    is_number "$prefix" "$bits" && [ "$prefix" -ge "$min_prefix" ]
 }
 
 raw=${EDGE_TRUSTED_PROXIES:-}
@@ -113,7 +121,7 @@ if [ -n "$list" ]; then
     set -- $list
     IFS=$old_ifs
     for entry in "$@"; do
-        is_entry "$entry" || fail "'$entry' is not an address or CIDR with a prefix from 1 to its width"
+        is_entry "$entry" || fail "'$entry' is not an address or CIDR with a prefix from /$IPV4_MIN_PREFIX (IPv4) or /$IPV6_MIN_PREFIX (IPv6) to its width"
         realip="$realip
 set_real_ip_from $entry;"
         geo="$geo

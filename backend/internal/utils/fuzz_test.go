@@ -209,13 +209,19 @@ func expectListError(t *testing.T, raw string, err error) int {
 // dropped; a refusal names the first malformed entry by position only.
 func FuzzParseProxyList(f *testing.F) {
 	addSeeds(f, "10.0.0.1", "10.0.0.0/8, ::1, fd00::/8", "10.0.0.1,,192.168.0.0/16", "10.0.0.1/33",
-		"fe80::1%eth0", "::ffff:10.0.0.1", "010.0.0.1", "10.0.0.1 , 10.0.0.256", "0.0.0.0/0")
+		"fe80::1%eth0", "::ffff:10.0.0.1", "010.0.0.1", "10.0.0.1 , 10.0.0.256", "0.0.0.0/0",
+		"10.0.0.0/7", "2001:db8::/15", "2001::/16", "::/0", "::ffff:0:0/96", "::ffff:10.0.0.0/104")
 	f.Fuzz(func(t *testing.T, raw string) {
 		ips, nets, err := ParseProxyList(raw)
 		parts := listEntries(raw)
 		good := func(entry string) bool {
-			_, _, cidrErr := net.ParseCIDR(entry)
-			return net.ParseIP(entry) != nil || cidrErr == nil
+			if net.ParseIP(entry) != nil {
+				return true
+			}
+			if _, _, cidrErr := net.ParseCIDR(entry); cidrErr != nil {
+				return false
+			}
+			return proxyRangeWideEnoughOracle(entry)
 		}
 		if err != nil {
 			position := expectListError(t, raw, err)
@@ -244,6 +250,31 @@ func FuzzParseProxyList(f *testing.F) {
 			}
 		}
 	})
+}
+
+// proxyRangeWideEnoughOracle restates the minimum proxy prefix from the text of a range that
+// net.ParseCIDR accepts, through net/netip instead of net.IPNet: an IPv4 range needs at least
+// MinProxyPrefixIPv4 bits, an IPv6 range over IPv4-mapped addresses the same after its 96, any
+// other IPv6 range MinProxyPrefixIPv6.
+func proxyRangeWideEnoughOracle(entry string) bool {
+	slash := strings.LastIndexByte(entry, '/')
+	addr, addrErr := netip.ParseAddr(entry[:slash])
+	length, lengthErr := strconv.Atoi(entry[slash+1:])
+	if addrErr != nil || lengthErr != nil {
+		return false
+	}
+	masked, maskErr := addr.Prefix(length)
+	if maskErr != nil {
+		return false
+	}
+	switch {
+	case addr.Is4():
+		return length >= MinProxyPrefixIPv4
+	case masked.Addr().Is4In6():
+		return length-96 >= MinProxyPrefixIPv4
+	default:
+		return length >= MinProxyPrefixIPv6
+	}
 }
 
 // forbiddenInOrigin can never appear after "scheme://" in a bare origin
