@@ -40,6 +40,18 @@
 // browser cannot: counter-records.js takes each counter under a lock they share, from the record as stored
 // at that moment, and stores the raised record before the message is posted.
 //
+// THE OWN COUNTER. Before its first send in a conversation, a device knows the highest counter
+// its own key spent among the messages the server still holds, and never sends at or below it:
+// another device of the same account may have sent since this one's record was written, and a
+// new device has no record at all. Every own message opened, on any page and whatever its
+// verdict, raises the device's counter (the agent's raiseMine). The latest page holds the newest
+// messages, so an own message there, or failing that the first one met paging back, is the
+// highest; a send waits until one is met or the history ends (ownCounterStep), and a read that
+// fails stops the send, never a send with a guessed counter. Messages are told as own by the
+// member key (rooms) or the account's key (pairs), never by a card. What stays: two devices of
+// one account that send at the same moment, or one that sends without having read the other's
+// last message, can take the same counter.
+//
 // THE SENDER BOUND. A record names at most MAX_SENDERS senders. A room member could send under
 // keys of its own making (until the server refuses a header card that is not the sender's stored
 // card), so the senders a room's record sees are not bounded by its seats. The bound is kept where
@@ -87,6 +99,8 @@ const Counters = (() => {
     const EMPTY = Object.freeze({ seq: 0, mine: 0, senders: Object.freeze([]) });
     const REPLAY = Object.freeze({ replay: true, gap: 0 });
     const IN_ORDER = Object.freeze({ replay: false, gap: 0 });
+    // What a send does before taking a counter (THE OWN COUNTER)
+    const OWN_STEP = Object.freeze({ SEND: 'send', EARLIER: 'earlier', WAIT: 'wait' });
 
     function isCount(value) {
         return Number.isSafeInteger(value) && value >= 0;
@@ -280,8 +294,20 @@ const Counters = (() => {
         return { drop: drop.concat(kept.slice(0, excess).map(entry => entry.id)), evicted: true };
     }
 
+    // ---------- the own counter (see THE OWN COUNTER) ----------
+
+    // What a send does next, from a conversation's state: { loaded (the latest page was read in
+    // this open), ownSeen (an own message was opened since), earlier (the server may hold
+    // messages below the lowest loaded) }. WAIT: nothing is known, the send stops; EARLIER: read
+    // the next earlier page first; SEND: the device's counter covers every own message held.
+    function ownCounterStep({ loaded, ownSeen, earlier }) {
+        if (loaded !== true) return OWN_STEP.WAIT;
+        if (ownSeen === true || earlier !== true) return OWN_STEP.SEND;
+        return OWN_STEP.EARLIER;
+    }
+
     return Object.freeze({
-        EMPTY, MAX_RECORDS, MAX_SENDERS, MAX_UNRECORDED, EXPIRED_ROOM_GRACE_MS, parse, parseBounded, trim, bound, merge, same, ledger, history,
-        lowest, judge, admit, snapshot, expiredLongAgo, retentionEntry, retention
+        EMPTY, MAX_RECORDS, MAX_SENDERS, MAX_UNRECORDED, EXPIRED_ROOM_GRACE_MS, OWN_STEP, parse, parseBounded, trim, bound, merge, same,
+        ledger, history, lowest, judge, admit, snapshot, expiredLongAgo, retentionEntry, retention, ownCounterStep
     });
 })();

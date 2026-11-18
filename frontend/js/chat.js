@@ -317,6 +317,7 @@ const Chat = (() => {
             aura: null,
             verified: false,
             myMaxN: 0,                  // this device's highest counter here: never spent twice
+            ownSeen: false,             // an own message was opened in this open (counters.js THE OWN COUNTER)
             spare: 0,                   // a counter taken for a send the server refused: taken again next
             ledger: Counters.ledger(Counters.EMPTY),  // senders' counters in the loaded sequence
             unrecorded: new Set(),      // senders the full counter record did not take (counter-records.js)
@@ -419,6 +420,7 @@ const Chat = (() => {
         conv.above = new Map();
         // myMaxN is kept: this device's counter only ever grows
         conv.loaded = false;
+        conv.ownSeen = false;
         // Read now, before any await, so every sync and send of this open waits for the same record
         conv.markLoad = CounterRecords.loadMark(conv);
         if (conv.room) {
@@ -594,39 +596,43 @@ const Chat = (() => {
 
     // ---------- earlier messages (paging back) ----------
 
-    // Loads the page just below the lowest message shown, queued with the syncs
+    // Loads the page just below the lowest message shown, queued with the syncs. Resolves to
+    // whether the conversation is still open with the page read (or nothing left to read).
     function earlier() {
         const conv = conversations.get(activeId);
-        if (!conv || !conv.earlier) return Promise.resolve();
+        if (!conv || !conv.earlier) return Promise.resolve(Boolean(conv));
         setEarlierControl(true, true);
         conv.syncChain = conv.syncChain.then(() => earlierNow(conv)).catch(error => {
             // The control is shared by every conversation: only the one still open gets it back
             if (activeId === conv.id) setEarlierControl(conv.earlier, false);
             Log.error(Errors.INTERNAL.E_SYNC_FAILED, error);
+            return false;
         });
         return conv.syncChain;
     }
 
     // An earlier page is history: judged on its own ledger (counters.js, EARLIER PAGES), so it
-    // never moves conv.ledger, conv.maxSeq or the stored record; only firstSeq moves down
+    // never moves conv.ledger, conv.maxSeq or the stored record; only firstSeq moves down.
+    // Resolves to whether the page was read for the conversation still open.
     async function earlierNow(conv) {
         const opened = conv.markLoad;  // a new open replaces it: this page then belongs to nobody
-        if (!conv.earlier || activeId !== conv.id) return;
+        if (activeId !== conv.id) return false;
+        if (!conv.earlier) return true;
         const before = conv.firstSeq;
         const result = await api('GET', `/conversations/${conv.id}/messages?before=${before}`);
-        if (!me || activeId !== conv.id || conv.markLoad !== opened) return;
+        if (!me || activeId !== conv.id || conv.markLoad !== opened) return false;
         if (result.status === HTTP_STATUS.NOT_FOUND) {
             scheduleRefresh();
-            return;
+            return false;
         }
         if (!result.ok || !result.data || !Array.isArray(result.data.messages)) {
             setEarlierControl(true, false);
             if (result.status !== HTTP_STATUS.UNAUTHORIZED) Errors.report(Errors.CODES.E_MESSAGES_NOT_LOADED, null, result);
-            return;
+            return false;
         }
         const ledger = Counters.history(await opened, Counters.lowest(conv.above, conv.ledger));
         const page = await admitMessages(conv, result.data.messages, { ledger: ledger, after: 0, before: before });
-        if (activeId !== conv.id || conv.markLoad !== opened) return;
+        if (activeId !== conv.id || conv.markLoad !== opened) return false;
         conv.above = Counters.lowest(conv.above, ledger);
         conv.firstSeq = page.first || before;
         conv.earlier = mayHaveEarlier(result.data.messages.length, page.first);
@@ -637,6 +643,7 @@ const Chat = (() => {
             checkUnrecorded(conv);
         }
         setEarlierControl(conv.earlier, false);
+        return true;
     }
 
     // Decrypts and authenticates one message: { seq, mine, text, sentAt, sender, counter, from? },
@@ -686,8 +693,13 @@ const Chat = (() => {
 
     // Judges an authenticated message's counter on a ledger (counters.js), the same way for pairs
     // and rooms. A replay is marked so the caller shows a warning in its place; a gap is pushed
-    // before it. Returns whether it was a replay. myMaxN only ever rises, from any page.
+    // before it. Returns whether it was a replay. An own message raises myMaxN from any page and
+    // whatever its verdict: its counter was spent by this account (counters.js THE OWN COUNTER).
     function checkCounter(conv, ledger, message, fresh) {
+        if (message.mine) {
+            conv.myMaxN = Math.max(conv.myMaxN, message.counter);
+            conv.ownSeen = true;
+        }
         const verdict = Counters.judge(ledger, message.sender, message.counter, message.seq);
         if (verdict.replay) {
             message.replayed = true;
@@ -695,9 +707,7 @@ const Chat = (() => {
             return true;
         }
         Counters.admit(ledger, message.sender, message.counter);
-        if (message.mine) {
-            conv.myMaxN = Math.max(conv.myMaxN, message.counter);
-        } else if (verdict.gap > 0) {
+        if (!message.mine && verdict.gap > 0) {
             fresh.push({ gap: verdict.gap, from: message.from });
         }
         return false;
@@ -745,6 +755,12 @@ const Chat = (() => {
         sendBtn.disabled = true;
         try {
             if (conv.room && !conv.room.roster && !(await loadRoster(conv))) return;
+            // Nothing goes, not even a file's parts, before this device's counter covers every own
+            // message the server holds (counters.js THE OWN COUNTER)
+            if (!(await knowOwnCounter(conv))) {
+                Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT);
+                return;
+            }
             // A file's parts go first; its message is sent like any other (412, 409, counters)
             const owner = me;
             const file = attached
@@ -757,6 +773,19 @@ const Chat = (() => {
         } finally {
             sendBtn.disabled = false;
             if (activeId) input.focus();
+        }
+    }
+
+    // Waits for the first load of this open (queued with the syncs), then reads earlier pages
+    // until an own message is met or the history ends (Counters.ownCounterStep). False when the
+    // first load or an earlier page could not be read, or the conversation was left: the send
+    // stops then, never with a guessed counter.
+    async function knowOwnCounter(conv) {
+        await conv.syncChain;
+        for (;;) {
+            const step = Counters.ownCounterStep(conv);
+            if (step === Counters.OWN_STEP.SEND) return activeId === conv.id;
+            if (step === Counters.OWN_STEP.WAIT || activeId !== conv.id || !(await earlier())) return false;
         }
     }
 

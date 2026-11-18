@@ -412,3 +412,54 @@ test('the overflow never clears, even when a sender recorded since brings conv.u
     assert.equal(conv.unrecorded.size, Counters.MAX_UNRECORDED);
     assert.equal(CounterRecords.isUnrecorded(conv, FORMER), false);
 });
+
+// ---------- the own counter: a second device of one account (counters.js THE OWN COUNTER) ----------
+// chat.js needs a page (DOM, IndexedDB): the decision is the real Counters.ownCounterStep, and
+// the wiring that feeds it and waits for it is pinned from chat.js.
+
+const chatSource = readFileSync(new URL('../js/chat.js', import.meta.url), 'utf8');
+const chatBody = (head) => {
+    const start = chatSource.indexOf(head);
+    return chatSource.slice(start, chatSource.indexOf('\n    }\n', start));
+};
+
+test('a device with no record sends only once its counter covers its own key\'s held messages', () => {
+    const { SEND, EARLIER, WAIT } = Counters.OWN_STEP;
+    // Before the first page is read nothing is known: the send stops, it never guesses
+    assert.equal(Counters.ownCounterStep({ loaded: false, ownSeen: false, earlier: false }), WAIT);
+    assert.equal(Counters.ownCounterStep({ loaded: false, ownSeen: true, earlier: false }), WAIT);
+    // The latest page holds own messages 1..n: n is the highest held, the send takes n + 1
+    assert.equal(Counters.ownCounterStep({ loaded: true, ownSeen: true, earlier: true }), SEND);
+    // Its own last message is older than the latest page: earlier pages are read first
+    assert.equal(Counters.ownCounterStep({ loaded: true, ownSeen: false, earlier: true }), EARLIER);
+    // ...until one is met, or the history ends with none (the record's own counter then stands)
+    assert.equal(Counters.ownCounterStep({ loaded: true, ownSeen: true, earlier: true }), SEND);
+    assert.equal(Counters.ownCounterStep({ loaded: true, ownSeen: false, earlier: false }), SEND);
+    // Anything but true is not known
+    assert.equal(Counters.ownCounterStep({ loaded: 1, ownSeen: true, earlier: false }), WAIT);
+    assert.equal(Counters.ownCounterStep({ loaded: true, ownSeen: 1, earlier: true }), EARLIER);
+});
+
+test('chat.js raises its counter from every own message and waits for the own counter before any send', () => {
+    // Every own message raises the counter before it is judged: a replayed or out-of-order own
+    // message was still spent by this account (the agent's raiseMine "whatever the verdict")
+    const check = chatBody('    function checkCounter(');
+    assert.match(check, /^[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*if \(message\.mine\) \{\n\s*conv\.myMaxN = Math\.max\(conv\.myMaxN, message\.counter\);\n\s*conv\.ownSeen = true;\n\s*\}\n\s*const verdict = Counters\.judge\(/);
+    // Own messages are told by the member key (rooms) and the account key (pairs), never a card
+    assert.match(chatSource, /const mine = plain\.sender === conv\.room\.member\.publicKey;/);
+    // A send waits for the first load, then pages back while ownCounterStep says EARLIER; a read
+    // that fails or a conversation left stops it
+    const know = chatBody('    async function knowOwnCounter(');
+    assert.match(know, /await conv\.syncChain;\n\s*for \(;;\) \{\n\s*const step = Counters\.ownCounterStep\(conv\);/);
+    assert.match(know, /if \(step === Counters\.OWN_STEP\.SEND\) return activeId === conv\.id;/);
+    assert.match(know, /if \(step === Counters\.OWN_STEP\.WAIT \|\| activeId !== conv\.id \|\| !\(await earlier\(\)\)\) return false;/);
+    // ...before a file's parts or a text take a counter, with the registered "press send again"
+    const send = chatBody('    async function sendNow(');
+    const waitAt = send.indexOf('await knowOwnCounter(conv)');
+    assert.ok(waitAt > 0 && waitAt < send.indexOf('FileComposer.upload(') && waitAt < send.indexOf('await deliver('));
+    assert.match(send, /if \(!\(await knowOwnCounter\(conv\)\)\) \{\n\s*Errors\.report\(Errors\.CODES\.E_MESSAGE_NOT_SENT\);\n\s*return;/);
+    // Each open starts unknown again; the counter itself is kept (only ever grows)
+    assert.match(chatBody('    async function open('), /conv\.loaded = false;\n\s*conv\.ownSeen = false;/);
+    // The one place a new counter is taken stays after the wait (freshAttempt)
+    assert.equal((chatSource.match(/CounterRecords\.allocateCounter\(/g) || []).length, 1);
+});
