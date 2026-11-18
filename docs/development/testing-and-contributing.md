@@ -111,7 +111,7 @@ choosing, pasting and dropping, and save.
 
 | Suite | Count (13 Nov 2026) | How to count |
 |---|---|---|
-| Go test functions | 380 (137 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
+| Go test functions | 404 (150 in `tests/integration`), plus one `TestMain` | `grep -rhE '^func Test[A-Z_]' --include='*_test.go' backend \| grep -vc '^func TestMain'` |
 | Go fuzz targets | 76 | `python3 -I scripts/check-fuzz-targets.py --list \| wc -l` |
 | Frontend tests | 229 in 26 files (18 Nov 2026) | `grep -hcE '^test\(' frontend/tests/*.test.mjs` (summed), or the `tests` line of `node --test frontend/tests/*.test.mjs` |
 
