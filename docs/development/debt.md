@@ -4,7 +4,53 @@ The single record of what is loose, what was decided and what is unverified. New
 inside each section. An entry leaves only when its fix is verified, never when it is merely
 written. Ids are stable.
 
-## State (13 Nov 2026, evening)
+## State (18 Nov 2026, evening)
+
+- **Not pushed.** Everything of this round is on the local branch `work/nov17` (169 commits past
+  `b82acbd`). `main` = `elyrn-dev` = `b82acbd` on GitHub, and that is what the live instance runs.
+  Merging and pushing wait for the owner's word.
+- **Last full local verification, every exit code read, all 0, at `021fa0a`:** frontend 271 of 271;
+  the containerized Go suite on both engines; engine equivalence; `make check-hardening`; gitleaks;
+  govulncheck; staticcheck on both tag sets; `go vet` on both; gofmt; `go mod verify`; all 89 Go
+  fuzz targets, 10 s each on the native engine, no failure. After it only this file changed.
+  It was the fourth run of the day: the first (at `77783e0`, the first run this round ever had)
+  failed 8 of 15 steps, the second failed one integration test, the third (at `ce2c588`) was green;
+  what they found is under *Found 17 and 18 Nov*.
+- **Measured:** an event stream outlives the server's read timeout (read timeout 1 s, stream idle
+  3 s, then an event delivered: `TestEvents_StreamOutlivesTheReadTimeout`). The audit note that
+  streams end at the read timeout was wrong.
+- **Upgrade drill (the released build, then this one, on one database), passed:** the log reads
+  `Database schema migrated from version 1 to 2`; three accounts, a pair, a room of three, a note
+  and a pending invite made on `b82acbd` were all there afterwards; every old message opened in
+  order with no replay, gap or unrecorded mark; roster and safety number unchanged; the old invite
+  redeemed; the released build then refused the migrated database (`E_SCHEMA_NEWER`) and changed
+  nothing. Two costs to users of the live instance, both known: a Safari user types the account
+  number once after the update (the released build stored the key in a form WebKit cannot read;
+  the page says so), and a friend request still pending from the released build can only be
+  ignored and sent again (S-14).
+- **Seen in real browsers on this tree (WKWebView, the Safari engine, and Chromium):** files
+  (names, `save` only, the standing notice, 600 KB and 10 MB equal by SHA-256, empty file, limit
+  plus one, share used up, reload and a stopped backend midway), roles in both engines (owner and
+  self, the refusal, reserved words in compatibility forms, invisible characters, the 64-byte
+  bound, reload, leave and rejoin), registration, login and logout (`Clear-Site-Data`, nothing
+  left in storage), delivery without a tab switch and while hidden, burn and the refused
+  re-creation, friend requests, a second browser of one account (C-29), the Go agent built offline
+  (join, members, send, read, an onion URL without a proxy refused), response headers.
+- **Not verified:** the removal of an unreadable identity record was seen in WKWebView through a
+  static server at `021fa0a` (first load warns and removes, second load is silent, the counter
+  record stays); a check through the Docker stack reported the warning a second time and was not
+  reproduced (its probe may have read the page before the reload finished); the owner's own
+  Safari is the open confirmation. Not seen live: a relayed friend request, the file hash check in
+  Chromium, the agent's `left` and `same_name` marks, the header at 375 px after its fix,
+  `make onion` end to end, a production-mode start with the live instance's settings.
+- **For the update of the live instance:** back up first (going back means restoring that backup);
+  the server before the agent binaries (every agent binary is built again); `APP_ENV=production`
+  and `EDGE_TRUSTED_PROXIES` must be set, because startup now refuses development mode with an
+  `https` origin; `HSTS_MAX_AGE` defaults to one year in production.
+- **Owed by the owner:** the live instance's `APP_ENV`, `EDGE_TRUSTED_PROXIES` and `HSTS_MAX_AGE`;
+  a CAA record (`0 issue "letsencrypt.org"`); what the outer proxy in front of the instance is.
+
+## State before this round (13 and 14 Nov 2026)
 
 - `main` and `elyrn-dev` are on GitHub at the same commit with a green CI run (both engines with
   the race detector and every fuzz target, equivalence, frontend, images, govulncheck, gitleaks).
@@ -184,7 +230,7 @@ maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 
 ### Found 17 and 18 Nov
 
-Everything below is in the tree of the full verification at `ce2c588` (State). "Audit" rows are the
+Everything below is in the tree of the full verification at `021fa0a` (State). "Audit" rows are the
 22 records of the security audit of 18 Nov (`needs_validation` there: no target code was executed);
 each fix came with a test that fails without it, and those tests ran in that verification.
 
@@ -228,6 +274,10 @@ each fix came with a test that fails without it, and those tests ran in that ver
 | C-27 | [low] Sealing a room message with an invalid file description threw before returning its promise | it rejects | verified 18 Nov |
 | C-28 | [low] After a friend request was accepted the notes panel kept showing it | accept and every refusal redraw through `refreshRoomPanels` | verified 18 Nov |
 | Q-05 | [tests, found by the first full run] A test helper that called itself (`holdHub`) took the integration package down; seven browser tests were wrong in themselves (two files built from the same bytes compared as different, order pins that read comments, a limit the server accepts listed as refused); a roles test looked a rejoined member up under its earlier card; `check-hardening` held an older rule for `pages_all` | each fixed at its cause; no assertion was loosened | verified 18 Nov |
+| C-29 | [high, found by the tour; the released build has it too] A message sent from an account's second browser was shown to the others as replayed: a device raised its own counter only from own messages on the pages it had loaded, and a send did not wait for the first load | before any send a device waits for the first load and pages back until it meets a message of its own key or the history ends; a failed read sends nothing; own messages are recognised by key | verified 18 Nov, live: WebKit then a fresh Chromium profile then WebKit, every message ordinary for the other member. Limit: two devices of one account sending at the same moment, or one offline, can still take one counter ([threat model](../security/threat-model.md)) |
+| C-30 | [medium, found by the owner] A stored identity that cannot be read back opened the main menu without a word, then (after the first fix) warned on every load | the page says it once, the message stays until closed, and the unreadable identity record alone is removed; a store that does not answer removes nothing | written; State says what was seen and what is open |
+| C-31 | [medium, found by the tour] A `507` (share, quota or store used up) was sent again three times, and the refused file stayed attached so a typed message could not go | only no answer, `502`, `503` and `504` are tried again; after a final refusal the file is let go and the text stays in the box | verified 18 Nov, live in both engines |
+| C-32 | [low] At 375 px the header pushed logout past the edge; nginx warned of a duplicate `svg` type; one sentence was out of the table's style | the header wraps; `mime.types` alone maps svg; sentence restyled | written; the header was not looked at again at 375 px |
 | D-27 | [decided] The Argon2id hash of the auth key (S-07) | removed with its column (D-2026-11-18-a); schema version 2: a binary of version 1 refuses the migrated database (`E_SCHEMA_NEWER`), so going back means restoring the backup taken before the update | verified 18 Nov |
 
 Known limits recorded in this round (none is a regression):
@@ -241,6 +291,9 @@ Known limits recorded in this round (none is a regression):
   many addresses can still fill the store up to `FILE_STORE_MAX_BYTES`.
 - Unrecorded senders are remembered per process (agent) and per tab (browser), not across restarts;
   a refused sender is refused and marked again on its next message.
+- **Open, low:** an account number typed in groups separated by spaces is not an account number
+  to the login field, so the composer sends it as text; refusing it needs one rule for both.
+  `E_REGISTRATION_EXPIRED` is still worded unlike the other sentences.
 - The audit run is closed as incomplete (60 agent invocations, 33 units, 22 records, five checked
   twice); its report is kept outside the repository.
 
