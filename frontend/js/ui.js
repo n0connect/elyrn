@@ -32,6 +32,68 @@ const COMPOSER_MAX_HEIGHT_PX = 140;
 const DEFAULT_ROOM_MEMBERS = 8;
 const DEFAULT_ROOM_TTL_HOURS = 24;
 
+// Every word ui.js writes into the page that is no failure or warning (those are errors.js's,
+// by code): control labels, tags, marks, titles, hints and the empty-state sentences.
+// A text with a part filled in is a function of that part.
+const UI_TEXT = Object.freeze({
+    // conversation list
+    NO_CONVERSATIONS: 'no conversations yet — invite someone you trust, or open a room and share its code',
+    UNREAD_MARK: 'new',
+    NOTES_MARK: 'request',
+    OPEN_MARK: '›',
+    VERIFIED_MARK: '✓',
+    VERIFIED_TITLE: 'safety number verified on this device',
+    // names: a member's 16-bit code follows the name; a room's name is marked as a room's
+    AURA_CODE_PREFIX: '·',
+    ROOM_NAME_PREFIX: '#',
+    ME_TITLE: (name, code) => 'you are ' + name + ' · ' + code,
+    ROOM_META: (members, maxMembers, left) => `${members}/${maxMembers} · ${left}`,
+    // the open conversation
+    VERIFIED_ON: '✓ verified — unmark',
+    VERIFIED_OFF: 'mark as verified',
+    // who a counter warning is about: a room sender by name and code, else the peer, or this device
+    PEER: 'them',
+    SELF: 'you',
+    LEFT_MARK: '· left',
+    RETRY: 'retry',
+    EMPTY_ROOM: (left) => `encrypted for exactly the members listed. you only see what was sent after you joined. the room vanishes ${left}.`,
+    EMPTY_PAIR: (ttlDays) => `end-to-end encrypted. messages vanish after ${ttlDays} days. say hello.`,
+    COMPOSER_HINT: (ttlDays) => `vanishes after ${ttlDays} days · enter to send · shift+enter for a new line`,
+    ROOM_COMPOSER_HINT: (left) => `vanishes ${left} · enter to send · shift+enter for a new line`,
+    // burning and leaving: a pair and a room's owner burn, others leave
+    BURN: 'burn',
+    LEAVE: 'leave',
+    KEEP: 'keep',
+    BURN_PAIR_TITLE: 'Burn conversation',
+    BURN_ROOM_TITLE: 'Burn room for everyone',
+    LEAVE_ROOM_TITLE: 'Leave room',
+    BURN_PAIR_QUESTION: 'burn for both sides? this cannot be undone.',
+    BURN_ROOM_QUESTION: 'burn this room for everyone? this cannot be undone.',
+    LEAVE_ROOM_QUESTION: 'leave this room? you can come back with the code while a seat is free.',
+    // rooms
+    MEMBERS_OPTION: (n) => `${n} people`,
+    ONE_HOUR_OPTION: '1 hour',
+    DAYS_OPTION: (days) => `${days} day${days === 1 ? '' : 's'}`,
+    HOURS_OPTION: (hours) => `${hours} hours`,
+    ROOM_EXPIRY_UNKNOWN: 'when its time is up',
+    ROOM_CODE_HINT: (left) => `anyone holding this code can join while a seat is free · the room vanishes ${left} · share it only over a channel you trust`,
+    YOU_TAG: 'you',
+    OWNER_TAG: 'owner',
+    BEFRIEND: 'befriend',
+    REQUEST_SENT: 'request sent',
+    BEFRIEND_TITLE: 'send them an invite only they can open',
+    WANTS_FRIENDS: 'wants to be friends',
+    LEFT_WANTS_FRIENDS: 'left · wants to be friends',
+    ACCEPT: 'accept',
+    IGNORE: 'ignore',
+    // sizes and times
+    BYTES: (bytes) => `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`,
+    NOW: 'now',
+    WITHIN_THE_HOUR: 'within the hour',
+    IN_HOURS: (hours) => `in ${hours}h`,
+    IN_DAYS: (days) => `in ${days}d`
+});
+
 // Elements marked data-hidden start hidden through the stylesheet; the view code reads and
 // toggles element.style.display, so mirror that state into it once (CSSOM, CSP-safe).
 document.querySelectorAll('[data-hidden]').forEach(element => {
@@ -250,7 +312,7 @@ function createGlyph(grid) {
 
 // The 16-bit code that follows a name wherever both are shown
 function auraCode(aura) {
-    return '·' + aura.code;
+    return UI_TEXT.AURA_CODE_PREFIX + aura.code;
 }
 
 // Glyph, name and code: what tells two members apart (a name alone carries only 12 bits)
@@ -269,7 +331,7 @@ function appendAura(parent, aura) {
 function renderMe(aura) {
     drawGlyph(document.getElementById('meGlyph'), aura.grid);
     document.getElementById('meName').textContent = aura.name;
-    document.getElementById('meBadge').title = 'you are ' + aura.name + ' · ' + aura.code;
+    document.getElementById('meBadge').title = UI_TEXT.ME_TITLE(aura.name, aura.code);
 }
 
 // ---------- home ----------
@@ -341,7 +403,7 @@ function renderConversationList(items, onOpen, onLeave) {
     if (items.length === 0) {
         const empty = document.createElement('li');
         empty.className = 'empty-message';
-        empty.textContent = 'no conversations yet — invite someone you trust, or open a room and share its code';
+        empty.textContent = UI_TEXT.NO_CONVERSATIONS;
         list.appendChild(empty);
         return;
     }
@@ -366,7 +428,7 @@ function renderConversationList(items, onOpen, onLeave) {
 
         const marker = document.createElement('span');
         marker.className = 'unread-marker';
-        marker.textContent = item.unread ? 'new' : (item.room && item.room.notes > 0 ? 'request' : '›');
+        marker.textContent = item.unread ? UI_TEXT.UNREAD_MARK : (item.room && item.room.notes > 0 ? UI_TEXT.NOTES_MARK : UI_TEXT.OPEN_MARK);
 
         row.appendChild(createGlyph(item.aura.grid));
         row.appendChild(name);
@@ -374,8 +436,8 @@ function renderConversationList(items, onOpen, onLeave) {
         if (item.verified) {
             const verified = document.createElement('span');
             verified.className = 'verified-mark';
-            verified.title = 'safety number verified on this device';
-            verified.textContent = '✓';
+            verified.title = UI_TEXT.VERIFIED_TITLE;
+            verified.textContent = UI_TEXT.VERIFIED_MARK;
             row.appendChild(verified);
         }
         row.appendChild(marker);
@@ -386,8 +448,6 @@ function renderConversationList(items, onOpen, onLeave) {
         list.appendChild(row);
     });
 }
-
-const UNVERIFIED_MARK = '⚠ failed verification · cannot be opened';
 
 // A room that failed verification: named from its id, marked, never opened. Its one action
 // (leave; burn for its owner, as the server says) asks first, in the row, as burning does.
@@ -402,7 +462,7 @@ function createUnverifiedRow(item, onLeave) {
     row.appendChild(name);
     const mark = document.createElement('span');
     mark.className = 'aura-code member-broken';
-    mark.textContent = UNVERIFIED_MARK;
+    mark.textContent = Errors.message(Errors.CODES.W_ROOM_CANNOT_OPEN);
     row.appendChild(mark);
     const actions = document.createElement('span');
     actions.className = 'unread-marker';
@@ -419,7 +479,7 @@ function createUnverifiedRow(item, onLeave) {
         question.textContent = burnQuestion(room) + ' ';
         actions.appendChild(question);
         actions.appendChild(actionButton(burnLabel(room), 'burn-yes', () => onLeave(item.id)));
-        actions.appendChild(actionButton(KEEP_LABEL, '', offer));
+        actions.appendChild(actionButton(UI_TEXT.KEEP, '', offer));
     };
     offer();
     return row;
@@ -450,7 +510,7 @@ function showChatView(aura, room) {
     document.getElementById('peerVerified').style.display = 'none';
     const burnButton = document.getElementById('burnBtn');
     burnButton.textContent = burnLabel(room);
-    burnButton.title = room && !room.owner ? 'Leave room' : (room ? 'Burn room for everyone' : 'Burn conversation');
+    burnButton.title = room && !room.owner ? UI_TEXT.LEAVE_ROOM_TITLE : (room ? UI_TEXT.BURN_ROOM_TITLE : UI_TEXT.BURN_PAIR_TITLE);
     clearChildren(document.getElementById('messageList'));
     setEarlierControl(false, false);
     document.getElementById('homeView').style.display = 'none';
@@ -460,7 +520,7 @@ function showChatView(aura, room) {
 function setVerifiedState(verified) {
     document.getElementById('peerVerified').style.display = verified ? 'inline' : 'none';
     const button = document.getElementById('markVerifiedBtn');
-    button.textContent = verified ? '✓ verified — unmark' : 'mark as verified';
+    button.textContent = verified ? UI_TEXT.VERIFIED_ON : UI_TEXT.VERIFIED_OFF;
     button.classList.toggle('active', verified);
 }
 
@@ -475,12 +535,9 @@ function renderSafetyNumber(groups) {
 }
 
 // Who a counter warning is about: a room sender by name and code, else the peer, or this device
-const PEER_LABEL = 'them';
-const SELF_LABEL = 'you';
-
 function senderLabel(from, mine) {
-    if (mine) return SELF_LABEL;
-    return from ? from.name + auraCode(from) : PEER_LABEL;
+    if (mine) return UI_TEXT.SELF;
+    return from ? from.name + auraCode(from) : UI_TEXT.PEER;
 }
 
 // A gap in a sender's counter: the server withheld, delayed or deleted their messages
@@ -491,8 +548,9 @@ function createGapElement(missing, from) {
     const who = senderLabel(from, false);
     // The count comes from the sender's own counter; cap what we repeat back
     item.textContent = missing === 1
-        ? `⚠ 1 message from ${who} never arrived`
-        : missing <= MAX_GAP_SHOWN ? `⚠ ${missing} messages from ${who} never arrived` : `⚠ messages from ${who} never arrived`;
+        ? Errors.message(Errors.CODES.W_MESSAGE_MISSING, { who })
+        : missing <= MAX_GAP_SHOWN ? Errors.message(Errors.CODES.W_MESSAGES_MISSING, { count: missing, who })
+            : Errors.message(Errors.CODES.W_MESSAGES_MISSING_UNCOUNTED, { who });
     return item;
 }
 
@@ -513,10 +571,8 @@ function createMessageListItem(message) {
 
 // What a message that does not open says instead of its text: one a newer elyrn wrote is not
 // shown as tampered with
-const UNREADABLE_MARK = '⚠ unreadable — integrity check failed';
-
 function unreadableText(message) {
-    return message.newer ? Errors.message(Errors.CODES.W_MESSAGE_FROM_NEWER) : UNREADABLE_MARK;
+    return Errors.message(message.newer ? Errors.CODES.W_MESSAGE_FROM_NEWER : Errors.CODES.W_MESSAGE_UNREADABLE);
 }
 
 function createMessageElement(message) {
@@ -535,7 +591,7 @@ function createMessageElement(message) {
         if (role) sender.appendChild(role);
         if (message.left) {
             const left = document.createElement('span');
-            left.textContent = LEFT_MARK;
+            left.textContent = UI_TEXT.LEFT_MARK;
             sender.appendChild(left);
         }
         item.appendChild(sender);
@@ -605,9 +661,7 @@ function renderEmptyConversation(ttlDays, room) {
     if (list.children.length === 0) {
         const empty = document.createElement('li');
         empty.className = 'empty-message';
-        empty.textContent = room
-            ? `encrypted for exactly the members listed. you only see what was sent after you joined. the room vanishes ${formatTimeLeft(room.expiresAt)}.`
-            : `end-to-end encrypted. messages vanish after ${ttlDays} days. say hello.`;
+        empty.textContent = room ? UI_TEXT.EMPTY_ROOM(formatTimeLeft(room.expiresAt)) : UI_TEXT.EMPTY_PAIR(ttlDays);
         list.appendChild(empty);
     }
 }
@@ -623,7 +677,7 @@ function renderLoadFailure(onRetry) {
     Errors.inline(reason, Errors.CODES.E_MESSAGES_NOT_LOADED);
     const retry = document.createElement('button');
     retry.className = 'menu-opt';
-    retry.textContent = 'retry';
+    retry.textContent = UI_TEXT.RETRY;
     retry.addEventListener('click', onRetry);
     item.appendChild(reason);
     item.appendChild(retry);
@@ -631,15 +685,13 @@ function renderLoadFailure(onRetry) {
 }
 
 function setComposerHint(ttlDays) {
-    document.getElementById('composerHint').textContent =
-        `vanishes after ${ttlDays} days · enter to send · shift+enter for a new line`;
+    document.getElementById('composerHint').textContent = UI_TEXT.COMPOSER_HINT(ttlDays);
 }
 
 // Messages go with the room, or after the usual retention if that comes first
 function setRoomComposerHint(expiresAt, ttlDays) {
     const vanish = Math.min(expiresAt, Date.now() + ttlDays * DAY_MS);
-    document.getElementById('composerHint').textContent =
-        `vanishes ${formatTimeLeft(vanish)} · enter to send · shift+enter for a new line`;
+    document.getElementById('composerHint').textContent = UI_TEXT.ROOM_COMPOSER_HINT(formatTimeLeft(vanish));
 }
 
 function updateComposerMeta() {
@@ -657,7 +709,7 @@ const SIZE_UNITS = ['KB', 'MB', 'GB'];
 
 function formatFileSize(bytes) {
     if (!Number.isSafeInteger(bytes) || bytes < 0) return '';
-    if (bytes < SIZE_STEP) return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`;
+    if (bytes < SIZE_STEP) return UI_TEXT.BYTES(bytes);
     let value = bytes / SIZE_STEP;
     let unit = 0;
     while (value >= SIZE_STEP && unit < SIZE_UNITS.length - 1) {
@@ -683,15 +735,20 @@ function formatTime(ms) {
 // "in 5h", "in 3d", "within the hour", "now"
 function formatTimeLeft(atMs) {
     const left = atMs - Date.now();
-    if (left <= 0) return 'now';
+    if (left <= 0) return UI_TEXT.NOW;
     const hours = Math.floor(left / HOUR_MS);
-    if (hours >= DAYS_SHOWN_FROM_HOURS) return `in ${Math.floor(hours / HOURS_PER_DAY)}d`;
-    return hours >= 1 ? `in ${hours}h` : 'within the hour';
+    if (hours >= DAYS_SHOWN_FROM_HOURS) return UI_TEXT.IN_DAYS(Math.floor(hours / HOURS_PER_DAY));
+    return hoursLeft(hours);
 }
 
 function formatExpiry(expiresAtSeconds) {
     const hours = Math.max(0, Math.round((expiresAtSeconds * SECOND_MS - Date.now()) / HOUR_MS));
-    return hours >= 1 ? `in ${hours}h` : 'within the hour';
+    return hoursLeft(hours);
+}
+
+// Whole hours left as read: "in 5h", or "within the hour" below one
+function hoursLeft(hours) {
+    return hours >= 1 ? UI_TEXT.IN_HOURS(hours) : UI_TEXT.WITHIN_THE_HOUR;
 }
 
 // ---------- rooms ----------
@@ -699,16 +756,14 @@ function formatExpiry(expiresAtSeconds) {
 // per-room auras, which link to nothing outside the room.
 
 function roomName(aura) {
-    return '#' + aura.name;
+    return UI_TEXT.ROOM_NAME_PREFIX + aura.name;
 }
 
 function roomMeta(room) {
-    return `${room.members}/${room.maxMembers} · ${formatTimeLeft(room.expiresAt)}`;
+    return UI_TEXT.ROOM_META(room.members, room.maxMembers, formatTimeLeft(room.expiresAt));
 }
 
 const ROOM_PANELS = ['membersPanel', 'notesPanel', 'roomCodePanel'];
-const LOOKALIKE_TAG = 'same name as another member';
-const LEFT_MARK = '· left';
 
 function hideRoomPanels() {
     ROOM_PANELS.forEach(id => {
@@ -733,19 +788,17 @@ function renderRoomHeader(room) {
     burnButton.textContent = burnLabel(room);
 }
 
-const KEEP_LABEL = 'keep';
-
 // What burning asks, and its button: a pair (room null) and a room's owner burn, others leave
 function burnQuestion(room) {
     return !room
-        ? 'burn for both sides? this cannot be undone.'
+        ? UI_TEXT.BURN_PAIR_QUESTION
         : room.owner
-            ? 'burn this room for everyone? this cannot be undone.'
-            : 'leave this room? you can come back with the code while a seat is free.';
+            ? UI_TEXT.BURN_ROOM_QUESTION
+            : UI_TEXT.LEAVE_ROOM_QUESTION;
 }
 
 function burnLabel(room) {
-    return room && !room.owner ? 'leave' : 'burn';
+    return room && !room.owner ? UI_TEXT.LEAVE : UI_TEXT.BURN;
 }
 
 function setBurnConfirm(room) {
@@ -760,7 +813,7 @@ function setRoomLimits(maxMembers, ttlChoices) {
     for (let n = ElyrnRoomCrypto.MIN_MEMBERS; n <= maxMembers; n++) {
         const option = document.createElement('option');
         option.value = String(n);
-        option.textContent = `${n} people`;
+        option.textContent = UI_TEXT.MEMBERS_OPTION(n);
         option.selected = n === Math.min(DEFAULT_ROOM_MEMBERS, maxMembers);
         members.appendChild(option);
     }
@@ -769,8 +822,8 @@ function setRoomLimits(maxMembers, ttlChoices) {
     ttlChoices.forEach(hours => {
         const option = document.createElement('option');
         option.value = String(hours);
-        option.textContent = hours === 1 ? '1 hour'
-            : hours % HOURS_PER_DAY === 0 ? `${hours / HOURS_PER_DAY} day${hours === HOURS_PER_DAY ? '' : 's'}` : `${hours} hours`;
+        option.textContent = hours === 1 ? UI_TEXT.ONE_HOUR_OPTION
+            : hours % HOURS_PER_DAY === 0 ? UI_TEXT.DAYS_OPTION(hours / HOURS_PER_DAY) : UI_TEXT.HOURS_OPTION(hours);
         option.selected = hours === DEFAULT_ROOM_TTL_HOURS || ttlChoices.length === 1;
         ttl.appendChild(option);
     });
@@ -816,15 +869,14 @@ function resetRoomPanel() {
     document.getElementById('roomForm').style.display = 'flex';
     document.getElementById('roomStatus').style.display = 'none';
     document.getElementById('roomHint').style.display = 'block';
-    document.getElementById('roomExpiry').textContent = 'when its time is up';
+    document.getElementById('roomExpiry').textContent = UI_TEXT.ROOM_EXPIRY_UNKNOWN;
     document.getElementById('copyRoomBtn').disabled = false;
     document.getElementById('newRoomBtn').disabled = false;
 }
 
 function showRoomCode(code, expiresAt) {
     document.getElementById('roomCodeShown').textContent = code;
-    document.getElementById('roomCodeHint').textContent =
-        `anyone holding this code can join while a seat is free · the room vanishes ${formatTimeLeft(expiresAt)} · share it only over a channel you trust`;
+    document.getElementById('roomCodeHint').textContent = UI_TEXT.ROOM_CODE_HINT(formatTimeLeft(expiresAt));
 }
 
 function memberRow(entry) {
@@ -842,7 +894,7 @@ function memberTag(text) {
 }
 
 function lookalikeTag() {
-    const tag = memberTag(LOOKALIKE_TAG);
+    const tag = memberTag(Errors.message(Errors.CODES.W_LOOKALIKE_MEMBER));
     tag.classList.add('lookalike-tag');
     return tag;
 }
@@ -870,8 +922,8 @@ function renderMembers({ entries, skipped, requested, lookalikes, onBefriend, ro
         const row = memberRow(entry);
         const role = RoleControl.tag(entry.role);
         if (role) row.appendChild(role);
-        if (entry.mine) row.appendChild(memberTag('you'));
-        if (entry.owner) row.appendChild(memberTag('owner'));
+        if (entry.mine) row.appendChild(memberTag(UI_TEXT.YOU_TAG));
+        if (entry.owner) row.appendChild(memberTag(UI_TEXT.OWNER_TAG));
         if (lookalikes.has(entry.publicKey)) row.appendChild(lookalikeTag());
         const control = roleControl(entry);
         if (control) row.appendChild(control);
@@ -879,9 +931,9 @@ function renderMembers({ entries, skipped, requested, lookalikes, onBefriend, ro
             const button = document.createElement('button');
             button.className = 'menu-opt member-action';
             const asked = requested.has(entry.publicKey);
-            button.textContent = asked ? 'request sent' : 'befriend';
+            button.textContent = asked ? UI_TEXT.REQUEST_SENT : UI_TEXT.BEFRIEND;
             button.disabled = asked;
-            button.title = 'send them an invite only they can open';
+            button.title = UI_TEXT.BEFRIEND_TITLE;
             button.addEventListener('click', () => onBefriend(entry));
             row.appendChild(button);
         }
@@ -891,8 +943,8 @@ function renderMembers({ entries, skipped, requested, lookalikes, onBefriend, ro
         const row = document.createElement('li');
         row.className = 'member-item member-broken';
         row.textContent = skipped === 1
-            ? '⚠ 1 member card failed verification — nothing is encrypted for it'
-            : `⚠ ${skipped} member cards failed verification — nothing is encrypted for them`;
+            ? Errors.message(Errors.CODES.W_MEMBER_CARD_UNVERIFIED)
+            : Errors.message(Errors.CODES.W_MEMBER_CARDS_UNVERIFIED, { count: skipped });
         list.appendChild(row);
     }
 }
@@ -915,14 +967,14 @@ function renderNotes(notes, onAccept, onIgnore) {
     panel.style.display = notes.length > 0 ? 'block' : 'none';
     notes.forEach(note => {
         const row = memberRow({ aura: note.aura });
-        row.appendChild(memberTag(note.from ? 'wants to be friends' : 'left · wants to be friends'));
+        row.appendChild(memberTag(note.from ? UI_TEXT.WANTS_FRIENDS : UI_TEXT.LEFT_WANTS_FRIENDS));
         const accept = document.createElement('button');
         accept.className = 'menu-opt member-action';
-        accept.textContent = 'accept';
+        accept.textContent = UI_TEXT.ACCEPT;
         accept.addEventListener('click', () => onAccept(note));
         const ignore = document.createElement('button');
         ignore.className = 'menu-opt';
-        ignore.textContent = 'ignore';
+        ignore.textContent = UI_TEXT.IGNORE;
         ignore.addEventListener('click', () => onIgnore(note));
         row.appendChild(accept);
         row.appendChild(ignore);

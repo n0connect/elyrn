@@ -131,6 +131,14 @@ const Errors = (() => {
         W_MESSAGE_FROM_NEWER: w('sent by a newer elyrn; reload this page to read it'),
         // Shown in place of a message whose sender counter was already used (counters.js)
         W_MESSAGE_REPLAYED: w('⚠ a message from {who} was replayed or reordered by the server'),
+        // Shown in place of a message that failed authentication (ui.js; nothing of it is shown)
+        W_MESSAGE_UNREADABLE: w('⚠ unreadable — integrity check failed'),
+        // Shown where a sender's counter skipped (counters.js): the server withheld, delayed or
+        // deleted their messages. The count comes from the sender's own counter and is repeated
+        // only up to a bound (ui.js MAX_GAP_SHOWN); past it the uncounted sentence is shown
+        W_MESSAGE_MISSING: w('⚠ 1 message from {who} never arrived'),
+        W_MESSAGES_MISSING: w('⚠ {count} messages from {who} never arrived'),
+        W_MESSAGES_MISSING_UNCOUNTED: w('⚠ messages from {who} never arrived'),
 
         // invites
         W_POW_RATE_LIMITED: w('too many attempts — wait a minute'),
@@ -149,7 +157,14 @@ const Errors = (() => {
         // rooms
         E_ROOM_UNVERIFIED: e('a room failed verification against its code — it cannot be opened, only left'),
         E_ROSTER_UNVERIFIED: e('the member list failed verification — not sending to it'),
+        // Shown in place (ui.js): a listed room that failed verification, in its list row, and the
+        // member cards of an open room that failed it, under its member list
+        W_ROOM_CANNOT_OPEN: w('⚠ failed verification · cannot be opened'),
+        W_MEMBER_CARD_UNVERIFIED: w('⚠ 1 member card failed verification — nothing is encrypted for it'),
+        W_MEMBER_CARDS_UNVERIFIED: w('⚠ {count} member cards failed verification — nothing is encrypted for them'),
         W_LOOKALIKE_MEMBERS: w('two members share a name — tell them apart by glyph and code'),
+        // The tag on each member, and each of their messages, whose name another member shares (ui.js)
+        W_LOOKALIKE_MEMBER: w('same name as another member'),
         W_ROOM_EXPIRED: w(ROOM_EXPIRED),
         E_ROOM_CODE_EXPIRED: e(ROOM_EXPIRED),
         E_ROOM_CODE_INVALID: e('invalid room code'),
