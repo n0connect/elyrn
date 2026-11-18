@@ -485,7 +485,9 @@ const ElyrnRoomCrypto = (() => {
         }
     }
 
-    function sealMessage({ room, me, id, recipients, digest, text, sentAt, counter, file }) {
+    // Async like sealNote: an invalid payload (a file description that breaks its rule) rejects,
+    // never throws before a promise exists
+    async function sealMessage({ room, me, id, recipients, digest, text, sentAt, counter, file }) {
         return seal({ room, me, magic: MAGIC_MESSAGE, id, recipients, digest, framed: C.encodePayload({ text, sentAt, counter, file }) });
     }
 
