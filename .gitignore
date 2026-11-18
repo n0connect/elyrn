@@ -11,11 +11,15 @@ go.work
 # Go binaries built at the module root (anchored: never match source dirs like cmd/server)
 /backend/server
 /backend/main
-# make agent output
-/bin/
+# make agent output (no trailing slash: a symlink of that name is ignored too)
+/bin
 
 # Dependencies
 vendor/
+
+# Python (scripts/): bytecode caches
+__pycache__/
+*.pyc
 
 # IDE
 .idea/
@@ -44,10 +48,11 @@ coverage.out
 coverage.txt
 /frontend.sha256
 # make backup-accounts output: account data, never committed
-/backups/
+/backups
 
-# make certs output: the database CA key and the PostgreSQL server key (never committed)
-/certs/
+# make certs output: the database CA key and the PostgreSQL server key (never committed);
+# no trailing slash, so a symlink to another checkout's certs is ignored as well
+/certs
 # Private keys and certificates anywhere in the tree (a key copied out of certs/, a local TLS
 # test key): never committed
 *.pem
