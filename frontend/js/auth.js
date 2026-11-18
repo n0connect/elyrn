@@ -422,7 +422,7 @@ async function copyAccountNumberNow() {
         // Registration was left while the proof of work ran: nothing to tell
         if (isPowCancelled(error) || run !== registrationRun) return;
         // SECURITY: Generic error message; the log keeps only the error's name
-        Errors.inline(errorElement, powFailureCode(error, Errors.fromApi(null, 500)), null, error);
+        Errors.inline(errorElement, powFailureCode(error, Errors.fromApi(null, HTTP_STATUS.SERVER_ERROR)), null, error);
         accountNumberElement.textContent = Errors.message(Errors.CODES.E_ACCOUNT_NUMBER_FAILED);
     }
 }
