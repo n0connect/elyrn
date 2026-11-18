@@ -144,6 +144,12 @@ func (s *Service) RedeemInvite(me *Member, token string) (*models.ConversationDT
 			return err
 		}
 		if err := tx.CreateConversation(conversationID, []models.ConversationMember{mine, theirs}); err != nil {
+			// The fresh id is in use or retired by a burn (store refuseRetiredID): answered as
+			// CreateRoom answers an id conflict, never as an internal error; the transaction rolls
+			// back, so the invite is not spent and a retry draws another id
+			if errors.Is(err, store.ErrConflict) {
+				return ErrConflict
+			}
 			return err
 		}
 		if err := s.saveIndex(tx, self, append([]uuid.UUID{conversationID}, myIndex...)); err != nil {
