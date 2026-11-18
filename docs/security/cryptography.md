@@ -233,6 +233,31 @@ role  = nonce (12, random) || AES-256-GCM(role key, nonce, plain,
 
 ---
 
+## File Encryption
+
+A file ([design](../architecture/files.md)) is sealed in the browser as equal parts and announced
+by an ordinary message whose payload carries `"f"`: the file id, its key, its size, its SHA-256 and
+its name. The message's own encryption is the only key distribution.
+
+```text
+fk     = 32 random bytes; file id = a random UUIDv4; parts = ceil(size / 262144)
+K_i    = HKDF-SHA256(fk, salt = file id (16), info = "noaddx/file/part/v1" || u32be(i) || u32be(parts), 32)
+part_i = AES-256-GCM(K_i, nonce 0^12, P_i (262144 bytes, the last zero-padded),
+                     AAD = "NADF" || 0x01 || conversation id (16) || file id (16) || u32be(i) || u32be(parts))
+h      = SHA-256(the file's size bytes)
+```
+
+- Each `K_i` seals exactly one plaintext, hence the zero nonce.
+- The index and the part count are in both the key and the AAD: a part cannot be moved to another
+  place, file, conversation or a file of another length.
+- Opening requires every part to verify, the padding past `size` to be zero and the reassembled
+  bytes to hash to `h`; anything else is unreadable and nothing is kept.
+- Every sealed part is 262160 bytes: the server learns a file's size in 256 KiB steps only.
+- The browser opens the Go-made file message and the Go side pins a browser-made one (shared
+  vectors); `FILE_PART_BYTES` and the size bound are pinned against the Go sources by a test.
+
+---
+
 ## Proof of Work (PoW) Hashcash
 
 To prevent registration floods and Denial-of-Service attacks against server-side Argon2id hashing, registration requires solving a SHA-256 hashcash puzzle in a client Web Worker (`frontend/js/pow-worker.js`). Creating an invite or a room costs one fresh puzzle as well, so mass-producing pairing tokens or rooms stays expensive even for a logged-in client.
