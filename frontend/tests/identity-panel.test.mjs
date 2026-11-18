@@ -36,13 +36,14 @@ test('the identity badge is a real button that names and controls its panel', ()
     assert.match(badge, /type="button"/);
     assert.match(badge, /aria-expanded="false"/);
     assert.match(badge, /aria-controls="identityPanel"/);
-    assert.match(header, /<canvas class="aura-glyph" id="meGlyph" width="5" height="5" aria-hidden="true"><\/canvas>/);
+    assert.match(header, /<svg class="aura-glyph" id="meGlyph" aria-hidden="true" focusable="false"><\/svg>/);
     // its name is set with the identity: on a phone the visible name is hidden
     const render = fnBody(ui, 'function renderMe(aura)');
     assert.match(render, /badge\.title = UI_TEXT\.ME_TITLE\(aura\.name, aura\.code\);\n\s*badge\.setAttribute\('aria-label', badge\.title\);/);
     // the panel shows glyph, name and code the one way every aura is shown
     assert.match(render, /clearChildren\(line\);\n\s*appendAura\(line, aura\);/);
-    assert.match(css, /\.header-btn:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
+    assert.match(css, /\.me-badge:focus-visible,\n\.add-btn:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
+    assert.match(css, /\.me-badge\[aria-expanded="true"\] \.aura-glyph,/);
 });
 
 test('the identity panel is a pair panel: what it is, then delete set apart by a rule', () => {

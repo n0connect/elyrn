@@ -50,7 +50,7 @@ test('alerts make no request and need no worker, push service or CSP change', ()
     }
     // The control starts hidden in markup and is loaded before the code that raises alerts
     const html = read('../index.html');
-    assert.match(html, /<button type="button" id="alertsBtn" class="header-btn bell-btn" aria-pressed="false" aria-label="alerts off" title="alerts off" data-hidden>/);
+    assert.match(html, /<button type="button" id="alertsBtn" class="icon-btn bell-btn" aria-pressed="false" aria-label="alerts off" title="alerts off" data-hidden>/);
     const order = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
     assert.ok(order.indexOf('js/keystore.js') < order.indexOf('js/alerts.js'));
     assert.ok(order.indexOf('js/alerts.js') < order.indexOf('js/chat.js'));
@@ -102,22 +102,16 @@ test('the bell is hidden without the Notification API and outside a session', ()
     assert.match(source, /const state = controlState\(\{ session, supported: supported\(\), on \}\);/);
 });
 
-test('the bell has two shapes in one place: solid when pressed, struck through and dimmer when not', () => {
+test('the bell has two shapes in one place: solid when pressed, hollow and struck through when not', () => {
     const html = read('../index.html');
     const css = read('../styles.css');
     const button = html.match(/<button type="button" id="alertsBtn"[^>]*>([\s\S]*?)<\/button>/)[1];
-    assert.match(button, /<svg class="bell-glyph"[^>]*aria-hidden="true"[^>]*shape-rendering="crispEdges">/);
-    for (const part of ['bell-body', 'bell-gap', 'bell-strike']) {
-        assert.equal((button.match(new RegExp(`<g class="${part}">`, 'g')) || []).length, 1, part);
-    }
-    assert.doesNotMatch(button, /style=|<image|<text/);
-    assert.equal((html.match(/class="bell-glyph"/g) || []).length, 1);
-    // pressed hides the strike and its gap and takes full colour; unpressed is the muted colour
-    assert.match(css, /\.bell-btn\[aria-pressed="true"\] \.bell-gap,\n\.bell-btn\[aria-pressed="true"\] \.bell-strike \{\n\s*display: none;/);
-    assert.match(css, /\.bell-btn\[aria-pressed="true"\] \{\n\s*color: var\(--fg\);/);
-    assert.match(css, /\.header-btn \{[^}]*color: var\(--muted\);[^}]*min-height: var\(--touch-min\);|\.header-btn \{[^}]*min-height: var\(--touch-min\);[^}]*color: var\(--muted\);/);
-    assert.match(css, /\.bell-btn \{\n\s*min-width: var\(--touch-min\);/);
-    assert.match(css, /\.header-btn:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
+    // both shapes come from the one icon table (pixels.js) into one tile; aria-pressed picks one
+    assert.match(button, /<span class="icon-tile" data-icon="bell-on bell-off"><\/span>/);
+    assert.doesNotMatch(button, /<svg|style=/);
+    assert.match(css, /\.bell-btn\[aria-pressed="true"\] \.icon-bell-off,\n\.bell-btn\[aria-pressed="false"\] \.icon-bell-on \{\n\s*display: none;/);
+    assert.match(css, /\.icon-btn \{[^}]*min-width: var\(--touch-min\);[^}]*min-height: var\(--touch-min\);/);
+    assert.match(css, /\.icon-btn:focus-visible,\n\.me-badge:focus-visible,\n\.add-btn:focus-visible \{\n\s*outline: var\(--focus-ring\);/);
     // at the far right, just before logout
     const header = html.match(/<header>([\s\S]*?)<\/header>/)[1];
     const ids = [...header.matchAll(/<button[^>]*\bid="([^"]+)"/g)].map((m) => m[1]);

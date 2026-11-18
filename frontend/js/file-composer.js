@@ -202,9 +202,6 @@ const FileComposer = (() => {
         el('fileChipSize').textContent = chosen.ready ? formatFileSize(chosen.size) : '';
         if (!chosen.ready) showStatus(UI_TEXT.FILE_PREPARING);
         else if (!chosen.uploading) showStatus('');
-        const remove = el('fileRemoveBtn');
-        remove.textContent = UI_TEXT.FILE_REMOVE;
-        remove.title = UI_TEXT.FILE_REMOVE_TITLE;
         el('sendBtn').disabled = !chosen.ready || chosen.uploading;
     }
 

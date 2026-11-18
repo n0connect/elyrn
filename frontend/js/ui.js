@@ -4,6 +4,8 @@
 // Rendering only: no network, no crypto. Every user- or server-supplied string
 // reaches the DOM through textContent (never innerHTML).
 
+const AURA_GLYPH_CLASS = 'aura-glyph';
+
 // startView is the page's first view (index.html): the brand line while app.js decides
 const START_VIEW_ID = 'startView';
 const VIEW_IDS = [START_VIEW_ID, 'mainMenu', 'loginContainer', 'registerContainer', 'doorVerdictContainer',
@@ -41,7 +43,6 @@ const UI_TEXT = Object.freeze({
     NO_CONVERSATIONS: 'no conversations yet — invite someone you trust, or open a room and share its code',
     UNREAD_MARK: 'new',
     NOTES_MARK: 'request',
-    OPEN_MARK: '›',
     VERIFIED_MARK: '✓',
     VERIFIED_TITLE: 'safety number verified on this device',
     // names: a member's 16-bit code follows the name; a room's name is marked as a room's
@@ -51,6 +52,19 @@ const UI_TEXT = Object.freeze({
     // the app header's alerts bell (alerts.js): its name, and a title that also says what it does
     ALERTS_ON: 'alerts on',
     ALERTS_OFF: 'alerts off',
+    // icon controls: each one's accessible name and title (and, beside its tile at desktop
+    // widths, its visible word); burnBtn's are the burn and leave texts below
+    LOGOUT: 'logout',
+    BACK: 'back',
+    MEMBERS: 'members',
+    MEMBERS_TITLE: 'members of this room',
+    ROOM_CODE: 'code',
+    ROOM_CODE_TITLE: 'room code',
+    VERIFY: 'verify',
+    VERIFY_TITLE: 'verify safety number',
+    COPY: 'copy',
+    ATTACH: 'attach a file',
+    SEND: 'send',
     ALERTS_TITLE: (name) => `${name} · a notification without any content when a message arrives while this tab is hidden — nothing leaves this device`,
     ROOM_META: (members, maxMembers, left) => `${members}/${maxMembers} · ${left}`,
     // the open conversation
@@ -97,7 +111,6 @@ const UI_TEXT = Object.freeze({
     FILE_PREPARING: 'preparing',
     FILE_UPLOADING: 'uploading',
     FILE_PROGRESS: (word, done, total) => `${word} ${done}/${total}`,
-    FILE_REMOVE: '×',
     FILE_REMOVE_TITLE: 'remove the file',
     // sizes and times
     BYTES: (bytes) => `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`,
@@ -112,6 +125,36 @@ const UI_TEXT = Object.freeze({
 document.querySelectorAll('[data-hidden]').forEach(element => {
     element.style.display = 'none';
 });
+// Icon controls (index.html data-icon, drawn by pixels.js): [id, accessible name, title, visible
+// word or null]. A word sits beside its tile at desktop widths and hides on a phone (styles.css).
+const ICON_BUTTONS = Object.freeze([
+    ['logoutBtn', UI_TEXT.LOGOUT, UI_TEXT.LOGOUT, UI_TEXT.LOGOUT],
+    ['backToListBtn', UI_TEXT.BACK, UI_TEXT.BACK, null],
+    ['membersBtn', UI_TEXT.MEMBERS, UI_TEXT.MEMBERS_TITLE, UI_TEXT.MEMBERS],
+    ['roomCodeBtn', UI_TEXT.ROOM_CODE, UI_TEXT.ROOM_CODE_TITLE, UI_TEXT.ROOM_CODE],
+    ['verifyBtn', UI_TEXT.VERIFY, UI_TEXT.VERIFY_TITLE, UI_TEXT.VERIFY],
+    ['burnBtn', UI_TEXT.BURN, UI_TEXT.BURN_PAIR_TITLE, UI_TEXT.BURN],
+    ['copyBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
+    ['copyRobotBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
+    ['copyInviteBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
+    ['copyRoomBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
+    ['copyRoomCodeBtn', UI_TEXT.COPY, UI_TEXT.COPY, null],
+    ['fileRemoveBtn', UI_TEXT.FILE_REMOVE_TITLE, UI_TEXT.FILE_REMOVE_TITLE, null],
+    ['attachBtn', UI_TEXT.ATTACH, UI_TEXT.ATTACH, null],
+    ['sendBtn', UI_TEXT.SEND, UI_TEXT.SEND, null]
+]);
+
+// Names an icon control: accessible name, title, and its word where it shows one
+function nameIconButton(button, name, title, word) {
+    button.setAttribute('aria-label', name);
+    button.title = title;
+    const wordElement = button.querySelector('.icon-word');
+    if (wordElement) wordElement.textContent = word || '';
+}
+
+Pixels.install(document);
+ICON_BUTTONS.forEach(([id, name, title, word]) => nameIconButton(document.getElementById(id), name, title, word));
+
 // The start view is the one view shown from the start (isShown reads this)
 document.getElementById(START_VIEW_ID).style.display = 'block';
 
@@ -298,29 +341,13 @@ function clearChildren(element) {
 
 // ---------- aura ----------
 
-// Draws a mirrored 5x5 pixel glyph; CSS scales it up with image-rendering: pixelated
-function drawGlyph(canvas, grid) {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const size = ElyrnCrypto.AURA_GRID_SIZE;
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--fg').trim() || '#000';
-    for (let row = 0; row < size; row++) {
-        for (let col = 0; col < size; col++) {
-            if (grid[row][col]) {
-                ctx.fillRect(col, row, 1, 1);
-            }
-        }
-    }
+// The mirrored 5x5 aura glyph, drawn by the one pixel renderer (pixels.js) in currentColor
+function drawGlyph(svg, grid) {
+    Pixels.drawGlyph(svg, grid);
 }
 
 function createGlyph(grid) {
-    const canvas = document.createElement('canvas');
-    canvas.width = ElyrnCrypto.AURA_GRID_SIZE;
-    canvas.height = ElyrnCrypto.AURA_GRID_SIZE;
-    canvas.className = 'aura-glyph';
-    drawGlyph(canvas, grid);
-    return canvas;
+    return Pixels.glyph(grid, AURA_GLYPH_CLASS);
 }
 
 // The 16-bit code that follows a name wherever both are shown
@@ -360,6 +387,11 @@ function showHome() {
     document.getElementById('chatView').style.display = 'none';
     document.getElementById('homeView').style.display = 'block';
 }
+
+// What a conversation row ends with when nothing is new: the list chevron
+const OPEN_ICON = 'chevron';
+// Icon controls take part in the row's flex layout when shown
+const ICON_BUTTON_DISPLAY = 'inline-flex';
 
 const PAIR_PANELS = ['identityPanel', 'invitePanel', 'roomPanel', 'joinPanel', 'deletePanel'];
 
@@ -453,7 +485,9 @@ function renderConversationList(items, onOpen, onLeave) {
 
         const marker = document.createElement('span');
         marker.className = 'unread-marker';
-        marker.textContent = item.unread ? UI_TEXT.UNREAD_MARK : (item.room && item.room.notes > 0 ? UI_TEXT.NOTES_MARK : UI_TEXT.OPEN_MARK);
+        const mark = item.unread ? UI_TEXT.UNREAD_MARK : (item.room && item.room.notes > 0 ? UI_TEXT.NOTES_MARK : null);
+        if (mark) marker.textContent = mark;
+        else Pixels.setIcons(marker, OPEN_ICON);
 
         row.appendChild(createGlyph(item.aura.grid));
         row.appendChild(name);
@@ -529,13 +563,11 @@ function showChatView(aura, room) {
     hideRoomPanels();
     // A room has members, a code and a member list; a pair has a safety number
     ['roomMeta', 'membersBtn', 'roomCodeBtn'].forEach(id => {
-        document.getElementById(id).style.display = room ? 'inline' : 'none';
+        document.getElementById(id).style.display = room ? ICON_BUTTON_DISPLAY : 'none';
     });
-    document.getElementById('verifyBtn').style.display = room ? 'none' : 'inline';
+    document.getElementById('verifyBtn').style.display = room ? 'none' : ICON_BUTTON_DISPLAY;
     document.getElementById('peerVerified').style.display = 'none';
-    const burnButton = document.getElementById('burnBtn');
-    burnButton.textContent = burnLabel(room);
-    burnButton.title = room && !room.owner ? UI_TEXT.LEAVE_ROOM_TITLE : (room ? UI_TEXT.BURN_ROOM_TITLE : UI_TEXT.BURN_PAIR_TITLE);
+    renderBurnButton(room);
     clearChildren(document.getElementById('messageList'));
     setEarlierControl(false, false);
     document.getElementById('homeView').style.display = 'none';
@@ -810,8 +842,15 @@ function toggleRoomPanel(panelId) {
 
 function renderRoomHeader(room) {
     document.getElementById('roomMeta').textContent = roomMeta(room);
-    const burnButton = document.getElementById('burnBtn');
-    burnButton.textContent = burnLabel(room);
+    renderBurnButton(room);
+}
+
+// Burning (a pair, a room's owner) shows the flame; leaving a room shows the door going out
+function renderBurnButton(room) {
+    const button = document.getElementById('burnBtn');
+    const leaving = Boolean(room && !room.owner);
+    Pixels.setIcons(button.querySelector('.icon-tile'), leaving ? LEAVE_ICON : BURN_ICON);
+    nameIconButton(button, burnLabel(room), leaving ? UI_TEXT.LEAVE_ROOM_TITLE : (room ? UI_TEXT.BURN_ROOM_TITLE : UI_TEXT.BURN_PAIR_TITLE), burnLabel(room));
 }
 
 // What burning asks, and its button: a pair (room null) and a room's owner burn, others leave
@@ -822,6 +861,9 @@ function burnQuestion(room) {
             ? UI_TEXT.BURN_ROOM_QUESTION
             : UI_TEXT.LEAVE_ROOM_QUESTION;
 }
+
+const BURN_ICON = 'burn';
+const LEAVE_ICON = 'logout';
 
 function burnLabel(room) {
     return room && !room.owner ? UI_TEXT.LEAVE : UI_TEXT.BURN;

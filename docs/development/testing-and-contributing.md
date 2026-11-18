@@ -85,15 +85,15 @@ make test-all
 
 **Requirements:** Node.js 20+ (utilizes native `node:crypto` and built-in test runner, zero npm dependencies).
 
-`frontend/tests/` holds 28 test files with 279 tests: seventeen unit files (`crypto`, `room-crypto`,
+`frontend/tests/` holds 29 test files with 285 tests: eighteen unit files (`crypto`, `room-crypto`,
 `room-trust`, `rooms`, `counters`, `errors`, `utils`, `validation`, `pow-worker`, `robot-door`,
-`start-view`, `alerts`, `identity-panel`, `role-control`, `file-crypto`, `file-transfer`, `file-ui`) and the three
+`start-view`, `alerts`, `identity-panel`, `pixels`, `role-control`, `file-crypto`, `file-transfer`, `file-ui`) and the three
 negative-use files (Option E), plus eight seeded fuzz files (`*.fuzz.test.mjs`, Option D);
 `file-names.mjs` holds the file names shared with the Go side (accepted, refused, and the names chosen files are sent under). `file-transfer.test.mjs` runs the
 real transfer against a real `node:http` server that keeps parts by the server's rules and then
 loses answers and refuses with every status. What only a real browser shows is driven by hand,
 never faked: the IndexedDB round trip of `Keystore.keepsKeys` (which form an engine keeps), the
-permission prompt and the notification of `alerts.js`, pressing the identity badge, Escape and the focus it gives back, typing in the role control, and for files
+permission prompt and the notification of `alerts.js`, pressing the identity badge, Escape and the focus it gives back, how an icon tile inverts and steps through its frames on hover (the icon sheet), typing in the role control, and for files
 choosing, pasting and dropping, and save.
 `crypto.test.mjs` alone checks, among others:
 - `auth key matches Go derivation`

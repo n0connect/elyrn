@@ -47,10 +47,14 @@
     --danger-bg: #fff5f5;
     /* The smallest hit area a control gets on a touch-width screen */
     --touch-min: 40px;
-    /* Pixel glyphs scaled up crisp: the aura's 5x5 grid and the alerts bell's 11x11 grid, both
-       drawn about the same height in the header */
+    /* Pixel glyphs: the aura's 5x5 and every icon's 10x10 fill this one box, inside a tile of
+       --tile-pad and a 1 px border */
     --glyph-size: 20px;
-    --bell-size: 22px;
+    --tile-pad: 2px;
+    /* An icon pixel: an icon's 10 pixels fill --glyph-size */
+    --icon-px: 2px;
+    /* An icon's three frames on hover, played once */
+    --icon-steps-ms: 360ms;
     /* The focus ring every control of the app shares */
     --focus-ring: 2px solid var(--fg);
     --focus-offset: 2px;
@@ -309,6 +313,12 @@ button:disabled {
     color: var(--fg);
 }
 
+/* The word buttons answer a hover by inverting, never by lifting or casting a shadow */
+.secondary-btn:hover {
+    background: var(--hover-bg);
+    color: var(--hover-fg);
+}
+
 .text-btn {
     background: transparent;
     border: none;
@@ -398,22 +408,9 @@ button:disabled {
     align-items: center;
 }
 
-.copy-btn {
-    min-width: auto;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-    transition: all 0.2s ease;
-}
-
-.copy-btn:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
-}
-
 .copy-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-    transform: none;
 }
 
 .account-number-warning {
@@ -504,8 +501,8 @@ header {
     text-transform: lowercase;
 }
 
-/* Header controls (identity badge, alerts bell, logout): one height, one baseline, plain until
-   hovered or focused, when they take a thin frame */
+/* The identity badge: glyph tile and name, the height of every icon control; hovered, focused
+   or open, its glyph tile inverts as an icon tile does */
 .header-btn {
     display: inline-flex;
     align-items: center;
@@ -518,55 +515,210 @@ header {
     color: var(--muted);
     background: transparent;
     border: 1px solid transparent;
-    box-shadow: none;
 }
 
 .header-btn:hover,
-.header-btn:active,
-.header-btn:focus-visible {
-    border-color: var(--border);
+.header-btn:focus-visible,
+.me-badge[aria-expanded="true"] {
     color: var(--fg);
     background: transparent;
-    transform: none;
-    box-shadow: none;
 }
 
-.header-btn:focus-visible {
+/* ========================================
+   PIXEL ICONS (pixels.js draws them; this is how they sit, invert and move)
+   One pixel module: the aura's 5x5 and every icon's 10x10 fill the same --glyph-size box, so an
+   icon pixel is half an aura pixel. One tile: the aura glyph's box, 1 px border. One hover and
+   focus language: the tile inverts and the icon steps through its frames once.
+   ======================================== */
+
+.icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: var(--touch-min);
+    min-height: var(--touch-min);
+    margin: 0;
+    padding: 0 6px;
+    font-size: 16px;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid transparent;
+}
+
+.icon-btn:hover,
+.icon-btn:focus-visible {
+    color: var(--fg);
+    background: transparent;
+}
+
+.icon-btn:focus-visible,
+.me-badge:focus-visible,
+.add-btn:focus-visible {
     outline: var(--focus-ring);
     outline-offset: var(--focus-offset);
 }
 
-/* The badge's panel is open: framed while open, as when hovered */
-.me-badge[aria-expanded="true"] {
-    border-color: var(--border);
+/* The tile: the aura glyph's own box */
+.icon-tile,
+.aura-glyph {
+    display: inline-flex;
+    flex-shrink: 0;
+    box-sizing: content-box;
+    width: var(--glyph-size);
+    height: var(--glyph-size);
+    padding: var(--tile-pad);
+    border: 1px solid var(--border);
+    background: var(--bg);
     color: var(--fg);
 }
 
-/* The alerts bell: a square hit area; solid and full colour when on, struck through and dimmer
-   when off. Its shapes live once, in index.html; aria-pressed picks one here. */
-.bell-btn {
-    min-width: var(--touch-min);
-    padding: 0;
-}
-
-.bell-glyph {
-    width: var(--bell-size);
-    height: var(--bell-size);
+.icon,
+.aura-glyph {
     fill: currentColor;
 }
 
-.bell-btn[aria-pressed="true"] {
-    color: var(--fg);
+.icon {
+    display: block;
+    width: 100%;
+    height: 100%;
 }
 
-.bell-btn[aria-pressed="true"] .bell-gap,
-.bell-btn[aria-pressed="true"] .bell-strike {
+/* An icon inside a control that is itself the frame (the composer's attach and send) */
+.icon-bare {
+    display: inline-flex;
+    width: var(--glyph-size);
+    height: var(--glyph-size);
+}
+
+/* Hovered, focused or open: the tile inverts */
+.icon-btn:hover .icon-tile,
+.icon-btn:focus-visible .icon-tile,
+.me-badge:hover .aura-glyph,
+.me-badge:focus-visible .aura-glyph,
+.me-badge[aria-expanded="true"] .aura-glyph,
+.add-btn:hover,
+.add-btn:focus-visible {
+    background: var(--fg);
+    color: var(--bg);
+}
+
+/* Pressed: the icon goes down one icon pixel */
+.icon-btn:active .icon,
+.add-btn:active .icon {
+    translate: 0 var(--icon-px);
+}
+
+/* Burning keeps its red: the tile turns red, the word too */
+.burn-btn {
+    margin-left: 12px;
+}
+
+.icon-btn.burn-btn:hover,
+.icon-btn.burn-btn:focus-visible {
+    color: var(--danger);
+}
+
+.icon-btn.burn-btn:hover .icon-tile,
+.icon-btn.burn-btn:focus-visible .icon-tile {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--bg);
+}
+
+/* Frames: frame 0 at rest; on hover or focus frames 1, 2 and back to 0, stepped, once */
+.pixel-frame {
+    visibility: hidden;
+}
+
+.pixel-frame:first-child {
+    visibility: visible;
+}
+
+.icon-btn:hover .pixel-frame,
+.icon-btn:focus-visible .pixel-frame,
+.add-btn:hover .pixel-frame,
+.add-btn:focus-visible .pixel-frame,
+.conversation-item:hover .pixel-frame,
+.conversation-item:focus .pixel-frame {
+    animation-duration: var(--icon-steps-ms);
+    animation-iteration-count: 1;
+    animation-fill-mode: both;
+    animation-timing-function: step-end;
+}
+
+.icon-btn:hover .pixel-frame:nth-child(1),
+.icon-btn:focus-visible .pixel-frame:nth-child(1),
+.add-btn:hover .pixel-frame:nth-child(1),
+.add-btn:focus-visible .pixel-frame:nth-child(1),
+.conversation-item:hover .pixel-frame:nth-child(1),
+.conversation-item:focus .pixel-frame:nth-child(1) {
+    animation-name: pixel-frame-rest;
+}
+
+.icon-btn:hover .pixel-frame:nth-child(2),
+.icon-btn:focus-visible .pixel-frame:nth-child(2),
+.add-btn:hover .pixel-frame:nth-child(2),
+.add-btn:focus-visible .pixel-frame:nth-child(2),
+.conversation-item:hover .pixel-frame:nth-child(2),
+.conversation-item:focus .pixel-frame:nth-child(2) {
+    animation-name: pixel-frame-first;
+}
+
+.icon-btn:hover .pixel-frame:nth-child(3),
+.icon-btn:focus-visible .pixel-frame:nth-child(3),
+.add-btn:hover .pixel-frame:nth-child(3),
+.add-btn:focus-visible .pixel-frame:nth-child(3),
+.conversation-item:hover .pixel-frame:nth-child(3),
+.conversation-item:focus .pixel-frame:nth-child(3) {
+    animation-name: pixel-frame-second;
+}
+
+@keyframes pixel-frame-first {
+    0% { visibility: visible; }
+    33.333% { visibility: hidden; }
+    100% { visibility: hidden; }
+}
+
+@keyframes pixel-frame-second {
+    0% { visibility: hidden; }
+    33.333% { visibility: visible; }
+    66.667% { visibility: hidden; }
+    100% { visibility: hidden; }
+}
+
+@keyframes pixel-frame-rest {
+    0% { visibility: hidden; }
+    66.667% { visibility: visible; }
+    100% { visibility: visible; }
+}
+
+/* Reduced motion: the inversion stays, the frames do not play */
+@media (prefers-reduced-motion: reduce) {
+    .pixel-frame {
+        animation: none !important;
+    }
+
+    .pixel-frame:first-child {
+        visibility: visible;
+    }
+}
+
+/* The alerts bell: on is the solid bell, off the hollow one struck through (aria-pressed) */
+.bell-btn[aria-pressed="true"] .icon-bell-off,
+.bell-btn[aria-pressed="false"] .icon-bell-on {
     display: none;
 }
 
-/* The gap beside the strike is cut out of the bell in the page's colour, so the line reads */
-.bell-btn .bell-gap {
-    fill: var(--bg);
+/* The list chevron: an icon without a tile, at the icon size */
+.unread-marker .icon {
+    width: var(--glyph-size);
+    height: var(--glyph-size);
+}
+
+/* A word beside its tile (members, code, verify, burn, logout); a phone shows the tile alone */
+.icon-word {
+    white-space: nowrap;
 }
 
 /* ========================================
@@ -588,17 +740,17 @@ header {
 }
 
 .composer button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-width: 54px;
-    padding: 16px 24px;
-    font-size: 24px;
+    padding: 0 16px;
 }
 
 /* The attach control sits before the text, quieter than send */
 .composer .attach-btn {
     min-width: 44px;
-    padding: 16px 12px;
-    background: var(--bg);
-    color: var(--fg);
+    padding: 0 12px;
 }
 
 /* The chosen file, above the composer: name, size, progress, remove */
@@ -616,7 +768,6 @@ header {
 
 .file-chip .file-remove {
     margin: 0 0 0 auto;
-    padding: 4px 8px;
 }
 
 .file-name {
@@ -771,16 +922,23 @@ header {
     }
 
     /* Small controls keep a finger-sized hit area on a touch-width screen */
-    .action-btn,
     .menu-opt,
     .pair-panel .text-btn,
-    .file-card .file-action,
-    .file-chip .file-remove {
+    .file-card .file-action {
         min-height: var(--touch-min);
     }
 
-    .chat-header .action-btn {
-        min-width: var(--touch-min);
+    /* The tile stands alone; its name and title still say what it does */
+    .icon-word {
+        display: none;
+    }
+
+    .icon-btn {
+        padding: 0;
+    }
+
+    .burn-btn {
+        margin-left: 4px;
     }
 
     /* The glyph alone identifies you on small screens; the name lives in its tooltip */
@@ -833,7 +991,7 @@ header {
 .notification {
     background: var(--bg);
     border: 2px solid var(--border);
-    padding: 15px 35px 15px 20px;
+    padding: 15px calc(var(--touch-min) + 4px) 15px 20px;
     margin-bottom: 10px;
     font-family: 'VT323', monospace;
     font-size: 16px;
@@ -871,31 +1029,9 @@ header {
 
 .notification .close-btn {
     position: absolute;
-    top: 8px;
-    right: 8px;
-    background: none;
-    border: none;
-    font-size: 18px;
-    cursor: pointer;
-    font-family: 'VT323', monospace;
+    top: 0;
+    right: 0;
     color: inherit;
-    opacity: 0.6;
-    width: 20px;
-    height: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    padding: 0;
-    transition: all 0.2s ease;
-}
-
-.notification .close-btn:hover {
-    opacity: 1;
-    background: rgba(0, 0, 0, 0.1);
-    border-radius: 2px;
-    transform: none;
-    box-shadow: none;
 }
 
 @media (max-width: 480px) {
@@ -912,12 +1048,6 @@ header {
         padding: 12px calc(var(--touch-min) + 4px) 12px 15px;
     }
 
-    .notification .close-btn {
-        top: 0;
-        right: 0;
-        width: var(--touch-min);
-        height: var(--touch-min);
-    }
 }
 /* ========================================
    ADDITIONAL ENHANCEMENTS
@@ -943,39 +1073,6 @@ header {
 .composer textarea:focus {
     border: none !important;
     box-shadow: none !important;
-}
-
-/* Action Buttons */
-.action-btn {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    font-size: 14px;
-    color: var(--muted);
-    cursor: pointer;
-    padding: 4px 6px;
-    transition: color 0.2s ease;
-}
-
-.action-btn:hover {
-    color: var(--fg);
-}
-
-.action-btn:focus-visible {
-    color: var(--fg);
-    outline: var(--focus-ring);
-    outline-offset: var(--focus-offset);
-}
-
-/* Burning destroys the conversation (it asks first, burnConfirm): it stands apart from the
-   harmless actions beside it and turns red on hover and on focus */
-.action-btn.burn-btn {
-    margin-left: 12px;
-}
-
-.action-btn.burn-btn:hover,
-.action-btn.burn-btn:focus-visible {
-    color: var(--danger);
 }
 
 /* ========================================
@@ -1017,17 +1114,7 @@ header {
    ELYRN — IDENTITY (AURA)
    ======================================== */
 
-/* Key-derived 5x5 glyph: drawn at 5px, scaled up crisp */
-.aura-glyph {
-    width: var(--glyph-size);
-    height: var(--glyph-size);
-    padding: 2px;
-    box-sizing: content-box;
-    border: 1px solid var(--border);
-    background: var(--bg);
-    image-rendering: pixelated;
-    flex-shrink: 0;
-}
+/* The key-derived 5x5 glyph is drawn by pixels.js and sits in the icon tile (PIXEL ICONS) */
 
 .aura-name {
     font-size: 18px;
@@ -1044,11 +1131,6 @@ header {
     margin-left: auto;
     padding: 0 8px;
     text-transform: none;
-}
-
-.me-badge .aura-glyph {
-    width: var(--glyph-size);
-    height: var(--glyph-size);
 }
 
 /* The identity panel: glyph, name and code on one line; deleting the identity set apart below */
@@ -1159,6 +1241,8 @@ header {
 }
 
 .unread-marker {
+    display: inline-flex;
+    align-items: center;
     margin-left: auto;
     font-size: 14px;
     color: var(--muted);
@@ -1204,16 +1288,41 @@ header {
     border-bottom: 1px solid var(--border);
 }
 
-.chat-header .action-btn {
-    font-size: 16px;
-}
-
 /* The actions stay together: on narrow screens they wrap as one group, right-aligned */
 .chat-actions {
     display: flex;
     align-items: center;
     gap: 4px;
     margin-left: auto;
+}
+
+/* With their words the actions take their own line, right-aligned, whatever the name's length */
+@media (min-width: 481px) {
+    .chat-actions {
+        flex-basis: 100%;
+        justify-content: flex-end;
+    }
+}
+
+/* On a phone the tiles stand alone and fit beside the name; the room's size and time go below,
+   and a long name is cut short rather than pushing the actions to a second line */
+@media (max-width: 480px) {
+    .chat-header {
+        flex-wrap: wrap;
+    }
+
+    .chat-header .aura-name {
+        min-width: 0;
+        flex: 0 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .room-meta {
+        order: 1;
+        flex-basis: 100%;
+        text-align: right;
+    }
 }
 
 .safety-number {
@@ -1679,16 +1788,6 @@ body.robot-side {
     box-shadow: none;
 }
 
-/* The copy button reads as a button on black: a 2px frame that fills white on hover */
-.robot-side .copy-btn {
-    border: 2px solid var(--fg);
-}
-
-.robot-side .copy-btn:hover:not(:disabled) {
-    background: var(--fg);
-    color: var(--bg);
-}
-
 /* Toasts keep their place (top right, as on the white side) but take the robot side's colours:
    black, white text, a frame in the toast's own colour */
 .robot-side .notification,
@@ -1712,6 +1811,3 @@ body.robot-side {
     border-color: #ffd34d;
 }
 
-.robot-side .notification .close-btn:hover {
-    background: rgba(255, 255, 255, 0.15);
-}

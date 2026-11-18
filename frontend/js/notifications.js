@@ -9,8 +9,10 @@ const NOTIFICATION_SHOWN_MS = 4000;
 const NOTIFICATION_STAYS = 0;
 const NOTIFICATION_ENTER_DELAY_MS = 10;
 const NOTIFICATION_EXIT_MS = 300;
-const NOTIFICATION_CLOSE_LABEL = '×';
-const NOTIFICATION_CLOSE_ARIA_LABEL = 'Close notification';
+// The close control is the pixel close icon in a tile (pixels.js); its name stays here because a
+// toast can be shown before ui.js (UI_TEXT) has loaded
+const NOTIFICATION_CLOSE_ICON = 'close';
+const NOTIFICATION_CLOSE_ARIA_LABEL = 'close notification';
 
 function showNotification(message, type = 'info', duration = NOTIFICATION_SHOWN_MS) {
     const container = document.getElementById('notificationContainer');
@@ -20,9 +22,14 @@ function showNotification(message, type = 'info', duration = NOTIFICATION_SHOWN_
     notification.className = `notification ${type}`;
     
     const closeBtn = document.createElement('button');
-    closeBtn.className = 'close-btn';
-    closeBtn.textContent = NOTIFICATION_CLOSE_LABEL;
+    closeBtn.type = 'button';
+    closeBtn.className = 'close-btn icon-btn';
+    const closeTile = document.createElement('span');
+    closeTile.className = 'icon-tile';
+    Pixels.setIcons(closeTile, NOTIFICATION_CLOSE_ICON);
+    closeBtn.appendChild(closeTile);
     closeBtn.setAttribute('aria-label', NOTIFICATION_CLOSE_ARIA_LABEL);
+    closeBtn.title = NOTIFICATION_CLOSE_ARIA_LABEL;
     closeBtn.addEventListener('click', function() {
         closeNotification(this);
     });
