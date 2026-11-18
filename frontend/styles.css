@@ -502,8 +502,11 @@ button:disabled {
     text-align: center;
 }
 
+/* The actions wrap onto a second line when the brand, the badge and the actions do not fit on
+   one (a phone at 320-375 px): a flex row that cannot wrap pushed logout past the screen edge */
 header {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 48px;
