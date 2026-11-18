@@ -134,8 +134,10 @@ This is the design of record. Decisions are dated and final unless the owner rev
   new sender that is neither the agent itself nor on the room's current member list is not
   recorded: its messages say `unrecorded: true` (replay protection is not kept for it on this
   agent) and `E_AGENT_SENDER_UNRECORDED` is logged. A new member of the current list is always
-  recorded and displaces the off-list entry recorded longest ago; the agent's own entry and the
-  list's are never displaced. The record keeps the order senders were first recorded in
+  recorded: a new kept sender displaces the off-roster entry recorded most recently; the
+  displaced sender is marked unrecorded (a long-held entry is a real former member, a flood of
+  made-up keys is recorded later; the direction `counters.js` `trim` takes). The agent's own entry
+  and the list's are never displaced. The record keeps the order senders were first recorded in
   (`"order"` in `agent.counters.json`; a record written before it has none and is read in key
   order). One loaded sequence (a read, or a counter sync) tracks its senders under the same keep
   set: the agent itself and the current list are always tracked, so a flood of made-up senders

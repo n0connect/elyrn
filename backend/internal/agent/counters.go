@@ -1,6 +1,9 @@
 package agent
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 // Replay, reorder and gap detection per sender: frontend/js/counters.js, rule for rule. Every
 // message carries its sender's counter inside the authenticated payload, so the server can
@@ -26,7 +29,7 @@ import "slices"
 // on (state.go); 0 in a record written before it was kept.
 //
 // Order lists the keys of Senders in the order they were first recorded (counters.js keeps it in
-// its record's array): the sender bound displaces the off-roster entry recorded longest ago.
+// its record's array): the sender bound displaces the off-roster entry recorded most recently.
 type counterRecord struct {
 	Seq     int64            `json:"seq"`               // highest seq processed by a forward read
 	Mine    int64            `json:"mine"`              // highest counter this account spent or was seen to send
@@ -44,26 +47,32 @@ func newCounterRecord() *counterRecord {
 // its seats; an entry recorded earlier is never given up to a made-up sender:
 //   - a new sender that is not kept (kept: this agent's own key and the current roster) is recorded
 //     only while there is room; at the bound it is not recorded (its messages say unrecorded);
-//   - a new kept sender is always recorded: it displaces the entry recorded longest ago that is
-//     not kept; this agent's own entry and the roster's are never displaced.
+//   - a new kept sender is always recorded: a new kept sender displaces the off-roster entry
+//     recorded most recently; the displaced sender is marked unrecorded. A long-held entry is a
+//     real former member, while a flood of made-up keys is recorded later, so the flood gives way
+//     first (the direction counters.js trim takes). This agent's own entry and the roster's are
+//     never displaced.
 
-// recordSender records a new sender at counter under the bound; it reports whether it did.
-func (r *counterRecord) recordSender(sender string, counter int64, kept func(string) bool) bool {
+// recordSender records a new sender at counter under the bound; it reports whether it did, and
+// the sender it displaced ("" when none), which the caller reports like a refused one.
+func (r *counterRecord) recordSender(sender string, counter int64, kept func(string) bool) (bool, string) {
+	displaced := ""
 	if len(r.Senders) >= maxTrackedSenders {
 		if !kept(sender) {
-			return false
+			return false, ""
 		}
-		for i, victim := range r.Order {
-			if !kept(victim) {
+		for i := len(r.Order) - 1; i >= 0; i-- {
+			if victim := r.Order[i]; !kept(victim) {
 				delete(r.Senders, victim)
 				r.Order = slices.Delete(r.Order, i, i+1)
+				displaced = victim
 				break
 			}
 		}
 	}
 	r.Senders[sender] = counter
 	r.Order = append(r.Order, sender)
-	return true
+	return true, displaced
 }
 
 // verdict is judge's decision on one message.
@@ -150,7 +159,7 @@ func (l *ledger) admit(sender string, counter int64) {
 // seq, new senders recorded in the order first admitted under THE SENDER BOUND (the ledger's kept
 // says which keys the bound never refuses nor displaces). A history ledger changes nothing. It
 // reports whether the record changed, and the refused senders, each once: those the run did not
-// track, then those the record did not take.
+// track, then those the record did not take or gave up to a kept sender (displaced).
 func (l *ledger) snapshot(record *counterRecord, seq int64) (bool, []string) {
 	if l.history() {
 		return false, nil
@@ -159,18 +168,31 @@ func (l *ledger) snapshot(record *counterRecord, seq int64) (bool, []string) {
 	if seq > record.Seq {
 		record.Seq, changed = seq, true
 	}
-	refused := slices.Clone(l.untracked)
+	refused, listed := slices.Clone(l.untracked), maps.Clone(l.refusedIn)
+	refuse := func(key string) {
+		if _, done := listed[key]; !done {
+			listed[key] = struct{}{}
+			refused = append(refused, key)
+		}
+	}
 	for _, sender := range l.runOrder {
 		counter := l.run[sender]
 		last, known := record.Senders[sender]
+		if known {
+			if counter > last {
+				record.Senders[sender], changed = counter, true
+			}
+			continue
+		}
+		recorded, displaced := record.recordSender(sender, counter, l.kept)
 		switch {
-		case known && counter > last:
-			record.Senders[sender], changed = counter, true
-		case known:
-		case record.recordSender(sender, counter, l.kept):
+		case !recorded:
+			refuse(sender)
+		case displaced != "":
+			refuse(displaced)
 			changed = true
 		default:
-			refused = append(refused, sender)
+			changed = true
 		}
 	}
 	return changed, refused

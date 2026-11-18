@@ -10,8 +10,8 @@ import (
 
 // THE SENDER BOUND, as counters.js bound: at the bound a new sender off the current roster is not
 // recorded (its messages say unrecorded), a new roster member always is and displaces the
-// off-roster entry recorded longest ago, and this agent's own entry and the roster's are never
-// displaced. The old rule recorded nobody new at the bound, roster members included, and said
+// off-roster entry recorded most recently (marked unrecorded), and this agent's own entry and the
+// roster's are never displaced. The old rule recorded nobody new at the bound, roster members included, and said
 // nothing.
 
 // madeUpSender is a sender key of nobody's: what a member sending under keys of its own making
@@ -33,7 +33,7 @@ func fullRecord(t *testing.T, st *roomState) []string {
 	var madeUp []string
 	for len(st.counters.Senders) < maxTrackedSenders {
 		sender := madeUpSender(t)
-		if st.counters.recordSender(sender, 1, st.keptSender) {
+		if recorded, _ := st.counters.recordSender(sender, 1, st.keptSender); recorded {
 			madeUp = append(madeUp, sender)
 		}
 	}
@@ -64,8 +64,15 @@ func TestSenderBound_KeepsTheRosterRefusesMadeUpSenders(t *testing.T) {
 	if _, recorded := st.counters.Senders[on]; !recorded {
 		t.Fatal("a new roster member was not recorded in a full record")
 	}
-	if _, kept := st.counters.Senders[madeUp[0]]; kept {
-		t.Fatal("the off-roster entry recorded longest ago was not the one displaced")
+	newest := madeUp[len(madeUp)-1]
+	if _, kept := st.counters.Senders[newest]; kept {
+		t.Fatal("the off-roster entry recorded most recently was not the one displaced")
+	}
+	if _, kept := st.counters.Senders[madeUp[0]]; !kept {
+		t.Fatal("the off-roster entry recorded longest ago was displaced")
+	}
+	if _, marked := st.unrecorded[newest]; !marked {
+		t.Fatal("the displaced sender is not marked unrecorded")
 	}
 	if _, kept := st.counters.Senders[senderKey(st.member.Public)]; !kept || len(st.counters.Senders) != maxTrackedSenders {
 		t.Fatalf("this agent's own entry gave way, or the bound moved: %d senders", len(st.counters.Senders))
@@ -91,7 +98,8 @@ func TestSenderBound_NeverDisplacesAKeptSender(t *testing.T) {
 		st.counters.recordSender(madeUpSender(t), 1, kept)
 	}
 	before := len(st.counters.Senders)
-	if !st.counters.recordSender(senderKey(fx.members[1].Public), 1, kept) || len(st.counters.Senders) != before+1 {
+	if recorded, displaced := st.counters.recordSender(senderKey(fx.members[1].Public), 1, kept); !recorded || displaced != "" ||
+		len(st.counters.Senders) != before+1 {
 		t.Fatal("a kept sender was refused, or displaced another kept one")
 	}
 }
