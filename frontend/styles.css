@@ -785,6 +785,17 @@ header {
         padding: 12px 16px;
     }
 
+    /* The home view's three actions stay one line each at 320 px: a label never breaks */
+    .pair-actions {
+        gap: 8px;
+    }
+
+    .pair-actions button {
+        padding-left: 8px;
+        padding-right: 8px;
+        white-space: nowrap;
+    }
+
     /* Small controls keep a finger-sized hit area on a touch-width screen */
     .action-btn,
     .menu-opt,
