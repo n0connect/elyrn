@@ -146,7 +146,7 @@ test('both peers derive the same conversation key and round-trip a message', asy
     const msg = C.newMessageId();
     const ct = await C.encryptMessage({ key: ab, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, text: 'merhaba 👋 <b>', sentAt: 1729700000000, counter: 7 });
     const out = await C.decryptMessage({ key: ba, conversationId: CONV, messageId: msg, senderPublicKey: a.publicKey, ciphertext: ct });
-    assert.deepEqual({ ...out }, { text: 'merhaba 👋 <b>', sentAt: 1729700000000, counter: 7 });
+    assert.deepEqual({ ...out }, { text: 'merhaba 👋 <b>', sentAt: 1729700000000, counter: 7, file: null, binder: null });
     // Length hiding: ciphertext size is a padded bucket, not the text length
     assert.equal(C.b64urlDecode(ct).length, 12 + 256 + 16);
 });
@@ -165,7 +165,7 @@ test('ciphertext length is one of five power-of-two buckets', async () => {
 test('opens a message encrypted by the Go implementation (interop)', async () => {
     const { a, ba } = await peers();
     const out = await C.decryptMessage({ key: ba, conversationId: CONV, messageId: GO_VECTOR.message, senderPublicKey: a.publicKey, ciphertext: GO_VECTOR.ciphertext });
-    assert.deepEqual({ ...out }, { text: GO_VECTOR.text, sentAt: GO_VECTOR.sentAt, counter: GO_VECTOR.counter });
+    assert.deepEqual({ ...out }, { text: GO_VECTOR.text, sentAt: GO_VECTOR.sentAt, counter: GO_VECTOR.counter, file: null, binder: null });
 });
 
 test('AAD binding: wrong message id, sender, conversation, or tampered bytes fail', async () => {
@@ -258,7 +258,7 @@ test('a payload with valid t, ts and n plus unknown keys is a newer elyrn\'s, to
         assert.ok(thrown, json);
         assert.equal(C.isNewerPayload(thrown), true, json);
     }
-    assert.deepEqual({ ...C.decodePayload(frameOf(`{${VALID}}`)) }, { text: 'hi', sentAt: 1729700000000, counter: 3, file: null });
+    assert.deepEqual({ ...C.decodePayload(frameOf(`{${VALID}}`)) }, { text: 'hi', sentAt: 1729700000000, counter: 3, file: null, binder: null });
 });
 
 test('everything else that fails stays a bad payload, never a newer one', () => {

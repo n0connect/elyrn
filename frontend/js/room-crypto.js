@@ -69,6 +69,13 @@ const ElyrnRoomCrypto = (() => {
     const COMMIT_PREFIX = encoder.encode('noaddx/room/commit/v1');
     const ROSTER_PREFIX = encoder.encode('noaddx/room/roster/v1');
     const SAFETY_PREFIX = encoder.encode('noaddx/room/safety/v1');
+    // Appended to the safety digest's input only when the served member list holds more cards
+    // (seats) than distinct member keys: the label, then the seat count as a big-endian uint32
+    const SEATS_LABEL = encoder.encode('noaddx/room/seats/v1');
+    const SEATS_BYTES = 4;
+    const MAX_SEATS = 0xffffffff;
+    // A friend request's binder (befriendBinder)
+    const INFO_BEFRIEND = encoder.encode('noaddx/room/befriend/v1');
     const AURA_PREFIX = encoder.encode('noaddx/room-aura');
     const MAGIC_MESSAGE = encoder.encode('NADR');
     const MAGIC_NOTE = encoder.encode('NADN');
@@ -482,10 +489,41 @@ const ElyrnRoomCrypto = (() => {
         return seal({ room, me, magic: MAGIC_MESSAGE, id, recipients, digest, framed: C.encodePayload({ text, sentAt, counter, file }) });
     }
 
-    async function sealNote({ room, me, id, toCard, text, sentAt }) {
+    // binder: the friend request's binder (befriendBinder); a note without one is what a browser
+    // from before binders sent, which a reader of this build can only ignore
+    async function sealNote({ room, me, id, toCard, text, sentAt, binder }) {
         const recipient = await openCard(room, toCard);
         const digest = await rosterDigest([toCard]);
-        return seal({ room, me, magic: MAGIC_NOTE, id, recipients: [recipient], digest, framed: C.encodePayload({ text, sentAt, counter: NOTE_COUNTER }) });
+        return seal({
+            room, me, magic: MAGIC_NOTE, id, recipients: [recipient], digest,
+            framed: C.encodePayload({ text, sentAt, counter: NOTE_COUNTER, binder })
+        });
+    }
+
+    // The binder of a friend request (docs/architecture/rooms.md, Friend Requests), 32 bytes:
+    //   HKDF-SHA256(ikm  = X25519(privateKey, peerPublic),
+    //               salt = room id (16 bytes),
+    //               info = "noaddx/room/befriend/v1" || invite token (16) || requester's room key (32)
+    //                      || addressee's room key (32))
+    // The requester computes it with its account key and the addressee's room key; the addressee
+    // with its own room key and the account key the redeem answer names as the invite's creator.
+    // Both agree only when the account that created the invite also holds the room key that sent
+    // the note: a member relaying another account's invite cannot make it. Keys and the token are
+    // base64url; privateKey is a CryptoKey used for deriveBits only (never exported).
+    async function befriendBinder({ room, privateKey, peerPublic, token, requester, addressee }) {
+        const info = C.concat(INFO_BEFRIEND, C.b64urlDecode(token, C.INVITE_TOKEN_BYTES),
+            C.b64urlDecode(requester, KEY_BYTES), C.b64urlDecode(addressee, KEY_BYTES));
+        const shared = await dh(privateKey, C.b64urlDecode(peerPublic, KEY_BYTES));
+        try {
+            return await hkdfBits(shared, room.idBytes, info, C.BINDER_BYTES);
+        } finally {
+            C.wipe(shared);
+        }
+    }
+
+    // Whether two binders are the same bytes, in time independent of where they differ
+    function sameBinder(a, b) {
+        return isBytes(a, C.BINDER_BYTES) && isBytes(b, C.BINDER_BYTES) && bytesEqual(a, b);
     }
 
     // Structure: magic, version, 1..32 wraps (exactly one in a note), one padded frame size
@@ -509,8 +547,10 @@ const ElyrnRoomCrypto = (() => {
         return { header: raw.subarray(0, HEADER_BYTES), wraps: wraps, body: raw.subarray(bodyStart) };
     }
 
-    // Throws unless every check passes: structure, card, both X25519, a wrap, commitment, body
-    async function open({ room, me, magic, id, blob }) {
+    // Throws unless every check passes: structure, card, both X25519, a wrap, commitment, body,
+    // and (a note) the digest it was addressed under (expectDigest). An authentic payload a newer
+    // elyrn wrote throws decodePayload's NEWER_PAYLOAD error carrying the authenticated sender.
+    async function open({ room, me, magic, id, blob, expectDigest }) {
         if (!C.isUuidV4(id)) {
             throw new Error('bad message');
         }
@@ -549,14 +589,25 @@ const ElyrnRoomCrypto = (() => {
                 throw new Error('bad commitment');
             }
             plain = await aesOpen(await aesKey(mk, ['decrypt']), ZERO_NONCE, body, C.concat(room.idBytes, idBytes, header));
-            const payload = C.decodePayload(plain);
+            const digest = header.slice(OFFSET_DIGEST, HEADER_BYTES - 1);
+            if (expectDigest && !bytesEqual(digest, expectDigest)) {
+                throw new Error('addressed to someone else');
+            }
+            let payload;
+            try {
+                payload = C.decodePayload(plain, { binder: magic === MAGIC_NOTE });
+            } catch (error) {
+                if (C.isNewerPayload(error)) error.sender = C.b64urlEncode(sender);
+                throw error;
+            }
             return {
                 text: payload.text,
                 sentAt: payload.sentAt,
                 counter: payload.counter,
                 file: payload.file,
+                binder: payload.binder,
                 sender: C.b64urlEncode(sender),
-                digest: header.slice(OFFSET_DIGEST, HEADER_BYTES - 1)
+                digest: digest
             };
         } finally {
             C.wipe(mk);
@@ -568,12 +619,11 @@ const ElyrnRoomCrypto = (() => {
         return open({ room, me, magic: MAGIC_MESSAGE, id, blob });
     }
 
-    // A note must also have been addressed to me alone
+    // A note must also have been addressed to me alone (checked before its payload is read, so a
+    // note from a newer elyrn is told apart only when it was for me). Its binder is null when it
+    // came from a browser from before binders.
     async function openNote(room, me, id, blob) {
-        const note = await open({ room, me, magic: MAGIC_NOTE, id, blob });
-        if (!bytesEqual(note.digest, await rosterDigest([me.card]))) {
-            throw new Error('note addressed to someone else');
-        }
+        const note = await open({ room, me, magic: MAGIC_NOTE, id, blob, expectDigest: await rosterDigest([me.card]) });
         // A note carries an invite code, never a file
         if (note.file) {
             throw new Error('bad note');
@@ -583,10 +633,25 @@ const ElyrnRoomCrypto = (() => {
 
     // ---------- display ----------
 
-    // Members compare these digits on another channel: equal digits, equal member lists
-    async function safetyNumber(publicKeys) {
-        const raws = publicKeys.map(key => C.b64urlDecode(key, KEY_BYTES)).sort(compareBytes);
-        return C.digitGroups(await C.sha256(C.concat(SAFETY_PREFIX, ...raws)));
+    // Members compare these digits on another channel: equal digits, equal member lists.
+    //   digest = SHA-256("noaddx/room/safety/v1" || distinct member keys (32 each, ascending bytes)
+    //                    [|| "noaddx/room/seats/v1" || u32be(seats)])
+    // seats: the number of cards the server serves (every row, duplicates and cards that do not
+    // open included). The bracketed part is appended only when seats differs from the number of
+    // distinct keys, so a room where every card opens to its own key keeps the number it always
+    // had, and one where two seats claim a key (or a card does not open) shows other digits.
+    async function safetyNumber(publicKeys, seats) {
+        const distinct = [...new Set(publicKeys)];
+        const parts = [SAFETY_PREFIX, ...distinct.map(key => C.b64urlDecode(key, KEY_BYTES)).sort(compareBytes)];
+        if (seats !== undefined && seats !== distinct.length) {
+            if (!Number.isSafeInteger(seats) || seats < 0 || seats > MAX_SEATS) {
+                throw new Error('invalid seat count');
+            }
+            const count = new Uint8Array(SEATS_BYTES);
+            new DataView(count.buffer).setUint32(0, seats, false);
+            parts.push(SEATS_LABEL, count);
+        }
+        return C.digitGroups(await C.sha256(C.concat(...parts)));
     }
 
     async function roomAura(roomId) {
@@ -625,6 +690,8 @@ const ElyrnRoomCrypto = (() => {
         recipients,
         sealMessage,
         sealNote,
+        befriendBinder,
+        sameBinder,
         openMessage,
         openNote,
         safetyNumber,

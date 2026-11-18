@@ -45,13 +45,14 @@ const Rooms = (() => {
             owner: view.owner,
             members: view.members,
             notes: view.notes,
-            roster: null,       // [{ card, publicKey, aura, mine, owner, role }], valid cards only
+            roster: null,       // [{ card, publicKey, aura, mine, owner, role, seats }], one per key (verifyMembers)
             rosterCards: null,  // every card as served (the digest covers them all)
             skipped: 0,         // cards that failed to open: counted, never wrapped for
             requested: new Set(),
             outsiders: new Map(),   // publicKey -> { publicKey, aura }: senders not on the roster (left)
             lookalikes: new Set(),  // public keys whose aura name another key shares
-            warned: new Set()       // lookalike keys already announced this session
+            warned: new Set(),      // lookalike keys already announced this session
+            disputeWarned: false    // the room's disputed seats were announced this session
         };
     }
 
@@ -102,13 +103,22 @@ const Rooms = (() => {
 
     // Opens every listed card with the room's key and checks the list against this account and
     // the code's seat limit. Throws when the server misrepresents the room; returns every card
-    // as served, the verified roster, how many cards were skipped, and this account's stored card.
+    // as served, the verified roster (one entry per key), how many cards did not open, and this
+    // account's stored card.
+    //
+    // A card proves the room code, not the key it announces, so a code holder can take a seat with
+    // a card carrying another member's key. Such a key has more than one seat (`seats`) and is
+    // disputed (disputed()): its entry shows no role, and nobody can set its role or send it a
+    // friend request (an address chosen between its cards could reach the impostor's seat). Its
+    // owner flag is true when any of its cards is the owner's: only the server flags the owner,
+    // and an impostor's seat is never the owner's, so the badge cannot be taken away. Its card is
+    // this account's stored card when the key is ours (the server flags our seat `mine`), else the
+    // first served. A member who left and came back holds one card: the server drops a card when
+    // its seat is left.
     async function verifyMembers(room, members) {
         const cards = [];
-        const roster = [];
-        const seen = new Set();
+        const byKey = new Map();    // publicKey -> { rows: [served entries], mine: our seat's entry }
         let skipped = 0;
-        let storedCard = null;
         for (const entry of members) {
             if (!entry || typeof entry.card !== 'string' || typeof entry.mine !== 'boolean' || typeof entry.owner !== 'boolean' ||
                 typeof entry.role !== 'string') {
@@ -123,26 +133,51 @@ const Rooms = (() => {
                 continue;
             }
             const mine = publicKey === room.member.publicKey;
-            if (entry.mine && !mine) {
+            const seat = byKey.get(publicKey) || { rows: [], mine: null };
+            if (entry.mine && (!mine || seat.mine)) {
+                // A seat flagged ours under another key, or two seats flagged ours
                 throw new Error('the server misattributes a card');
             }
-            if ((mine && !entry.mine) || seen.has(publicKey)) {
-                // Someone else announcing a key already listed (or ours) adds nobody
-                skipped++;
-                continue;
-            }
-            seen.add(publicKey);
-            if (mine) storedCard = entry.card;
-            roster.push({
-                card: entry.card, publicKey: publicKey, aura: await ElyrnCrypto.aura(publicKey), mine: mine, owner: entry.owner,
-                role: await roleOf(room, entry)
-            });
+            if (entry.mine) seat.mine = entry;
+            seat.rows.push(entry);
+            byKey.set(publicKey, seat);
         }
-        // The vault says how many seats exist; a longer list is the server breaking the code's limit
-        if (!seen.has(room.member.publicKey) || cards.length > room.maxMembers) {
+        const own = byKey.get(room.member.publicKey);
+        // The vault says how many seats exist; a longer list is the server breaking the code's
+        // limit. Our own seat must be listed, flagged ours.
+        if (!own || !own.mine || cards.length > room.maxMembers) {
             throw new Error('roster does not match this room');
         }
-        return { cards: cards, roster: roster, skipped: skipped, storedCard: storedCard };
+        const roster = [];
+        for (const [publicKey, seat] of byKey) {
+            const mine = publicKey === room.member.publicKey;
+            const shown = mine ? seat.mine : seat.rows[0];
+            const seats = seat.rows.length;
+            roster.push({
+                card: shown.card, publicKey: publicKey, aura: await ElyrnCrypto.aura(publicKey), mine: mine,
+                owner: seat.rows.some(row => row.owner), seats: seats,
+                // A disputed key's role is never opened: no card of it speaks for the member
+                role: seats > 1 ? '' : await roleOf(room, shown)
+            });
+        }
+        return { cards: cards, roster: roster, skipped: skipped, storedCard: own.mine.card };
+    }
+
+    // The one judgement of a disputed key: more than one served card opens to it (verifyMembers).
+    // Everything that shows or acts on a member asks here: the members panel, the role control,
+    // the befriend control and its request, the bubbles, the room's warning and the safety number.
+    function disputed(entry) {
+        return Boolean(entry) && Number.isSafeInteger(entry.seats) && entry.seats > 1;
+    }
+
+    // The role shown for a roster entry, or '' (none, or disputed)
+    function roleShown(entry) {
+        return entry && !disputed(entry) ? entry.role : '';
+    }
+
+    // The roster's disputed entries
+    function disputedEntries(room) {
+        return room.roster ? room.roster.filter(disputed) : [];
     }
 
     // The role an entry's sealed role opens to: '' when it never had one or it was cleared, and
@@ -161,16 +196,23 @@ const Rooms = (() => {
     }
 
     // Seals text (validated by the caller; '' clears) for the member whose stored card is
-    // entry.card and stores it. Returns the request's result.
+    // entry.card and stores it. Returns the request's result. A disputed entry is refused: which
+    // of its cards is the member's own nobody can tell.
     async function setRole({ api, conv, entry, text }) {
+        if (disputed(entry)) throw new Error('disputed member');
         const role = await R.sealRole({ room: conv.room.keys, card: entry.card, text });
         return api('POST', `/conversations/${conv.id}/members`, { card: entry.card, role: role });
     }
 
     // Who may change entry's role: the room's owner anyone's, every member its own (the server
-    // enforces the same rule; nobody is shown a control they may not use)
+    // enforces the same rule; nobody is shown a control they may not use); nobody a disputed one's
     function mayEditRole(room, entry) {
-        return room.owner === true || entry.mine === true;
+        return !disputed(entry) && (room.owner === true || entry.mine === true);
+    }
+
+    // Whether a friend request may be sent to entry: someone else, not disputed
+    function mayBefriend(entry) {
+        return entry.mine !== true && !disputed(entry);
     }
 
     function senderOf(room, publicKey) {
@@ -280,26 +322,56 @@ const Rooms = (() => {
     }
 
     // ---------- friend requests ----------
+    // A friend request is a note holding an invite code and its binder (R.befriendBinder): the
+    // addressee accepts only when the binder proves that the account which created the invite
+    // also holds the room key that sent the note (binderMatches, after the redeem answer named
+    // the creator). docs/architecture/rooms.md, Friend Requests.
 
-    // A 409 "Id taken" (the note's id is held by something else, nothing stored) seals and sends the
-    // same invite again under a fresh id, MAX_ID_REDRAWS times at most; any other answer is returned
-    async function befriend(api, conv, entry, inviteCode) {
-        let result = await sendNote(api, conv, entry, inviteCode);
+    // Sends entry a friend request for invite ({ code, token }), bound with accountKey (this
+    // account's identity key, a CryptoKey used for deriveBits only). A 409 "Id taken" (the note's
+    // id is held by something else, nothing stored) seals and sends the same request again under a
+    // fresh id, MAX_ID_REDRAWS times at most; any other answer is returned. A disputed entry, or
+    // this account's own, is refused before anything is sealed.
+    async function befriend({ api, conv, entry, invite, accountKey }) {
+        if (!mayBefriend(entry)) throw new Error('not a member to befriend');
+        const room = conv.room;
+        const binder = await R.befriendBinder({
+            room: room.keys, privateKey: accountKey, peerPublic: entry.publicKey, token: invite.token,
+            requester: room.member.publicKey, addressee: entry.publicKey
+        });
+        let result = await sendNote(api, conv, entry, invite.code, binder);
         for (let redraw = 0; Errors.idTaken(result) && redraw < MAX_ID_REDRAWS; redraw++) {
-            result = await sendNote(api, conv, entry, inviteCode);
+            result = await sendNote(api, conv, entry, invite.code, binder);
         }
         return result;
     }
 
-    async function sendNote(api, conv, entry, inviteCode) {
+    async function sendNote(api, conv, entry, inviteCode, binder) {
         const id = ElyrnCrypto.newMessageId();
-        const blob = await R.sealNote({ room: conv.room.keys, me: conv.room.member, id, toCard: entry.card, text: inviteCode, sentAt: Date.now() });
+        const blob = await R.sealNote({
+            room: conv.room.keys, me: conv.room.member, id, toCard: entry.card, text: inviteCode, sentAt: Date.now(), binder
+        });
         return api('POST', `/conversations/${conv.id}/notes`, { id: id, to: entry.card, blob: blob });
     }
 
-    // Returns [{ id, from (roster entry or null), invite }] for the notes that open; the server
-    // cannot make a note open, so anything else is dropped. A listing that failed shows no notes
-    // until the next refresh; it is logged (a 401 has already ended the session).
+    // Whether note (from notes()) was sent by the member whose account created its invite:
+    // creatorKey is the account key the redeem answer named (already checked against the invite's
+    // fingerprint), token the invite's. False for a note without a binder.
+    async function binderMatches({ conv, note, token, creatorKey }) {
+        if (!note.binder) return false;
+        const room = conv.room;
+        const expected = await R.befriendBinder({
+            room: room.keys, privateKey: room.member.privateKey, peerPublic: creatorKey, token: token,
+            requester: note.sender, addressee: room.member.publicKey
+        });
+        return R.sameBinder(expected, note.binder);
+    }
+
+    // Returns the notes that open, as [{ id, from (roster entry or null), aura, sender (its room
+    // key), invite, binder, newer }]: binder null for a request sent before binders (it can only
+    // be ignored), newer true (invite null) for one a newer elyrn wrote. The server cannot make a
+    // note open, so anything else is dropped. A listing that failed shows no notes until the next
+    // refresh; it is logged (a 401 has already ended the session).
     async function notes(api, conv) {
         const result = await api('GET', `/conversations/${conv.id}/notes`);
         if (!result.ok || !result.data || !Array.isArray(result.data.notes)) {
@@ -319,8 +391,13 @@ const Rooms = (() => {
                     dropped++;
                     continue;
                 }
-                opened.push({ id: raw.id, from: senderOf(conv.room, note.sender) || null, aura: await ElyrnCrypto.aura(note.sender), invite: note.text });
+                opened.push(await listedNote(conv, raw.id, note.sender, { invite: note.text, binder: note.binder, newer: false }));
             } catch (e) {
+                if (ElyrnCrypto.isNewerPayload(e) && typeof e.sender === 'string') {
+                    // Authentic and addressed to this member, written by a newer elyrn: shown as such
+                    opened.push(await listedNote(conv, raw.id, e.sender, { invite: null, binder: null, newer: true }));
+                    continue;
+                }
                 // Not for us, or tampered with: a note sealed for another member never opens here
                 // by design, and the server can add notes at will, so each is dropped and counted;
                 // one line per listing is logged below rather than letting the server fill the console
@@ -331,17 +408,24 @@ const Rooms = (() => {
         return opened;
     }
 
+    async function listedNote(conv, id, sender, content) {
+        return Object.assign({ id: id, from: senderOf(conv.room, sender) || null, aura: await ElyrnCrypto.aura(sender), sender: sender }, content);
+    }
+
     function dismissNote(api, conv, noteId) {
         return api('DELETE', `/conversations/${conv.id}/notes/${noteId}`);
     }
 
+    // Over the distinct member keys and, when it differs from their number, the seats served
+    // (R.safetyNumber): a room with a disputed key shows other digits than one without
     function safetyNumber(conv) {
-        return R.safetyNumber(conv.room.roster.map(entry => entry.publicKey));
+        return R.safetyNumber(conv.room.roster.map(entry => entry.publicKey), conv.room.rosterCards.length);
     }
 
     return Object.freeze({
         adopt, refreshView, expired, loadRoster, senderOf, nameCollisions, seal, open, setRole, mayEditRole,
-        ttlChoices, create, join, roomIdOf, sameLimits, codeText, befriend, notes, dismissNote, safetyNumber,
+        disputed, roleShown, disputedEntries, mayBefriend,
+        ttlChoices, create, join, roomIdOf, sameLimits, codeText, befriend, binderMatches, notes, dismissNote, safetyNumber,
         aura: (id) => R.roomAura(id)
     });
 })();

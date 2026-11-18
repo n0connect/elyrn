@@ -80,7 +80,17 @@ A member's card announces their member public key to the room and proves they ho
 card = nonce (12) || AES-256-GCM(K_card, nonce, member_public_key (32), AAD = "NADC" || 0x01 || room_id (16))   // 60 bytes
 ```
 
-The server cannot open or forge a card. It stores each member's card and serves the roster as the list of cards, sorted by their bytes (no join order). Cards are sealed under a random nonce, so the card a device derives at login differs in bytes from the one stored when the account joined; clients use the stored one, because others address notes to it.
+The server cannot open or forge a card. It stores each member's card and serves the roster as the list of cards, sorted by their bytes (no join order). Cards are sealed under a random nonce, so the card a device derives at login differs in bytes from the one stored when the account joined; clients use the stored one, because others address notes to it, and the server refuses a message or note whose header card is not the sender's stored card (`400 Sender card mismatch`).
+
+#### Disputed seats
+
+A card proves the code, not the key it announces: every code holder has `K_card`, so a code holder can take a seat with a card carrying **another member's** key. The server cannot see keys, so both clients neutralise it the same way (browser `frontend/js/rooms.js` `verifyMembers` and `disputed`, the agent's roster):
+
+- A key that more than one served card opens to is **disputed**. Its member is listed once, with its name and code, tagged *"two seats claim this identity"* (in the members panel and on each of its messages), and shows **no role**; nobody can set its role and no friend request can be sent to it (which of its cards is the member's own nobody can tell). The room warns once per session; the member whose own key is disputed is told so plainly.
+- Its `owner` is true when **any** of its cards is flagged owner: only the server flags the owner, and an impostor's seat is never the owner's, so the badge cannot be taken away.
+- Messages stay attributed by key, as they always are (the wraps authenticate the sender).
+- A member who left and joined again holds one card (the server drops a card when its seat is left): that is not a dispute. Two cards both flagged as the viewer's own are the server lying, and the member list is refused.
+- The room safety number counts the seats too ([Limitations](#limitations)), so members comparing it see a room with a duplicated seat differ from one without.
 
 ### Vault
 
@@ -134,7 +144,7 @@ Why each piece is there:
 - **The wrap's AAD hashes the whole header and body**, so a member who holds `mk` cannot keep a genuine wrap and swap the body underneath it.
 - **The commitment** stops a malicious sender from building a body that decrypts to different texts under different keys (AES-GCM is not key-committing): every recipient checks that the `mk` it unwrapped matches the one the header commits to.
 - **Nonces are zero** because every AES-GCM key here encrypts exactly one plaintext: `mk` is fresh per message and each `KEK_r` mixes a fresh ephemeral key and the unique message id.
-- **The card in every message** lets members verify messages from people who have since left: the sender's key comes from a card only a code holder could make.
+- **The card in every message** lets members verify messages from people who have since left: the sender's key comes from a card only a code holder could make. Every member is a code holder, so the server also checks that the card is the sending member's stored card (`400 Sender card mismatch`): a member cannot send under keys of its own making.
 
 ### Roster digest
 
@@ -183,11 +193,27 @@ Lock order (LOCK_HIERARCHY.md): `invites` → `users` → `rooms` → `conversat
 
 A member can ask another member of the same room to become friends without revealing anything until the other side accepts:
 
-1. The requester creates an ordinary single-use invite (a proof of work, counted against `MAX_ACTIVE_INVITES`). Its code carries the fingerprint of the requester's account key.
-2. The invite code travels as a **note**: the room message format with magic `NADN`, exactly one wrap (for the addressee), and a roster digest over the addressee's card only. The server delivers it to the member whose card it names and to nobody else, at most one pending note per pair, until the invite expires.
-3. The addressee sees *"silent-ember wants to be friends"*. Accepting redeems the invite and checks the fingerprint; ignoring deletes the note.
+1. The requester W creates an ordinary single-use invite (a proof of work, counted against `MAX_ACTIVE_INVITES`). Its code carries the fingerprint of W's account key.
+2. The invite code travels as a **note**: the room message format with magic `NADN`, exactly one wrap (for the addressee V), and a roster digest over V's card only. The server delivers it to the member whose card it names and to nobody else, at most one pending note per pair, until the invite expires. Beside the code the note carries a **binder** (below).
+3. V sees *"silent-ember wants to be friends"*. Accepting redeems the invite, checks the fingerprint against the account key the redeem answer names (the invite's creator C), then checks the binder; ignoring deletes the note.
 
-Because the invite code arrives authenticated by the requester's room key, the server cannot substitute the requester's account key in the new one-to-one conversation. Accounts are revealed to each other only when the addressee accepts.
+**The binder** ties the invite to the member who sent it. Without it, a member X who received W's request could seal W's code into a note of its own to V: V would believe it befriended X and be paired with W (a misbinding; X learns no plaintext). W computes, and V recomputes after the redeem answer named C:
+
+```text
+binder = HKDF-SHA256(ikm  = X25519(W_account_private, V_room_public),       // W's side
+                     salt = room_id (16 bytes),
+                     info = "noaddx/room/befriend/v1" || invite_token (16) || W_room_public (32) || V_room_public (32),
+                     32 bytes)
+check  = HKDF-SHA256(ikm  = X25519(V_room_private, C),                        // V's side; C from the redeem answer
+                     same salt, info with the note's authenticated sender room key for W_room_public
+                     and V's own room key for V_room_public)
+```
+
+V accepts only when `check` equals the binder (compared in constant time). A relayed invite fails: the relaying member's room key sent the note, and it cannot compute a binder under the creator's account key for its own room key. On a mismatch V burns the new conversation exactly as on a fingerprint mismatch and is told *"this request did not come from the member who sent it"* (`E_FRIEND_REQUEST_RELAYED`); the note is deleted (its invite is spent). The account key is used inside WebCrypto for `deriveBits` only; nothing is exported.
+
+**The note payload** is the frame every message uses, holding `{"t": invite code, "ts": sender clock, "n": 1, "b": base64url(binder)}` (no padding, 43 characters). Only a note's reader accepts `"b"`; a room or one-to-one message carrying it, and a build from before binders reading a note that carries it, treat it as a key a newer elyrn wrote. A build before binders drops such a note unread (it never showed a note it could not open), so it never offers it as a valid request; this build shows a note whose payload carries keys it does not know as *"sent by a newer elyrn; reload this page to read it"*, with ignore only. A note with no `"b"` (sent by a build from before binders, or still pending from one) is shown as *"sent by an older elyrn and cannot be checked"* with ignore only: its invite is never redeemed, so nothing half-happens. Pasting an invite code into the join field is unchanged (no binder there).
+
+Because the invite code arrives authenticated by the requester's room key, the server cannot substitute the requester's account key in the new one-to-one conversation, and the binder stops another member from relaying it. Accounts are revealed to each other only when the addressee accepts.
 
 ---
 
@@ -253,6 +279,15 @@ proves nothing; only the built-in badge marks the owner.
 ## Limitations
 
 - **The code is the trust anchor.** Anyone who obtains the code can join while a seat is free and read what is sent from then on. Members see every join in the member list and can compare the room's safety number on another channel; that comparison also exposes a malicious server that shows different members different rosters, which only matters if the server also holds the code.
+- **The room safety number** covers the distinct member keys and, when they differ in number, the seats:
+
+  ```text
+  digest = SHA-256("noaddx/room/safety/v1" || distinct member keys (32 bytes each, ascending by bytes)
+                   [ || "noaddx/room/seats/v1" || u32be(seats) ])
+  digits = six groups of five: for g = 0..5, the big-endian integer of digest[5g .. 5g+5) mod 100000, zero-padded
+  ```
+
+  `seats` is the number of cards the server serves (every row of the member list, duplicates and cards that do not open included). The bracketed part is appended only when `seats` differs from the number of distinct keys, so a room where every card opens to its own key keeps the digits it always had, and a room with a disputed seat (above) shows other digits. `frontend/tests/room-trust.test.mjs` pins the vector the Go side reproduces.
 - **No forward secrecy (a condition of the design).** As with one-to-one conversations, whoever later obtains a member's AccountNumber can open the messages still stored for that member (until the room expires or retention deletes them, `MESSAGE_TTL_DAYS` to `MESSAGE_TTL_DAYS` + 1 days after they were sent). The fresh ephemeral key protects a sender only against the leak of their room key, not of the recipient's.
 - **Names are short labels, not identities.** An aura name carries 12 bits, and a member key is derived from an account secret and the room id, so a holder of the code can grind account secrets offline (about 4,096 tries, no server contact) until their key is named like a member's. The client therefore shows the glyph, name and code on every message, tags members and senders whose names equal another key's ("same name as another member") and warns once per session. A determined holder of the code can still grind a full visual match (glyph, name and code: 2^43 X25519 derivations); the room safety number covers every member key and exposes it.
 - **Metadata the server sees.** Member count, join and leave times, message sizes and timing, and who sent each message (as a per-room pseudonym). Over the onion service the server does not see addresses.

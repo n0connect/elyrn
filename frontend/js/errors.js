@@ -170,6 +170,12 @@ const Errors = (() => {
         W_LOOKALIKE_MEMBERS: w('two members share a name — tell them apart by glyph and code'),
         // The tag on each member, and each of their messages, whose name another member shares (ui.js)
         W_LOOKALIKE_MEMBER: w('same name as another member'),
+        // Two or more cards of the served member list open to one key (Rooms.disputed): the tag
+        // on that member and on each of their messages, the room's warning (once per session),
+        // and the warning to the member whose own key it is
+        W_MEMBER_DISPUTED: w('two seats claim this identity'),
+        W_ROOM_SEATS_DISPUTED: w('two seats in this room claim one identity — that member shows no role and cannot be befriended; compare the room safety number with the others'),
+        W_OWN_SEAT_DISPUTED: w('another seat in this room claims to be you — the others see you marked as disputed; compare the room safety number with them'),
         W_ROOM_EXPIRED: w(ROOM_EXPIRED),
         E_ROOM_CODE_EXPIRED: e(ROOM_EXPIRED),
         E_ROOM_CODE_INVALID: e('invalid room code'),
@@ -222,7 +228,13 @@ const Errors = (() => {
         W_FRIEND_REQUEST_PENDING: w('you already have a request waiting with them'),
         W_FRIEND_GONE: w('they are no longer in this room'),
         E_FRIEND_REQUEST_NOT_SENT: e('friend request not sent'),
-        E_FRIEND_REQUEST_MALFORMED: e('that friend request is malformed — ignored')
+        E_FRIEND_REQUEST_MALFORMED: e('that friend request is malformed — ignored'),
+        // The binder in a friend request does not match the account that created its invite
+        // (Rooms.binderMatches): another member relayed someone else's invite
+        E_FRIEND_REQUEST_RELAYED: e('this request did not come from the member who sent it — the conversation it opened was burned'),
+        // A friend request without a binder (sent by an elyrn from before binders): it cannot be
+        // checked, so it can only be ignored
+        W_FRIEND_REQUEST_OUTDATED: w('sent by an older elyrn and cannot be checked — ignore it and ask them to send a new request')
     });
 
     // Reported codes are read from here, so a misspelt name is undefined and reports E_UNKNOWN_CODE
