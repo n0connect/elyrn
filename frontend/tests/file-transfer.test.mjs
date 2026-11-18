@@ -128,6 +128,8 @@ test('every refusal has its code: budget, rate, quota, store, busy, gone, id tak
         [{ status: 429, body: { success: false, message: 'File budget spent' } }, CODES.W_FILE_BUDGET_SPENT, false],
         [{ status: 429, text: 'Too many requests\n', type: 'text/plain' }, CODES.W_FILE_RATE_LIMITED, false],
         [{ status: 507, body: { success: false, message: 'File quota reached' } }, CODES.E_FILE_QUOTA_REACHED, false],
+        // A member's own share of the conversation's quota (fix-spec E1): told apart from a full store
+        [{ status: 507, body: { success: false, message: 'File share reached' } }, CODES.E_FILE_SHARE_REACHED, false],
         [{ status: 507, body: { success: false, message: 'File store full' } }, CODES.E_FILE_STORE_FULL, false],
         [{ status: 507, body: { success: false, message: MARKUP[0] } }, CODES.E_FILE_STORE_FULL, false],
         [{ status: 503, text: 'Service unavailable\n', type: 'text/plain' }, CODES.W_FILE_SERVER_BUSY, false],

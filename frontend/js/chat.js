@@ -775,7 +775,7 @@ const Chat = (() => {
         } else if (result.status === HTTP_STATUS.NOT_FOUND) {
             scheduleRefresh();
         } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
-            Errors.report(Errors.CODES.E_MESSAGE_NOT_SENT, null, result);
+            Errors.report(refusalCode(result, Errors.CODES.E_MESSAGE_NOT_SENT), null, result);
         }
     }
 
@@ -818,6 +818,13 @@ const Chat = (() => {
     // may be held); a 409 "Id taken" stores nothing either
     function settledUnstored(result) {
         return result.status >= HTTP_STATUS.BAD_REQUEST && result.status < HTTP_STATUS.SERVER_ERROR && (result.status !== HTTP_STATUS.CONFLICT || Errors.idTaken(result));
+    }
+
+    // A refusal the server explained with a sentence of its own that says what to do (the room
+    // seat this page sends under is stale: E_SENDER_CARD_MISMATCH), else fallback
+    function refusalCode(result, fallback) {
+        const said = Errors.fromResult(result);
+        return said === Errors.CODES.E_SENDER_CARD_MISMATCH ? said : fallback;
     }
 
     function sealAttempt(conv, attempt) {
@@ -1184,7 +1191,7 @@ const Chat = (() => {
             } else if (result.status === HTTP_STATUS.NOT_FOUND) {
                 Errors.report(Errors.CODES.W_FRIEND_GONE);
             } else if (result.status !== HTTP_STATUS.UNAUTHORIZED) {
-                Errors.report(Errors.CODES.E_FRIEND_REQUEST_NOT_SENT, null, result);
+                Errors.report(refusalCode(result, Errors.CODES.E_FRIEND_REQUEST_NOT_SENT), null, result);
             }
         } catch (e) {
             if (me === owner) Errors.report(powFailureCode(e, Errors.CODES.E_FRIEND_REQUEST_NOT_SENT), null, e);

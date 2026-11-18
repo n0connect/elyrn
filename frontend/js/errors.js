@@ -114,6 +114,10 @@ const Errors = (() => {
         E_MESSAGE_ID_CONFLICT: e('the server refused the message as a duplicate — press send again'),
         // A 409 "Id taken" (the id is held by something else, nothing stored) also under a fresh id
         E_MESSAGE_ID_TAKEN: e('the server said the message id is already in use, twice — nothing was sent, press send again'),
+        // A room message or note whose header card is not the card the server holds for this
+        // member (apperr SenderCardMismatch, JSON "Sender card mismatch"): this page's view of its
+        // own seat is stale, and a reload fetches the member list again
+        E_SENDER_CARD_MISMATCH: e('the server holds another member card for you in this room — nothing was sent; reload the page, then send again'),
         W_VERIFICATION_NOT_SAVED: w('could not save verification on this device'),
         // Browser storage (keystore.js): refused or failed, another tab blocking an upgrade, or
         // another tab upgrading or deleting it under this one
@@ -202,6 +206,8 @@ const Errors = (() => {
         W_FILE_BUDGET_SPENT: w('you have sent as many files today as this server allows — try again tomorrow'),
         W_FILE_RATE_LIMITED: w('too many new files at once — wait a moment, then press send again'),
         E_FILE_QUOTA_REACHED: e('this conversation holds as many files as the server allows — the file was not sent'),
+        // This member's own share of the conversation's file quota (apperr FileShareReached, 507)
+        E_FILE_SHARE_REACHED: e('you already hold your share of this conversation\'s files — the file was not sent; send it once some of yours have expired'),
         E_FILE_STORE_FULL: e('the server has no room for files right now — the file was not sent, try again later'),
         // Id taken or out of order: the next send uploads the file afresh under a new id
         E_FILE_UPLOAD_RESTART: e('the server lost track of this upload — press send again to upload the file afresh'),
@@ -294,7 +300,11 @@ const Errors = (() => {
         'file part out of order': CODES.E_FILE_UPLOAD_RESTART,
         'file quota reached': CODES.E_FILE_QUOTA_REACHED,
         'file store full': CODES.E_FILE_STORE_FULL,
-        'file budget spent': CODES.W_FILE_BUDGET_SPENT
+        'file budget spent': CODES.W_FILE_BUDGET_SPENT,
+        // A member's own share of the conversation's file quota (507, like "File quota reached")
+        'file share reached': CODES.E_FILE_SHARE_REACHED,
+        // A room message or note under a header card that is not the sender's stored card (400)
+        'sender card mismatch': CODES.E_SENDER_CARD_MISMATCH
     });
 
     // Used when the answer carries no message

@@ -81,7 +81,8 @@ const FileTransfer = (() => {
             return { code: said === Errors.CODES.W_FILE_BUDGET_SPENT ? said : Errors.CODES.W_FILE_RATE_LIMITED };
         }
         if (result.status === HTTP_STATUS.INSUFFICIENT_STORAGE) {
-            return { code: said === Errors.CODES.E_FILE_QUOTA_REACHED ? said : Errors.CODES.E_FILE_STORE_FULL };
+            const own = said === Errors.CODES.E_FILE_QUOTA_REACHED || said === Errors.CODES.E_FILE_SHARE_REACHED;
+            return { code: own ? said : Errors.CODES.E_FILE_STORE_FULL };
         }
         if (result.status === HTTP_STATUS.NO_ANSWER) return { code: Errors.CODES.W_FILE_UPLOAD_STOPPED };
         if (result.status >= HTTP_STATUS.SERVER_ERROR) return { code: Errors.CODES.W_FILE_SERVER_BUSY };
