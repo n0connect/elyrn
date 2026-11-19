@@ -4,18 +4,18 @@ The single record of what is loose, what was decided and what is unverified. New
 inside each section. An entry leaves only when its fix is verified, never when it is merely
 written. Ids are stable.
 
-## State (18 Nov 2026, evening)
+## State (19 Nov 2026)
 
-- **Not pushed.** Everything of this round is on the local branch `work/nov17` (169 commits past
-  `b82acbd`). `main` = `elyrn-dev` = `b82acbd` on GitHub, and that is what the live instance runs.
-  Merging and pushing wait for the owner's word.
-- **Last full local verification, every exit code read, all 0, at `021fa0a`:** frontend 271 of 271;
+- **Pushed to `elyrn-dev` on the owner's word (19 Nov);** `main` stays at `b82acbd` until he says
+  otherwise, and that is what the live instance runs. The round is 193 commits past `b82acbd`.
+- **Last full local verification, every exit code read, all 0, at `3e4266e`:** frontend 318 of 318;
   the containerized Go suite on both engines; engine equivalence; `make check-hardening`; gitleaks;
   govulncheck; staticcheck on both tag sets; `go vet` on both; gofmt; `go mod verify`; all 89 Go
   fuzz targets, 10 s each on the native engine, no failure. After it only this file changed.
-  It was the fourth run of the day: the first (at `77783e0`, the first run this round ever had)
-  failed 8 of 15 steps, the second failed one integration test, the third (at `ce2c588`) was green;
-  what they found is under *Found 17 and 18 Nov*.
+  It was the fifth run of the round: the first (at `77783e0`, the first run this round ever had)
+  failed 8 of 15 steps, the second failed one integration test, the third (`ce2c588`) and the
+  fourth (`021fa0a`) were green; what they found is under *Found 17 and 18 Nov*. Between the
+  fourth and the fifth only `frontend/`, documents and `.gitignore` changed (the interface pass, F-05).
 - **Measured:** an event stream outlives the server's read timeout (read timeout 1 s, stream idle
   3 s, then an event delivered: `TestEvents_StreamOutlivesTheReadTimeout`). The audit note that
   streams end at the read timeout was wrong.
@@ -230,7 +230,7 @@ maps them to `E_UNKNOWN_CODE` and `E_BAD_PARAMS`, and the tests pin both texts.
 
 ### Found 17 and 18 Nov
 
-Everything below is in the tree of the full verification at `021fa0a` (State). "Audit" rows are the
+Everything below is in the tree of the full verification at `3e4266e` (State). "Audit" rows are the
 22 records of the security audit of 18 Nov (`needs_validation` there: no target code was executed);
 each fix came with a test that fails without it, and those tests ran in that verification.
 
@@ -278,6 +278,7 @@ each fix came with a test that fails without it, and those tests ran in that ver
 | C-30 | [medium, found by the owner] A stored identity that cannot be read back opened the main menu without a word, then (after the first fix) warned on every load | the page says it once, the message stays until closed, and the unreadable identity record alone is removed; a store that does not answer removes nothing | written; State says what was seen and what is open |
 | C-31 | [medium, found by the tour] A `507` (share, quota or store used up) was sent again three times, and the refused file stayed attached so a typed message could not go | only no answer, `502`, `503` and `504` are tried again; after a final refusal the file is let go and the text stays in the box | verified 18 Nov, live in both engines |
 | C-32 | [low] At 375 px the header pushed logout past the edge; nginx warned of a duplicate `svg` type; one sentence was out of the table's style | the header wraps; `mime.types` alone maps svg; sentence restyled | written; the header was not looked at again at 375 px |
+| F-05 | [interface pass, 18 and 19 Nov, at the owner's eye] The header mixed words and a misplaced toggle, `delete` sat one press from `logout`, passive marks and buttons wore the same frame, the composer fell below the window, a room's unread state showed only as weight, the tab title carried the unread count, and burning ended without a sign | one pixel icon system (`pixels.js`: one table, one renderer, a 10x10 grid at half the aura pixel, tiles with a caption on hover and focus, frames stepped on one clock `--frame-ms`); a frame means "you can press this" and information has none; `delete` lives in a "your identity" panel as a word button; value boxes and the role editor are built like the composer; a conversation fills the window; an unread row carries one black square and the back tile repeats it; the title is always the app's name (a tab's title leaves the page); the favicon is the `e.` mark; burning plays a fire over a dither to black (`burn-fire.js`: thirteen flames of eight shapes and four size classes, each its own colour, on the accelerating travel 0, 0.1, 0.3, 0.6, 1, exactly one frame of full cover on which the view changes, the dark lifting only after the last flame has left; decoration after the server's confirmation, skipped under reduced motion) | verified 19 Nov by the suite; looked at in Chromium frame by frame and by the owner in Safari. Not looked at: the fire and the header at phone width in a real engine (the flames read as thin slivers at 375 px), an eight-member room, the last state in WKWebView screenshots |
 | D-27 | [decided] The Argon2id hash of the auth key (S-07) | removed with its column (D-2026-11-18-a); schema version 2: a binary of version 1 refuses the migrated database (`E_SCHEMA_NEWER`), so going back means restoring the backup taken before the update | verified 18 Nov |
 
 Known limits recorded in this round (none is a regression):
