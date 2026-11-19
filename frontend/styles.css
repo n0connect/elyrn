@@ -47,13 +47,15 @@
     --danger-bg: #fff5f5;
     /* The warning yellow (a warning notification's frame) */
     --warning: #ffc107;
-    /* The burn fire's colours (burn-fire.js reads them): the black the view fades to, the flames'
-       bodies (the destructive red, and the one fire orange between it and the warning yellow,
-       used by the fire only) and their cores (the warning yellow) */
+    /* The burn fire's colours (burn-fire.js reads them): the black the view fades to, the three
+       flame tones (the destructive red, the one fire orange between it and the warning yellow,
+       and the warning yellow) and the deep red of the flames behind them (darker than the
+       destructive red); the orange and the deep red are used by the fire only */
     --fire-fringe: #000000;
     --fire-flame: var(--danger);
     --fire-orange: #e65100;
     --fire-glow: var(--warning);
+    --fire-deep: #7a0000;
     /* The smallest hit area a control gets on a touch-width screen */
     --touch-min: 40px;
     /* Pixel glyphs: the aura's 5x5 and every icon's 10x10 fill this one box, inside a tile of

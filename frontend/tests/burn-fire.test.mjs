@@ -63,7 +63,7 @@ const runGroups = (cols, rows, list) => {
 const SIZE = 24;
 const BIG = { cols: 240, rows: 240 };
 function alone(preset, extra = {}) {
-    return Object.assign({ x: 120, cls: 'large', preset, mirror: false, share: 0.5, height: 120, width: 90, phase: 0, bands: [0.3, 0.6], start: 0, frames: 8, snake: false }, extra);
+    return Object.assign({ x: 120, cls: 'large', preset, mirror: false, share: 0.5, height: 120, width: 90, phase: 0, tone: 2, accent: { tone: 3, side: 1, share: 0.3 }, start: 0, frames: 8, snake: false }, extra);
 }
 function unitMask(flame, frame = 4) {
     const list = BurnFire.flameRuns(flame, frame, BIG.cols, BIG.rows);
@@ -87,7 +87,6 @@ test('the stream: thirteen flames in four planned size classes, no two alike, ne
         const rear = fire.list.filter(f => f.rear);
         // the rear flames (plain red, behind all others) are only what makes the cover frame whole
         assert.deepEqual(plain(fire.list.slice(0, rear.length)), plain(rear));
-        assert.ok(rear.every(f => f.bands === null));
         for (const cls of BurnFire.CLASSES) {
             const members = flames.filter(f => f.cls === cls.name);
             assert.equal(members.length, COUNTS[cls.name], cls.name);
@@ -153,33 +152,51 @@ test('every planned flame is one connected shape on every frame it shows whole',
     }
 });
 
-test('three flat bands per flame, yellow root, orange, red tips, in proportions of its own', () => {
+test('each flame its own colour: one dominant tone and a flat accent on one flank, apart from its neighbours', () => {
+    const TONES = [BurnFire.YELLOW, BurnFire.ORANGE, BurnFire.RED];
     for (const fire of PLANS) {
         const flames = stream(fire);
-        for (const f of flames) {
-            assert.ok(f.bands[0] > 0 && f.bands[0] < f.bands[1] && f.bands[1] < 1);
-            // alone on a tall grid, mid-crossing: all three colours, yellow lowest, red highest
-            const tall = { cols: fire.cols * 3, rows: fire.rows * 3, list: [Object.assign({}, f, { x: f.x + fire.cols })], exit: 99, length: 99 };
+        for (let i = 0; i < flames.length; i++) {
+            const f = flames[i];
+            assert.ok(TONES.includes(f.tone) && TONES.includes(f.accent.tone) && f.accent.tone !== f.tone);
+            assert.ok(Math.abs(TONES.indexOf(f.tone) - TONES.indexOf(f.accent.tone)) === 1, 'the accent is the neighbouring tone');
+            // drawn alone on a wide, tall grid mid-crossing: at most two tones, the dominant on 60 %
+            const moved = Object.assign({}, f, { x: f.x + fire.cols });
+            const tall = { cols: fire.cols * 3, rows: fire.rows * 3, list: [moved], exit: 99, length: 99 };
             const frame = f.start + f.frames - 3;
             const grid = BurnFire.paintGrid(tall, frame);
-            const rowsOf = (paint) => [...grid.keys()].filter(i => grid[i] === paint).map(i => Math.floor(i / tall.cols));
-            const mean = (list) => list.reduce((s, v) => s + v, 0) / list.length;
-            const yellow = rowsOf(BurnFire.YELLOW);
-            const orange = rowsOf(BurnFire.ORANGE);
-            const red = rowsOf(BurnFire.RED);
-            assert.ok(yellow.length && orange.length && red.length, `seed ${fire.seed} ${f.preset}: three bands`);
-            assert.ok(mean(yellow) > mean(orange) && mean(orange) > mean(red), 'hot at the root, cool at the tips');
-        }
-        let differ = 0;
-        let pairs = 0;
-        for (let i = 0; i < flames.length; i++) {
-            for (let j = i + 1; j < flames.length; j++) {
-                pairs++;
-                if (Math.abs(flames[i].bands[0] - flames[j].bands[0]) + Math.abs(flames[i].bands[1] - flames[j].bands[1]) > 0.05) differ++;
+            const cells = [...grid.keys()].filter(k => grid[k] > BurnFire.BLACK);
+            const counts = new Map();
+            for (const k of cells) counts.set(grid[k], (counts.get(grid[k]) || 0) + 1);
+            assert.ok(counts.size <= 2, `seed ${fire.seed} ${f.preset}: ${counts.size} tones`);
+            assert.ok(counts.get(f.tone) >= 0.6 * cells.length, `seed ${fire.seed} ${f.preset}: dominant ${counts.get(f.tone)} of ${cells.length}`);
+            // the accent on one flank: in most rows all its cells lie on one side of the middle of
+            // the row across the flame
+            const list = BurnFire.flameRuns(moved, frame, tall.cols, tall.rows);
+            let rows = 0;
+            let flank = 0;
+            for (const r of list) {
+                const accent = [];
+                for (let c = r.from; c <= r.to; c++) if (grid[r.row * tall.cols + c] === f.accent.tone) accent.push(c + 0.5 - (r.span[0] + r.span[1] + 1) / 2);
+                if (!accent.length) continue;
+                rows++;
+                if (accent.every(d => Math.sign(d) === f.accent.side)) flank++;
             }
+            assert.ok(rows > 0 && flank >= 0.8 * rows, `seed ${fire.seed} ${f.preset}: ${flank} of ${rows} rows on its flank`);
+            // apart from the flame drawn just before it and from its nearest neighbour by x
+            if (i > 0) assert.notEqual(f.tone, flames[i - 1].tone, `seed ${fire.seed}: same tone as the flame behind`);
+            const nearest = flames.filter(g => g !== f).sort((a, b) => Math.abs(a.x - f.x) - Math.abs(b.x - f.x))[0];
+            assert.notEqual(f.tone, nearest.tone, `seed ${fire.seed}: same tone as its neighbour`);
         }
-        assert.ok(differ / pairs >= 0.75, `seed ${fire.seed}: ${differ} of ${pairs}`);
+        for (const tone of TONES) {
+            const share = flames.filter(f => f.tone === tone).length / flames.length;
+            assert.ok(share >= 0.15 && share <= 0.5, `seed ${fire.seed}: tone ${tone} on ${share}`);
+        }
+        assert.ok(flames.every(f => f.tone !== BurnFire.DEEP && f.accent.tone !== BurnFire.DEEP), 'the deep red is the rear flames\' only');
+        assert.ok(fire.list.filter(f => f.rear).every(f => f.tone === BurnFire.DEEP && f.accent === null));
     }
+    // no height banding, no rims
+    assert.doesNotMatch(source, /\bRIM\b|\brim\b|\bbands?\b/);
 });
 
 test('the last one alone: the small leaf leaves last, snaking sideways, alone over the black for its last frames', () => {
@@ -347,9 +364,10 @@ test('liquid: a flame is longer the faster it moves, its area holds, and its cen
     }
 });
 
-test('the paint: black, red, the fire orange and the yellow, from the stylesheet; no alpha, no gradient', () => {
-    assert.deepEqual(plain(BurnFire.PALETTE), ['--fire-fringe', '--fire-flame', '--fire-orange', '--fire-glow']);
-    assert.match(css, /--fire-fringe: #000000;\n\s*--fire-flame: var\(--danger\);\n\s*--fire-orange: #e65100;\n\s*--fire-glow: var\(--warning\);/);
+test('the paint: black, red, the fire orange, the yellow and the deep red, from the stylesheet; no alpha, no gradient', () => {
+    assert.deepEqual(plain(BurnFire.PALETTE), ['--fire-fringe', '--fire-flame', '--fire-orange', '--fire-glow', '--fire-deep']);
+    assert.match(css, /--fire-fringe: #000000;\n\s*--fire-flame: var\(--danger\);\n\s*--fire-orange: #e65100;\n\s*--fire-glow: var\(--warning\);\n\s*--fire-deep: #7a0000;/);
+    assert.equal((css.match(/--fire-deep/g) || []).length, 1, 'used by the fire only');
     assert.equal((css.match(/--fire-orange/g) || []).length, 1, 'used by the fire only');
     assert.doesNotMatch(source, /#[0-9a-fA-F]{3,6}\b|rgba?\(|globalAlpha|Gradient|shadowBlur|\bcore\b/);
 });

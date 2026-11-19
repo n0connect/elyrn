@@ -7,10 +7,11 @@
 // teardrop, a broad three-tongue, a four-tip crown, a low mass with two horns, a small leaf
 // pointed at both ends), optionally mirrored, in one of four planned size classes (giant, large,
 // medium, small). A silhouette is a union of lobes (a belly and its tongues of unequal height),
-// drawn row by row on a grid of small square cells and coloured in three flat bands along its
-// length (yellow at the root, orange, red at the tips), each flame with its own proportions,
-// the band edges waving, its sides rimmed one cell wide in the next band's colour so it reads
-// apart from the flames behind it. Its shape is alive on every frame: it is longer and narrower
+// drawn row by row on a grid of small square cells. Each flame has its own colour: one
+// dominant tone (yellow, orange or red, never the tone of the flame drawn just before it or of
+// its nearest neighbour across), with a flat accent of the neighbouring tone along one flank
+// from root to tip, so overlapping flames read apart; the rear flames that fill the cover frame
+// are a deep red behind them all. Its shape is alive on every frame: it is longer and narrower
 // the faster it moves (a drop being pulled, its area kept), and its centre line is a travelling
 // wave, small
 // at the root and growing toward the tips, running up from frame to frame; the shared sway is
@@ -78,13 +79,12 @@ const BurnFire = (() => {
     const STREAM_PRESETS = Object.freeze(['needle', 'leafS', 'twin', 'fat', 'tongues', 'crown', 'mass', 'leaf']);
     const REAR_PRESET = 'rear';
     // The planned sizes, as shares of the window's width and height: each class's presets (one
-    // flame each), its starts (back to front), crossing and yellow root (the ones behind mostly red,
-    // the ones in front mostly yellow, so they read apart); the last small one is the lone leaf
+    // flame each), its starts (back to front) and crossing; the last small one is the lone leaf
     const CLASSES = Object.freeze([
-        { name: 'giant', width: [0.45, 0.54], height: [1.02, 1.23], presets: ['mass', 'crown'], starts: [0, 0], frames: 8, yellow: [0.08, 0.22] },
-        { name: 'large', width: [0.3, 0.45], height: [0.8, 1.1], presets: ['tongues', 'fat', 'twin', 'leafS'], starts: [0, 0, 1, 1], frames: 8, yellow: [0.18, 0.38] },
-        { name: 'medium', width: [0.15, 0.3], height: [0.6, 0.95], presets: ['needle', 'twin', 'leafS', 'fat'], starts: [1, 1, 2, 2], frames: 7, yellow: [0.32, 0.52] },
-        { name: 'small', width: [0.11, 0.15], height: [0.43, 0.7], presets: ['needle', 'twin'], starts: [2, 2], frames: 7, yellow: [0.42, 0.62] }
+        { name: 'giant', width: [0.45, 0.54], height: [1.02, 1.23], presets: ['mass', 'crown'], starts: [0, 0], frames: 8 },
+        { name: 'large', width: [0.3, 0.45], height: [0.8, 1.1], presets: ['tongues', 'fat', 'twin', 'leafS'], starts: [0, 0, 1, 1], frames: 8 },
+        { name: 'medium', width: [0.15, 0.3], height: [0.6, 0.95], presets: ['needle', 'twin', 'leafS', 'fat'], starts: [1, 1, 2, 2], frames: 7 },
+        { name: 'small', width: [0.11, 0.15], height: [0.43, 0.7], presets: ['needle', 'twin'], starts: [2, 2], frames: 7 }
     ].map(Object.freeze));
     // The lone leaf: small, last, crossing in its own frames from its own start, so it is alone
     // for its last frames (the cover's rear flames are gone by then too); it snakes by SNAKE of
@@ -98,12 +98,11 @@ const BurnFire = (() => {
     const SHUFFLES = 200;
     const JITTER = 0.25;
     const INNER = 2;
-    // The bands: the yellow root ends at its class's yellow share of the length, the orange
-    // ORANGE_SPAN later;
-    // their edges wave by BAND_WAVE of the length, BAND_CYCLES across a resting width
-    const ORANGE_SPAN = Object.freeze([0.15, 0.35]);
-    const BAND_WAVE = 0.06;
-    const BAND_CYCLES = 1.5;
+    // The colouring: the accent takes ACCENT_SHARE of each row's run on one flank; TONE_TRIES
+    // seeded tries for tones that differ from the flame drawn before and from the nearest
+    // neighbour across
+    const ACCENT_SHARE = Object.freeze([0.25, 0.33]);
+    const TONE_TRIES = 60;
     // Rear flames that make the cover frame whole: REAR_HEIGHT of the window tall, at least
     // REAR_WIDTH of it wide; past REAR_MAX of them each next one is wider
     const REAR_HEIGHT = 0.7;
@@ -134,16 +133,17 @@ const BurnFire = (() => {
     const TURN = 2 * Math.PI;
     // All flames sway together by the same cells on the same frame (the wave's common part)
     const SWAY = Object.freeze([0, 2, 0, -2]);
-    // Paint: the palette's index of the black, the red tips, the orange middle and the yellow root
-    const PALETTE = Object.freeze(['--fire-fringe', '--fire-flame', '--fire-orange', '--fire-glow']);
+    // Paint: the palette's index of the black, the three flame tones and the rear flames' deep red
+    const PALETTE = Object.freeze(['--fire-fringe', '--fire-flame', '--fire-orange', '--fire-glow', '--fire-deep']);
     const BLACK = 0;
     const RED = 1;
     const ORANGE = 2;
     const YELLOW = 3;
+    const DEEP = 4;
+    const TONES = Object.freeze([YELLOW, ORANGE, RED]);
+    // a tone's accents: the neighbouring tones
+    const ACCENTS = Object.freeze({ [YELLOW]: [ORANGE], [ORANGE]: [YELLOW, RED], [RED]: [ORANGE] });
     const NOT_PAINTED = -1;
-    // A stream flame's rim: the one cell at each side of each of its runs takes the next band's
-    // colour (red beside red takes orange), so a flame reads apart from the one behind it
-    const RIM = Object.freeze({ [YELLOW]: ORANGE, [ORANGE]: RED, [RED]: ORANGE });
     // Ordered 2x2 dither ranks
     const BAYER = Object.freeze([0, 2, 3, 1]);
     const CANVAS_CLASS = 'burn-fire';
@@ -176,7 +176,8 @@ const BurnFire = (() => {
 
     // The plan for a cols x rows grid: { cols, rows, list, cover, exit, length }. list is the
     // flames back to front (giants behind, the lone leaf in front, the rear cover flames behind
-    // all): [{ x, cls, preset, mirror, share, height, width, phase, bands, start, frames, snake }]
+    // all): [{ x, cls, preset, mirror, share, height, width, phase, tone, accent, start, frames,
+    // snake }]
     // in cells and frames; cover the one all-flame frame; exit the first frame on which every
     // flame is out through the top; length the frames played. Pure. A draft with a second
     // all-flame frame is drawn again from the next seed, up to PLAN_TRIES times.
@@ -193,12 +194,12 @@ const BurnFire = (() => {
 
     // One stream flame of class cls and preset at its start and crossing
     function streamFlame(random, cols, rows, cls, preset, start, frames) {
-        const yellow = between(random, ...cls.yellow);
         const share = between(random, ...cls.height);
         return {
             x: 0, cls: cls.name, preset, mirror: random() < 0.5, share, height: share * rows,
             width: between(random, ...cls.width) * cols, phase: random(),
-            bands: [yellow, yellow + between(random, ...ORANGE_SPAN)], start, frames, snake: false
+            tone: DEEP, accent: { tone: DEEP, side: random() < 0.5 ? -1 : 1, share: between(random, ...ACCENT_SHARE) },
+            start, frames, snake: false
         };
     }
 
@@ -223,10 +224,38 @@ const BurnFire = (() => {
         }
         const slot = cols / order.length;
         order.forEach((f, i) => { f.x = (i + 0.5 + between(random, -JITTER, JITTER)) * slot; });
+        paintTones(random, list);
         const fire = { cols, rows, list, exit: exitFrame(list) };
         fire.length = sequenceLength(fire.exit);
         fillCover(fire, exitFrame(list.slice(0, -1)));
         return fire;
+    }
+
+    // Each stream flame's dominant tone and accent: never the tone of the flame drawn just before
+    // it nor of its nearest neighbour by x (either way), about a third each; TONE_TRIES seeded
+    // greedy tries, the first that holds kept (else the last)
+    function paintTones(random, list) {
+        const nearest = list.map(f => list.reduce((best, g) => (g !== f && (!best || Math.abs(g.x - f.x) < Math.abs(best.x - f.x)) ? g : best), null));
+        const holds = () => list.every((f, i) => (i === 0 || f.tone !== list[i - 1].tone) && f.tone !== nearest[i].tone);
+        for (let tries = 0; tries < TONE_TRIES; tries++) {
+            list.forEach(f => { f.tone = DEEP; });
+            const used = new Map(TONES.map(t => [t, 0]));
+            list.forEach((f, i) => {
+                const taken = new Set([i > 0 ? list[i - 1].tone : DEEP, nearest[i].tone]);
+                list.forEach((g, j) => { if (nearest[j] === f) taken.add(g.tone); });
+                const free = TONES.filter(t => !taken.has(t));
+                const pool = free.length ? free : TONES;
+                const fewest = Math.min(...pool.map(t => used.get(t)));
+                const choice = shuffle(random, pool.filter(t => used.get(t) === fewest))[0];
+                f.tone = choice;
+                used.set(choice, used.get(choice) + 1);
+            });
+            if (holds()) break;
+        }
+        for (const f of list) {
+            const accents = ACCENTS[f.tone];
+            f.accent.tone = accents[Math.floor(random() * accents.length)];
+        }
     }
 
     // The first frame on which every flame of list is out through the top (a flame's base reaches
@@ -261,7 +290,7 @@ const BurnFire = (() => {
                     for (let share = REAR_HEIGHT; share >= REAR_LOW; share -= REAR_STEP) {
                         const flame = {
                             x: 0, cls: REAR_PRESET, preset: REAR_PRESET, mirror: false, share, height: share * fire.rows, width,
-                            phase: 0, bands: null, start, frames: n, snake: false, rear: true
+                            phase: 0, tone: DEEP, accent: null, start, frames: n, snake: false, rear: true
                         };
                         const at = pose(flame, cover, fire.rows);
                         const miss = Math.max(0, (at.base - at.length * REAR_REACH) - region.row, region.row - (at.base - at.length * belly));
@@ -344,7 +373,8 @@ const BurnFire = (() => {
 
     // The one silhouette: for each row, every lobe's span of cells on the flame's root and
     // centre line (one cell at least where a lobe is narrower), merged into runs
-    // { row, from, to, t, centre } with t the row's height on the flame and centre its centre line
+    // { row, from, to, t, centre, span } with t the row's height on the flame, centre its centre
+    // line and span the row's whole extent across the flame, unclipped
     function silhouette(at, lobes, mirror, cols, rows, out) {
         const side = mirror ? -1 : 1;
         const top = Math.ceil(at.base - at.length);
@@ -366,25 +396,27 @@ const BurnFire = (() => {
                 const to = left + right < 2 ? middle : Math.max(middle, Math.ceil(c + right - 0.5) - 1);
                 spans.push([from, to]);
             }
+            if (!spans.length) continue;
             spans.sort((a, b) => a[0] - b[0]);
+            const span = [spans[0][0], Math.max(...spans.map(s => s[1]))];
             let run = null;
             for (const [from, to] of spans) {
                 if (run && from <= run[1] + 1) run[1] = Math.max(run[1], to);
                 else {
-                    if (run) push(out, row, run, t, centre, cols);
+                    if (run) push(out, row, run, { t, centre, span }, cols);
                     run = [from, to];
                 }
             }
-            if (run) push(out, row, run, t, centre, cols);
+            if (run) push(out, row, run, { t, centre, span }, cols);
         }
         return out;
     }
 
     // Adds one run, clipped to the grid
-    function push(out, row, [from, to], t, centre, cols) {
+    function push(out, row, [from, to], line, cols) {
         const left = Math.max(0, from);
         const right = Math.min(cols - 1, to);
-        if (left <= right) out.push({ row, from: left, to: right, t, centre });
+        if (left <= right) out.push(Object.assign({ row, from: left, to: right }, line));
     }
 
     // The motion law, its one home: how far along its whole path a flame is on the k-th frame of a
@@ -434,13 +466,15 @@ const BurnFire = (() => {
         return at ? silhouette(at, PRESETS[flame.preset], flame.mirror, cols, rows, []) : [];
     }
 
-    // The band of a flame's cell at col of a run on frame: yellow at the root, orange, red at the
-    // tips, the edges waving across the flame; a rear flame is all red
-    function band(flame, run, col, frame) {
-        if (!flame.bands) return RED;
-        const t = run.t + BAND_WAVE * Math.sin(TURN * ((col - run.centre) / flame.width * BAND_CYCLES + flame.phase + WAVE_SPEED * frame));
-        if (t < flame.bands[0]) return YELLOW;
-        return t < flame.bands[1] ? ORANGE : RED;
+    // The tone of a flame's cell at col of a run: the accent on its flank (its share of the row's
+    // whole span nearest that side, so it follows the wave from root to tip), else the dominant
+    // tone; a rear flame is all deep red
+    function tone(flame, run, col) {
+        if (!flame.accent) return flame.tone;
+        const [from, to] = run.span;
+        const cells = Math.round(flame.accent.share * (to - from + 1));
+        const inside = flame.accent.side > 0 ? col > to - cells : col < from + cells;
+        return inside ? flame.accent.tone : flame.tone;
     }
 
     // The share of the window that is flame at frame
@@ -475,8 +509,8 @@ const BurnFire = (() => {
         return BAYER[(row % 2) * 2 + (col % 2)] < blackLevel(frame, exit);
     }
 
-    // Every cell's paint at frame: NOT_PAINTED, BLACK, RED, ORANGE or YELLOW; the flames back to
-    // front, each in its bands, a stream flame's side cells in its rim colour
+    // Every cell's paint at frame: NOT_PAINTED, BLACK, RED, ORANGE, YELLOW or DEEP; the flames
+    // back to front, each in its tones
     function paintGrid(fire, frame) {
         const { cols, rows, list } = fire;
         const grid = new Int8Array(cols * rows).fill(NOT_PAINTED);
@@ -488,10 +522,7 @@ const BurnFire = (() => {
         }
         for (const flame of list) {
             for (const run of flameRuns(flame, frame, cols, rows)) {
-                for (let col = run.from; col <= run.to; col++) {
-                    const paint = band(flame, run, col, frame);
-                    grid[run.row * cols + col] = flame.bands && (col === run.from || col === run.to) ? RIM[paint] : paint;
-                }
+                for (let col = run.from; col <= run.to; col++) grid[run.row * cols + col] = tone(flame, run, col);
             }
         }
         return grid;
@@ -635,6 +666,6 @@ const BurnFire = (() => {
     return Object.freeze({
         play, plan, travel, pose, step, flameRuns, flameShare, coverFrame, paintGrid, blackLevel, blackAt,
         shouldPlay, coversAt, gridSize, hardStopMs, sequenceLength, STREAM_PRESETS, CLASSES, LAST, PALETTE,
-        NOT_PAINTED, BLACK, RED, ORANGE, YELLOW, FRAME_PROPERTY, CELL_PX
+        NOT_PAINTED, BLACK, RED, ORANGE, YELLOW, DEEP, FRAME_PROPERTY, CELL_PX
     });
 })();
